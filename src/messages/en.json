@@ -178,6 +178,9 @@
     "restorePane": "Back to split view (Esc)"
   },
   "nav": {
+    "account": "Account",
+    "dailyReport": "Daily report",
+    "dayTools": "Day tools",
     "tasks": "Tasks",
     "suggestions": "Suggestions",
     "log": "Log",
@@ -219,7 +222,8 @@
     "studio": "smrtStudio",
     "studioModels": "Model catalog",
     "studioResearch": "Research centre",
-    "studioInvestor": "Investor page"
+    "studioInvestor": "Investor page",
+    "claude": "Claude"
   },
   "account": {
     "title": "Account",
@@ -1154,7 +1158,18 @@
     "hoursOnly": "{h}h",
     "minutesOnly": "{m}m",
     "refresh": "Refresh",
-    "pinnedRowDated": "Daily report · {date}"
+    "pinnedRowDated": "Daily report · {date}",
+    "editPastTitle": "Edit previous days",
+    "editPastNote": "Pick a day to edit its answers. An already-generated report does not change — generate it again to refresh it.",
+    "editPastEmpty": "No days to edit.",
+    "dismissDay": "Hide this day",
+    "restoreDay": "Restore this day",
+    "dayDismissed": "Hidden",
+    "dayDismissedToast": "Day hidden — you can restore it here any time",
+    "dayRestoredToast": "Day restored",
+    "dayComplete": "Complete",
+    "dayProgress": "{answered}/{total} answered",
+    "dayIsToday": "{date} · today"
   },
   "workclock": {
     "offerTitle": "Start the work clock?",
@@ -1700,7 +1715,14 @@
     "accessToken": "Access Token",
     "appSecret": "App Secret",
     "verifyToken": "Verify Token",
-    "nothingToSave": "Nothing entered to update"
+    "nothingToSave": "Nothing entered to update",
+    "addKey": "Add a key",
+    "keyPlaceholder": "Key name (e.g. GITHUB_TOKEN)",
+    "newValuePlaceholder": "Value",
+    "storeEncrypted": "Store encrypted",
+    "keyInvalid": "Key must be UPPER_SNAKE_CASE (A-Z, 0-9, _)",
+    "customKey": "added by hand",
+    "addKeyHint": "A key added here is stored, but only takes effect if code reads that exact name. There is no delete — correct a value by editing it, which rotates it in place."
   },
   "admin": {
     "title": "Admin Dashboard",
@@ -1860,7 +1882,13 @@
     "slugPlaceholder": "e.g. crm",
     "namePlaceholder": "e.g. CRM",
     "appParametersTitle": "System Parameters",
-    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits"
+    "appParametersDesc": "Models, batch sizes, calendar window and body-truncation limits",
+    "docsRendered": "Rendered view",
+    "docsSource": "Markdown source",
+    "docsDownload": "Download .md",
+    "docsCreated": "Created",
+    "docsUpdated": "Updated",
+    "docsEmpty": "No documents."
   },
   "adminParameters": {
     "title": "System Parameters",
@@ -4153,6 +4181,111 @@
       "duration": "Duration",
       "costEquivalent": "Equivalent value",
       "byModel": "By model"
+    },
+    "taskRouter": "Free-text task update",
+    "dictation": {
+      "start": "Dictate",
+      "stop": "Stop",
+      "transcribing": "Transcribing…",
+      "autoSend": "Send automatically after 3s of silence",
+      "empty": "Nothing was heard — try again",
+      "unsupported": "This browser cannot record audio",
+      "permission": "Microphone permission denied",
+      "noAutoStop": "No silence detection in this browser — stop manually when done",
+      "maxLength": "Recording hit the maximum length and stopped",
+      "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic."
+    },
+    "playbooks": {
+      "title": "Working methods",
+      "emptyHint": "No working methods yet. Use the download icon to load the repo defaults.",
+      "add": "Add a method",
+      "addTitle": "New working method",
+      "editTitle": "Edit working method",
+      "edit": "Edit",
+      "delete": "Delete",
+      "openDoc": "Open the document",
+      "seed": "Load repo defaults",
+      "seeded": "Added {count} methods",
+      "seededNone": "All defaults already exist",
+      "refresh": "Refresh update dates from GitHub",
+      "refreshed": "Refreshed {count} dates",
+      "refreshedPartial": "Refreshed {count} dates — some failed",
+      "save": "Save",
+      "saved": "Saved",
+      "cancel": "Cancel",
+      "confirmDelete": "Delete \"{name}\"?",
+      "namePlaceholder": "Method name",
+      "docUrlPlaceholder": "Document link (full deep link)",
+      "instructionsPlaceholder": "Instructions sent with the run…",
+      "instructionsHint": "This text is prepended to every run that picks this method. The full document stays behind the link.",
+      "kind": {
+        "research": "Research",
+        "planning": "Planning",
+        "build": "Build",
+        "review": "Review",
+        "content": "Content",
+        "other": "Other"
+      }
+    },
+    "instructions": {
+      "title": "Standing instructions",
+      "placeholder": "Instructions Claude receives on every run…",
+      "save": "Save",
+      "saved": "Instructions saved",
+      "noChanges": "No changes",
+      "updatedAt": "Updated {when}",
+      "never": "No instructions saved yet",
+      "repoCopy": "Repo copy",
+      "hint": "This text is sent before every request, on every run. Editing it here changes what Claude receives immediately.",
+      "codeView": "Code view",
+      "richView": "Rich editing"
+    },
+    "github": {
+      "pick": "Pick a repo",
+      "search": "Search repos…",
+      "loading": "Loading repos…",
+      "noRepos": "No repositories found",
+      "private": "private",
+      "clear": "Clear selection",
+      "branchPlaceholder": "Branch",
+      "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
+  },
+  "claudeChat": {
+    "placeholder": "Write a message…",
+    "send": "Send",
+    "stop": "Stop",
+    "stopped": "Turn stopped",
+    "attach": "Attach a file",
+    "removeAttachment": "Remove",
+    "fileTooLarge": "{name} is too large (7MB max)",
+    "newChat": "New chat",
+    "noThreads": "No chats yet",
+    "untitled": "Untitled",
+    "showList": "Show chat list",
+    "hideList": "Hide chat list",
+    "rename": "Rename",
+    "delete": "Delete",
+    "confirmDelete": "Delete this chat and all of its turns?",
+    "settings": "Conversation settings",
+    "empty": "Write a message to begin",
+    "thinking": "Thinking…",
+    "toolCount": "{count} tool calls",
+    "effortDefault": "Effort: default",
+    "effort": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Very high",
+      "max": "Max"
+    },
+    "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
+    "taskRouter": "Free-text task update",
+    "contextLost": "This turn started a new session — it does not know the earlier messages"
+  },
+  "markdown": {
+    "anchor": "Link to section {title}",
+    "copyCode": "Copy code",
+    "copied": "Copied"
   }
 }

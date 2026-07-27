@@ -22,8 +22,12 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { db, getAppSecret } from "../../db";
+import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
+import { materializeAttachments } from "./attachments";
+import { threadWorkspace } from "./workspace";
 
 /**
  * Where the subscription token is stored.
@@ -58,8 +62,34 @@ function resolveCli(): string {
   return "claude";
 }
 
+/**
+ * Live children, keyed by run id — what makes a turn cancellable.
+ *
+ * In-memory, so it is correct only for the process that owns the run. That is
+ * exactly true today (the route fires executeRun in-process), and the day a queue
+ * worker arrives the cancel path has to move with it. Recorded here rather than
+ * discovered later.
+ */
+const running = new Map<string, ReturnType<typeof spawn>>();
+
+/**
+ * Stop a turn the user asked to stop. Returns false when this process has no live
+ * child for that id — the caller answers honestly instead of claiming success.
+ */
+export function cancelRun(runId: string): boolean {
+  const child = running.get(runId);
+  if (!child) return false;
+  child.kill("SIGTERM");
+  setTimeout(() => {
+    if (running.has(runId)) child.kill("SIGKILL");
+  }, SIGKILL_GRACE_MS);
+  return true;
+}
+
 /** Hard ceiling on a single run, so a hung process can't occupy the host forever. */
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+/** How long a timed-out child gets to exit on SIGTERM before it is SIGKILLed. */
+const SIGKILL_GRACE_MS = 10_000;
 /** Events are flushed in batches — a write per event would serialize the stream. */
 const FLUSH_EVERY = 25;
 const FLUSH_INTERVAL_MS = 1000;
@@ -234,11 +264,41 @@ function usageFromResult(result: Record<string, unknown> | null) {
  * Execute a queued run to completion. Resolves once the run row reaches a
  * terminal status — it never throws at the caller, because the run's own
  * `status`/`error` columns are the report, and callers fire this and move on.
+ *
+ * This wrapper exists for ONE reason: the cloned workspace holds the GitHub token
+ * in its .git/config, so it must be deleted on every exit path — including an
+ * unexpected throw anywhere in the body. A `finally` here is the only structure
+ * that guarantees that; scattered cleanup calls cannot. The holder is what lets
+ * the finally reach a workspace the inner function created.
  */
 export async function executeRun(runId: string): Promise<void> {
+  try {
+    await executeRunBody(runId);
+  } catch (e) {
+    // An unexpected throw would otherwise leave the row 'running' — a live status
+    // the screen polls forever. Record it as the failure it is.
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[claude/runner] unexpected failure:", message);
+    const { error } = await db
+      .from("claude_runs")
+      .update({
+        status: "failed",
+        error: truncate(message, 4000),
+        ended_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", runId)
+      // Only from a non-terminal state: a run that already finished must not be
+      // rewritten by a throw in the teardown that followed it.
+      .in("status", ["queued", "running"]);
+    if (error) console.error("[claude/runner] could not record failure:", error.message);
+  }
+}
+
+async function executeRunBody(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status, model, effort")
+    .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id")
     .eq("id", runId)
     .maybeSingle();
 
@@ -280,31 +340,146 @@ export async function executeRun(runId: string): Promise<void> {
     return;
   }
 
+  // A run that names a repo gets a real working copy of it. The clone happens
+  // BEFORE the run is marked running: a repo we cannot clone is a setup failure,
+  // and recording it as a failed run (rather than a run that started and died) is
+  // what makes the cause readable.
+  // The conversation this turn belongs to, and the engine session to resume into.
+  // A thread whose session_id is already set means this is a FOLLOW-UP: the engine
+  // still holds the history, so the turn is resumed rather than started, and the
+  // prompt carries only what the user just said.
+  let resumeSession: string | null = null;
+  if (run.thread_id) {
+    const { data: thread, error: tErr } = await db
+      .from("claude_threads")
+      .select("session_id")
+      .eq("id", run.thread_id)
+      .maybeSingle();
+    if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
+    resumeSession = thread?.session_id ?? null;
+  }
+
+  // ── the working directory ──
+  //
+  // STABLE PER THREAD, not per run. Engine sessions are stored per project
+  // directory, so a fresh temp dir on every turn would make `--resume <id>` unable
+  // to find the session it was handed — the conversation would silently lose its
+  // memory. Reusing the directory is also what lets turn 2 see the files turn 1
+  // edited. It is NOT deleted at the end of a turn; it is deleted when the thread
+  // is deleted, and swept by age.
+  //
+  // Held for the whole function, not just the clone: anything the run prints can
+  // echo a tokenised remote URL, so the final error text has to be redacted too.
+  let ghToken: string | null = null;
+  const workDir = run.thread_id ? await threadWorkspace(run.thread_id) : null;
+
+  if (run.repo) {
+    ghToken = await getGitHubToken();
+    if (!ghToken) {
+      await finish({
+        status: "failed",
+        error:
+          `This run targets ${run.repo} but GITHUB_TOKEN is not configured. Save a ` +
+          "GitHub personal access token with 'repo' scope under " +
+          "/admin/apps/smrttask/secrets (key: GITHUB_TOKEN).",
+      });
+      return;
+    }
+    if (!workDir) {
+      await finish({
+        status: "failed",
+        error: "a run against a repo must belong to a thread (it needs a stable working directory)",
+      });
+      return;
+    }
+    try {
+      // Idempotent: clones on the thread's first repo turn, reuses the checkout
+      // after that.
+      await ensureClone(path.join(workDir, run.repo.split("/")[1]), run.repo, run.git_branch, ghToken);
+    } catch (e) {
+      await finish({
+        status: "failed",
+        error: truncate(redact(e instanceof Error ? e.message : String(e), ghToken), 4000),
+      });
+      return;
+    }
+  }
+
+  // Where the turn actually runs: the repo checkout when there is one, otherwise
+  // the thread's own directory. Never process.cwd() — that is the deployed source
+  // tree, which a chat turn has no business reading or touching.
+  const cwd = run.repo && workDir ? path.join(workDir, run.repo.split("/")[1]) : workDir;
+
   const { error: startError } = await db
     .from("claude_runs")
     .update({
       status: "running",
       started_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      // Recorded so the run says where it actually worked, not where it was asked to.
+      ...(cwd ? { cwd } : {}),
+      resumed_session: resumeSession,
     })
     .eq("id", runId);
   if (startError) {
     console.error("[claude/runner] could not mark running:", startError.message);
+    // Recorded as failed, not left as-is: 'queued' is a live status the screen polls
+    // forever, so a run that can never start would spin in the UI for good.
+    await finish({ status: "failed", error: truncate(startError.message, 4000) });
     return;
   }
 
-  // Subscription auth must win — see the billing note in this file's header.
-  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };
+  // Subscription auth must win — see the billing note in this file's header. The
+  // git credential helper rides along so a `git push` inside the turn authenticates
+  // without the token ever being written into the checkout.
+  const env: NodeJS.ProcessEnv = { ...gitEnvForRun(ghToken), CLAUDE_CODE_OAUTH_TOKEN: token };
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
+  // Attachments: downloaded into the working directory, then named in the prompt.
+  // The engine reads files by path (its Read tool handles images too) — the CLI's
+  // --file flag is for Anthropic Files API ids, NOT local paths, so pointing at
+  // the path is the correct contract here, not a workaround.
+  let promptText = run.prompt;
+  if (cwd) {
+    const { paths, failures } = await materializeAttachments(runId, cwd);
+    if (paths.length > 0) {
+      promptText += `\n\n# קבצים מצורפים\n${paths.map((p) => `- ${p}`).join("\n")}`;
+    }
+    // Surfaced in the prompt rather than swallowed: the turn should know a file it
+    // was told about is missing, instead of concluding the user sent nothing.
+    if (failures.length > 0) {
+      promptText += `\n\n(קבצים שלא נטענו: ${failures.join("; ")})`;
+    }
+    if (paths.length > 0 || failures.length > 0) {
+      const { error: pErr } = await db
+        .from("claude_runs")
+        .update({ prompt: promptText })
+        .eq("id", runId);
+      if (pErr) console.error("[claude/runner] prompt update failed:", pErr.message);
+    }
+  }
+
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
-  const args = ["-p", run.prompt, "--output-format", "stream-json", "--verbose"];
+  const args = ["-p", promptText, "--output-format", "stream-json", "--verbose"];
+  // THE line that makes a thread a conversation: resume the engine session the
+  // thread already owns, so this turn sees every earlier turn. Without it each
+  // message would start from nothing and the chat would have no memory.
+  if (resumeSession) args.push("--resume", resumeSession);
   // Omitted when unset rather than defaulted, so a run without a choice follows
   // the CLI's current default instead of being pinned to a model that will age.
   if (run.model) args.push("--model", run.model);
   if (run.effort) args.push("--effort", run.effort);
+  // In a cloned workspace the run needs to be able to edit files, and print mode
+  // has no way to answer a permission prompt — an un-answerable prompt is a denial,
+  // so without this a repo run could only read. acceptEdits covers edits but NOT
+  // shell commands: pushing a branch requires the operator to opt into a stronger
+  // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
+  // operator already set a permission flag there, so their choice wins.
+  if (run.repo && !extra.some((a) => a.startsWith("--permission-mode") || a === "--dangerously-skip-permissions")) {
+    args.push("--permission-mode", "acceptEdits");
+  }
   args.push(...extra);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 
@@ -324,24 +499,45 @@ export async function executeRun(runId: string): Promise<void> {
 
   const flush = async () => {
     if (buffer.length === 0) return;
-    const batch = buffer.map((e) => ({ ...e, run_id: runId }));
+    let batch: unknown[] = buffer.map((e) => ({ ...e, run_id: runId }));
     buffer = [];
+    // A run working in a cloned repo can print its tokenised remote URL (git does
+    // this on a failed push), and these rows are the permanent transcript — so the
+    // token is scrubbed from text AND payload before anything is stored. Done on
+    // the serialized batch because the token is alphanumeric and cannot survive
+    // JSON escaping in a different form.
+    if (ghToken) {
+      try {
+        batch = JSON.parse(redact(JSON.stringify(batch), ghToken)) as unknown[];
+      } catch {
+        // Unserializable batch: fall through with the mapped rows rather than
+        // dropping the events entirely.
+      }
+    }
     const { error } = await db.from("claude_run_events").insert(batch);
     if (error) console.error("[claude/runner] event insert failed:", error.message);
   };
 
   const child = spawn(bin, args, {
-    cwd: run.cwd || process.cwd(),
+    cwd: cwd || run.cwd || process.cwd(),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+
+  running.set(runId, child);
 
   const timer = setInterval(() => {
     void flush();
   }, FLUSH_INTERVAL_MS);
 
+  // SIGTERM first so the engine can close cleanly, then SIGKILL if it doesn't. With
+  // only SIGTERM, a child that ignores it never emits 'close' — the await below
+  // would never resolve, the run would sit in 'running' forever, and the cloned
+  // workspace (which holds the GitHub token in .git/config) would stay on disk.
+  let hardKillTimer: ReturnType<typeof setTimeout> | null = null;
   const killTimer = setTimeout(() => {
     child.kill("SIGTERM");
+    hardKillTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
   }, timeoutMs);
 
   let stdoutRest = "";
@@ -401,6 +597,10 @@ export async function executeRun(runId: string): Promise<void> {
 
   clearInterval(timer);
   clearTimeout(killTimer);
+  if (hardKillTimer) clearTimeout(hardKillTimer);
+  // Off the registry the moment the process is gone, so a later cancel reports
+  // "nothing running" instead of signalling a recycled pid.
+  running.delete(runId);
   if (stdoutRest.trim()) {
     buffer.push({
       seq: nextSeq(),
@@ -431,15 +631,90 @@ export async function executeRun(runId: string): Promise<void> {
   await finish({
     status: ok ? "done" : "failed",
     session_id: sessionId,
-    result_summary: truncate(lastResult),
+    result_summary: truncate(lastResult === null ? null : redact(lastResult, ghToken)),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
     error: ok
       ? null
       : truncate(
-          `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+          redact(
+            `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+            ghToken,
+          ),
           4000,
         ),
+  });
+
+  // Carry the engine session onto the THREAD. This is what the next turn resumes
+  // into, so without it every message would start a fresh session and the chat
+  // would have no memory. Written only when the thread has none yet: a resumed
+  // turn reports the same id, and overwriting on every turn would let one failed
+  // turn's null wipe a working session.
+  if (run.thread_id) {
+    const patch: Record<string, unknown> = {
+      last_message_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    // Written on EVERY turn, not only the first. `--resume` continues the
+    // transcript under a NEW session id, so keeping the turn-1 id would make turn 3
+    // resume a transcript that ends at turn 1 — turn 2 silently lost. Guarded on a
+    // successful turn so a failure cannot replace a working session with nothing.
+    if (ok && sessionId && sessionId !== resumeSession) patch.session_id = sessionId;
+    const { error: tErr } = await db.from("claude_threads").update(patch).eq("id", run.thread_id);
+    if (tErr) console.error("[claude/runner] thread update failed:", tErr.message);
+  }
+}
+
+/**
+ * Run a short prompt on the subscription and return its text — no rows, no events.
+ *
+ * This is the mechanism behind the analysis runs (a thread's real title today;
+ * split/group proposals next — docs/claude-console/threads-split-and-group-plan.md).
+ * It deliberately does NOT create a claude_runs row: a title is not a turn of the
+ * conversation, and putting it in the thread would show the user an exchange they
+ * never had.
+ *
+ * Runs on CLAUDE_CODE_OAUTH_TOKEN like every other run, so it costs subscription
+ * usage and ZERO paid API tokens. Returns null on any failure — a missing title is
+ * a cosmetic loss and must never break the turn that triggered it.
+ */
+export async function runOneShot(
+  prompt: string,
+  opts: { model?: string; timeoutMs?: number } = {},
+): Promise<string | null> {
+  const token = (await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY))?.trim() || null;
+  if (!token) return null;
+
+  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+
+  const args = ["-p", prompt, "--output-format", "text"];
+  if (opts.model) args.push("--model", opts.model);
+
+  return new Promise((resolve) => {
+    const child = spawn(resolveCli(), args, {
+      // The OS temp dir, not the app directory: a one-shot has no business being
+      // able to read or touch the deployed source tree.
+      cwd: os.tmpdir(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (c: string) => {
+      out += c;
+      if (out.length > 8000) out = out.slice(0, 8000);
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 90_000);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 && out.trim() ? out.trim() : null);
+    });
   });
 }

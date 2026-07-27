@@ -58,6 +58,21 @@ export interface DailyReportPending {
   days: PendingDay[];
 }
 
+/** One recent fill-day in the "edit a previous day" list (filled ones included). */
+export interface ReportDay {
+  fill_date: string;
+  total_due: number;
+  answered: number;
+  complete: boolean;
+  is_today: boolean;
+  /** The user dismissed this day — it no longer pins to the task list. */
+  skipped: boolean;
+}
+export interface DailyReportDays {
+  today: string;
+  days: ReportDay[];
+}
+
 // ── computed report ──────────────────────────────────────────────────────────
 
 export interface ReportOptionTally {

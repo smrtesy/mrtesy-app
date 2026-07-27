@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
+  Bot,
   CheckSquare,
   Bell,
   Settings,
@@ -32,7 +33,7 @@ import {
   Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
@@ -103,6 +104,24 @@ const smrtStudioItems = [
 ] as const;
 
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
+
+// Every nav href across all apps + the management group. Used by isActive() to
+// decide, for a parent route like /whatsapp or /plan, whether a more-specific
+// sibling (/whatsapp/autoreply, /plan/my) actually owns the current page — so
+// the parent doesn't also light up when you're on a child screen.
+const ALL_NAV_HREFS: readonly string[] = [
+  ...smrtTaskItems,
+  ...smrtVoiceItems,
+  ...smrtCrmItems,
+  ...smrtReachItems,
+  ...smrtBotItems,
+  ...smrtPlanItems,
+  ...smrtVaultItems,
+  ...smrtInfoItems,
+  ...smrtStudioItems,
+]
+  .map((i): string => i.href)
+  .concat(["/inbox", "/settings", "/transcription-experiment", "/admin"]);
 
 export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
@@ -282,7 +301,20 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
       if (voiceNamedSections.some((p) => pathname.startsWith(p))) return false;
       return pathname.startsWith(`${basePath}/voice/`);
     }
-    return pathname.startsWith(fullPath);
+    // Exact match on this screen — always the active item.
+    if (pathname === fullPath) return true;
+    // Descendant screen (e.g. /whatsapp when on /whatsapp/autoreply): only claim
+    // it as active if no more-specific sibling nav item owns that screen. This is
+    // what stops a parent item from lighting up alongside its own child.
+    if (pathname.startsWith(`${fullPath}/`)) {
+      const ownedByMoreSpecific = ALL_NAV_HREFS.some((other) => {
+        if (other.length <= href.length || !other.startsWith(`${href}/`)) return false;
+        const otherFull = `${basePath}${other}`;
+        return pathname === otherFull || pathname.startsWith(`${otherFull}/`);
+      });
+      return !ownedByMoreSpecific;
+    }
+    return false;
   }
 
   function badgeFor(itemKey: string): { count: number; tone: "red" | "blue" } | null {
@@ -496,10 +528,33 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
               <ListPlus className="h-4 w-4" />
               {t("newTask")}
             </Button>
-            <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
-              <Sparkles className="h-4 w-4" />
-              {t("update")}
-            </Button>
+            {/* This slot used to open the free-text task router ("עדכון"). It now
+                opens the Claude screen, which is the primary way into work — and
+                the router itself moved onto that screen, so nothing was lost.
+                Gated on isAdmin because /claude's Express routes require a
+                super-admin; a non-admin keeps the router here rather than getting
+                a button that leads to a 401. */}
+            {isAdmin ? (
+              <Link
+                href={`${basePath}/claude`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openTab(`${basePath}/claude`, t("claude"));
+                }}
+                className={cn(
+                  buttonVariants({ variant: "default" }),
+                  "w-full gap-2",
+                )}
+              >
+                <Bot className="h-4 w-4" />
+                {t("claude")}
+              </Link>
+            ) : (
+              <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
+                <Sparkles className="h-4 w-4" />
+                {t("update")}
+              </Button>
+            )}
           </div>
         )}
       </aside>
@@ -565,15 +620,34 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
           >
             <ListPlus className="h-6 w-6" />
           </Button>
-          <Button
-            size="icon"
-            data-task-fab
-            aria-label={t("update")}
-            className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-            onClick={() => setTaskInputOpen(true)}
-          >
-            <Sparkles className="h-6 w-6" />
-          </Button>
+          {/* Same swap as the sidebar button, so phone and desktop agree on what
+              the primary action is. */}
+          {isAdmin ? (
+            // A Link, not openTab: the tabs workspace only renders on desktop
+            // (TabsArea), so on a phone openTab would add an invisible tab and the
+            // tap would appear to do nothing.
+            <Link
+              href={`${basePath}/claude`}
+              data-task-fab
+              aria-label={t("claude")}
+              className={cn(
+                buttonVariants({ variant: "default", size: "icon" }),
+                "fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden",
+              )}
+            >
+              <Bot className="h-6 w-6" />
+            </Link>
+          ) : (
+            <Button
+              size="icon"
+              data-task-fab
+              aria-label={t("update")}
+              className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
+              onClick={() => setTaskInputOpen(true)}
+            >
+              <Sparkles className="h-6 w-6" />
+            </Button>
+          )}
         </>
       )}
 

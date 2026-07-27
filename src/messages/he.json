@@ -178,6 +178,9 @@
     "restorePane": "חזרה לתצוגה מפוצלת (Esc)"
   },
   "nav": {
+    "account": "ניהול חשבון",
+    "dailyReport": "דוח יומי",
+    "dayTools": "כלי היום",
     "tasks": "משימות",
     "suggestions": "הצעות",
     "log": "לוג",
@@ -219,7 +222,8 @@
     "studio": "smrtStudio",
     "studioModels": "קטלוג מודלים",
     "studioResearch": "מרכז מחקרים",
-    "studioInvestor": "דף משקיע"
+    "studioInvestor": "דף משקיע",
+    "claude": "קלוד"
   },
   "account": {
     "title": "ניהול חשבון",
@@ -1154,7 +1158,18 @@
     "hoursOnly": "{h} שע׳",
     "minutesOnly": "{m} דק׳",
     "refresh": "רענן",
-    "pinnedRowDated": "דוח יומי · {date}"
+    "pinnedRowDated": "דוח יומי · {date}",
+    "editPastTitle": "עריכת ימים קודמים",
+    "editPastNote": "בחר יום כדי לערוך את התשובות שלו. דוח שכבר נוצר לא משתנה — צור דוח מחדש כדי לרענן אותו.",
+    "editPastEmpty": "אין ימים לעריכה.",
+    "dismissDay": "הסתר את היום הזה",
+    "restoreDay": "החזר את היום",
+    "dayDismissed": "מוסתר",
+    "dayDismissedToast": "היום הוסתר — אפשר להחזיר אותו כאן בכל עת",
+    "dayRestoredToast": "היום הוחזר",
+    "dayComplete": "מלא",
+    "dayProgress": "{answered}/{total} תשובות",
+    "dayIsToday": "{date} · היום"
   },
   "workclock": {
     "offerTitle": "להתחיל שעון עבודה?",
@@ -1700,7 +1715,14 @@
     "accessToken": "Access Token",
     "appSecret": "App Secret",
     "verifyToken": "Verify Token",
-    "nothingToSave": "לא הזנת אף ערך חדש"
+    "nothingToSave": "לא הזנת אף ערך חדש",
+    "addKey": "הוסף מפתח",
+    "keyPlaceholder": "שם המפתח (למשל GITHUB_TOKEN)",
+    "newValuePlaceholder": "הערך",
+    "storeEncrypted": "שמור מוצפן",
+    "keyInvalid": "שם המפתח באותיות גדולות באנגלית, ספרות וקו תחתון בלבד",
+    "customKey": "נוסף ידנית",
+    "addKeyHint": "מפתח שנוסף כאן נשמר, אבל הוא משפיע רק אם הקוד קורא אותו בשם הזה בדיוק. אין מחיקה — תיקון ערך נעשה בעריכה, שמסובבת אותו במקום."
   },
   "admin": {
     "title": "ניהול מערכת",
@@ -1860,7 +1882,13 @@
     "addDirectNotFound": "משתמש לא נמצא — שלח הזמנה במקום",
     "addDirectAlreadyMember": "המשתמש כבר רשום בארגון",
     "appParametersTitle": "פרמטרים של מערכת",
-    "appParametersDesc": "מודלים, גדלי מקבץ, חלון יומן וחיתוכי גוף הודעה"
+    "appParametersDesc": "מודלים, גדלי מקבץ, חלון יומן וחיתוכי גוף הודעה",
+    "docsRendered": "תצוגה מעוצבת",
+    "docsSource": "מקור Markdown",
+    "docsDownload": "הורד ‎.md",
+    "docsCreated": "נוצר",
+    "docsUpdated": "עודכן",
+    "docsEmpty": "אין מסמכים."
   },
   "adminParameters": {
     "title": "פרמטרי מערכת",
@@ -4152,6 +4180,111 @@
       "duration": "משך",
       "costEquivalent": "שווי-ערך",
       "byModel": "לפי מודל"
+    },
+    "taskRouter": "עדכון חופשי (משימות)",
+    "dictation": {
+      "start": "הכתבה",
+      "stop": "עצור",
+      "transcribing": "מתמלל…",
+      "autoSend": "שלח אוטומטית אחרי 3 שניות שקט",
+      "empty": "לא נשמע טקסט — נסה שוב",
+      "unsupported": "הדפדפן הזה לא תומך בהקלטה",
+      "permission": "אין הרשאה למיקרופון",
+      "noAutoStop": "אין זיהוי שקט בדפדפן הזה — עצור בלחיצה כשתסיים",
+      "maxLength": "ההקלטה הגיעה למקסימום ונעצרה",
+      "costNote": "הכתבה מתמללת דרך ג'מיני — קריאה אחת בתשלום לכל לחיצה על המיקרופון."
+    },
+    "playbooks": {
+      "title": "שיטות עבודה",
+      "emptyHint": "אין שיטות עבודה. לחץ על חץ ההורדה כדי לטעון את ברירות המחדל מהריפו.",
+      "add": "הוסף שיטה",
+      "addTitle": "שיטת עבודה חדשה",
+      "editTitle": "עריכת שיטת עבודה",
+      "edit": "ערוך",
+      "delete": "מחק",
+      "openDoc": "פתח את המסמך",
+      "seed": "טען ברירות מחדל מהריפו",
+      "seeded": "נוספו {count} שיטות",
+      "seededNone": "כל ברירות המחדל כבר קיימות",
+      "refresh": "רענן תאריכי עדכון מגיטהאב",
+      "refreshed": "עודכנו {count} תאריכים",
+      "refreshedPartial": "עודכנו {count} תאריכים — חלק נכשלו",
+      "save": "שמור",
+      "saved": "נשמר",
+      "cancel": "ביטול",
+      "confirmDelete": "למחוק את \"{name}\"?",
+      "namePlaceholder": "שם השיטה (למשל: פרוטוקול מחקר דו-שלבי)",
+      "docUrlPlaceholder": "קישור למסמך (לינק עמוק מלא)",
+      "instructionsPlaceholder": "ההוראות שיישלחו עם ההרצה…",
+      "instructionsHint": "הטקסט הזה נוסף לפני הבקשה בכל הרצה שבוחרים בה את השיטה. המסמך המלא נשאר בקישור.",
+      "kind": {
+        "research": "מחקר",
+        "planning": "תכנון",
+        "build": "בנייה",
+        "review": "סקירה",
+        "content": "תוכן",
+        "other": "אחר"
+      }
+    },
+    "instructions": {
+      "title": "הוראות קבועות",
+      "placeholder": "הוראות שקלוד יקבל בכל הרצה…",
+      "save": "שמור",
+      "saved": "ההוראות נשמרו",
+      "noChanges": "אין שינויים",
+      "updatedAt": "עודכן {when}",
+      "never": "עוד לא נשמרו הוראות",
+      "repoCopy": "העותק שברפו",
+      "hint": "הטקסט הזה נשלח לפני כל בקשה, בכל הרצה. עריכה כאן משנה את מה שקלוד מקבל מיד.",
+      "codeView": "תצוגת קוד",
+      "richView": "עריכה מעוצבת"
+    },
+    "github": {
+      "pick": "בחר ריפו",
+      "search": "חפש ריפו…",
+      "loading": "טוען ריפואים…",
+      "noRepos": "לא נמצאו ריפואים",
+      "private": "פרטי",
+      "clear": "נקה בחירה",
+      "branchPlaceholder": "ענף",
+      "notConnected": "אין חיבור לגיטהאב. שמור טוקן גיטהאב עם הרשאת repo בשם {key} במסך {where}."
     }
+  },
+  "claudeChat": {
+    "placeholder": "כתוב הודעה…",
+    "send": "שלח",
+    "stop": "עצור",
+    "stopped": "התור נעצר",
+    "attach": "צרף קובץ",
+    "removeAttachment": "הסר",
+    "fileTooLarge": "{name} גדול מדי (מקסימום 7MB)",
+    "newChat": "צ'אט חדש",
+    "noThreads": "אין צ'אטים",
+    "untitled": "ללא כותרת",
+    "showList": "הצג רשימת צ'אטים",
+    "hideList": "הסתר רשימת צ'אטים",
+    "rename": "שנה כותרת",
+    "delete": "מחק",
+    "confirmDelete": "למחוק את הצ'אט הזה וכל התורים שבו?",
+    "settings": "הגדרות השיחה",
+    "empty": "כתוב הודעה כדי להתחיל",
+    "thinking": "חושב…",
+    "toolCount": "{count} פעולות כלים",
+    "effortDefault": "חוזק: ברירת מחדל",
+    "effort": {
+      "low": "נמוך",
+      "medium": "בינוני",
+      "high": "גבוה",
+      "xhigh": "גבוה מאוד",
+      "max": "מקסימלי"
+    },
+    "firstTurnNote": "שיטת העבודה וההוראות הקבועות נשלחות בהודעה הראשונה בלבד — מכאן והלאה הסשן זוכר אותן.",
+    "taskRouter": "עדכון חופשי (משימות)",
+    "contextLost": "התור הזה התחיל סשן חדש — הוא לא מכיר את מה שנאמר לפניו"
+  },
+  "markdown": {
+    "anchor": "קישור לסעיף {title}",
+    "copyCode": "העתק קוד",
+    "copied": "הועתק"
   }
 }

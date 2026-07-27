@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extractEmailBody } from "../_shared/email-body.ts";
+import { anthropicCostUsdFromCounts, anthropicFamily } from "../_shared/ai-pricing.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -331,7 +332,12 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
       return { result: "skip", skipReason: `to_rule: ${addr}` };
     }
   }
+  // The user's own outgoing mail must reach the check_followup routing below —
+  // a from= rule that happens to match one of the user's own addresses (e.g. a
+  // rule created on a shared domain) must never swallow it here.
+  const senderIsSelf = myEmails.some((e: string) => e && sender.includes(e));
   for (const addr of fromSkip) {
+    if (senderIsSelf) break;
     if (sender.includes(addr)) return { result: "skip", skipReason: `from_rule: ${addr}` };
   }
 
@@ -381,7 +387,10 @@ function preClassify(msg: any, settings: any, sys: SystemParams): { result: stri
   if (sourceType === "gmail_sent") return { result: "check_followup" };
   if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
   if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
-  if (skipSenders.some((e: string) => sender.includes(e))) return { result: "informational", skipReason: `skip_sender: ${sender}` };
+  // A sender the user asked to skip is filtered noise, not read-and-keep info —
+  // route to "skip" so it gets the "דילוג" label and reads honestly in the log
+  // (same reasoning as the Gmail-category filter below).
+  if (skipSenders.some((e: string) => sender.includes(e))) return { result: "skip", skipReason: `skip_sender: ${sender}` };
 
   // Gmail categories the user filters out (promotions/social/forums by
   // default) are DROPPED, not kept — so they are a skip, not "informational".
@@ -441,6 +450,18 @@ function stripLoneSurrogates(s: string): string {
 // The cached prefix must be byte-identical across calls to hit, so anything
 // volatile (current time, thread memory, message body) must live in the user
 // message, never here.
+//
+// MINIMUM CACHEABLE PREFIX — check this before wrapping a new prompt. A
+// cache_control block shorter than the model's minimum is silently IGNORED:
+// Anthropic bills every token at full price and reports zero cache reads and
+// zero writes, so the code *reads* as cached while nothing ever is. Haiku 4.5
+// needs 4096 tokens; Sonnet 4.6 and Opus need 1024. Six call sites here
+// (wa_route, checkFollowup, cross_link x2, dupe_match, material_change) wrapped
+// 266-801-token prompts on the Haiku classification_model and so never cached
+// once across ~2700 calls/30d; they now pass their prompt as a plain string.
+// Padding a prompt up to 4096 just to make it cacheable is a LOSS, not a win —
+// the 1h write alone costs 2x input — so a short prompt on Haiku is correctly
+// left uncached. Only classify (~5k) and task clear the bar. Keep it that way.
 function cachedSystem(staticPrompt: string): SystemBlock[] {
   return [{ type: "text", text: staticPrompt, cache_control: { type: "ephemeral", ttl: "1h" } }];
 }
@@ -658,6 +679,11 @@ function nowContextLine(tz: string): string {
 // (Sonnet), which follows those rules far better. Independent of
 // escalate_low_confidence — that flag governs CLASSIFICATION certainty; this is
 // about OUTPUT fidelity, so it fires whenever an escalation model is configured.
+// SCOPE (2026-07): the trigger only fires when the wording was INTRODUCED by
+// the model — i.e. it appears in the summary/reason but NOT in the source
+// subject/body. "Payment failed" mail legitimately yields a summary saying
+// נכשל; re-classifying every such billing notice would double-pay for the
+// most routine automated mail without any hallucination to fix.
 const SENSITIVE_WORDING_RE = /התחייב|הבטיח|מתחייב|מבטיח|נכשל|committed|promised|guarantee[ds]?|\bfailed\b/i;
 function summaryAssertsCommitmentOrFailure(parsed: any): boolean {
   return SENSITIVE_WORDING_RE.test(`${parsed?.new_summary ?? ""} ${parsed?.reason_he ?? ""}`);
@@ -856,10 +882,11 @@ async function analyzeWithMemory(
 
   const whatsappNote = isConversational(msg) ? WHATSAPP_CLASSIFIER_RULES : "";
 
-  // Per-user correction rules + a self-note marker, both per-message so the
-  // cached static prefix stays warm. whatsapp_echo rows are the user's own
-  // self-chat (their own number), which grounds personal rules phrased as
-  // "from my number …".
+  // Per-user correction rules — folded into the CACHED per-user prefix below
+  // (they are user-invariant, so the cache stays warm) — plus a self-note
+  // marker, which IS per-message and stays in the user message. whatsapp_echo
+  // rows are the user's own self-chat (their own number), which grounds
+  // personal rules phrased as "from my number …".
   const personalRules: string = settings.__personalRules ?? "";
   const personalBlock = personalRules
     ? `\n\n═══ USER-SPECIFIC CORRECTION RULES (this user corrected the system on these; they OVERRIDE the general rules above on any conflict) ═══\n${personalRules}`
@@ -1127,8 +1154,8 @@ content under the rules above.`;
   // rules, and (for WhatsApp) the WA conversation rules. These were re-sent
   // FRESH at full price on EVERY message (~950 tokens on WhatsApp, the dominant
   // per-call cost). Folding them into the 1h-cached system block turns them
-  // into 0.1x cache reads. WhatsApp adds whatsappNote as a suffix, so email and
-  // WhatsApp share the leading prefix and each variant stays byte-stable.
+  // into 0.1x cache reads; each variant (email / WhatsApp) stays byte-stable
+  // across calls, so both cache independently.
   // FRESH user message = only the truly per-message parts: current time, thread
   // memory (changes per message), the self-note marker, and the body itself.
   // smrtInfo: instruct the SAME call to also emit durable facts (only for
@@ -1158,13 +1185,20 @@ Scope each fact using this profile (never guess; "unclassified" when unsure):
 ${renderInfoProfile(infoProfile)}`;
   }
 
-  const systemPrefix = staticPrompt + newMatterContract + factsContract + identityBlock + personalBlock + whatsappNote;
+  // ORDER MATTERS at the tail: the WhatsApp rules override the email-direction
+  // rules ABOVE them, and the user's personal correction rules come LAST so
+  // they outrank everything — including the WhatsApp rules — on any conflict
+  // (the user's explicit corrections are the highest authority). Each variant
+  // (email / WhatsApp / with-or-without corrections) is its own byte-stable
+  // cache entry.
+  const systemPrefix = staticPrompt + newMatterContract + factsContract + identityBlock + whatsappNote + personalBlock;
   const systemBlocks: SystemBlock[] = [{ type: "text", text: systemPrefix, cache_control: { type: "ephemeral", ttl: "1h" } }];
   const userMessage = `${nowContextLine(userTz(settings))}${memoryBlock}${selfNote}\n\nFrom: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\nNEW MESSAGE BODY:\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
 
-  // max_tokens 1500 (was 800): a long new_summary + reasons can overflow 800
-  // and truncate the JSON mid-object. JSON-only output (no prose preamble) is
-  // enforced by the OUTPUT FORMAT block in newMatterContract.
+  // max_tokens 3000: a long new_summary + reasons (plus the optional facts
+  // array) can overflow smaller caps and truncate the JSON mid-object.
+  // JSON-only output (no prose preamble) is enforced by the OUTPUT FORMAT
+  // block in newMatterContract.
   const result = await callClaude(model, systemBlocks, userMessage, 3000, { component: "ai_process.classify", userId: msg.user_id, refId: msg.id });
   const text = result.text.trim();
   let parsed: any = null;
@@ -1256,7 +1290,11 @@ ${renderInfoProfile(infoProfile)}`;
   // (only when not already on the override) and no-ops when the escalation
   // model equals the model we just used. callClaude logs both calls to the
   // ai_usage ledger, so escalation cost is captured automatically.
-  const sensitiveWording = summaryAssertsCommitmentOrFailure(parsed);
+  // The haystack includes the thread memory + linked title the model also saw:
+  // wording that legitimately entered the summary on an earlier message must
+  // not re-trigger a paid escalation on every follow-up in the same thread.
+  const sensitiveWording = summaryAssertsCommitmentOrFailure(parsed)
+    && !SENSITIVE_WORDING_RE.test(`${msg.subject || ""}\n${memory?.summary ?? ""}\n${linkedTitle ?? ""}\n${bodyForClassify(msg, sys.body_truncate_classify)}`);
   if (
     !modelOverride &&
     sys.escalation_model &&
@@ -1596,7 +1634,7 @@ Return ONLY JSON: {"task_id": "<one of the listed ids>"} if it continues that ma
 An [open] matter is the right home ONLY when the latest message is about the SAME specific topic/action that matter tracks — the same question, deal, document, payment, or event. A shared chat is NOT a shared matter: if the latest message raises a clearly DIFFERENT topic, return NEW even though the same contact has an open matter. Do not staple an unrelated new message onto an old suggestion just because they share a chat (the recurring "חיבר להצעה ישנה שלא קשורה להודעות החדשות" bug).
 Judge by the LAST message in the transcript. When the latest message is genuinely the next turn of an [open] matter, pick it; when it is a different topic, prefer NEW; when the only fit is a [DONE/closed], [SNOOZED], or [DISMISSED] matter, prefer NEW unless it unmistakably continues that exact matter.`;
   const user = `Matters for this contact (with their current state):\n${list}\n\nWhatsApp transcript (latest last):\n${bodyForClassify(msg, sys.body_truncate_classify)}`;
-  const result = await callClaude(sys.classification_model, cachedSystem(system), user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
+  const result = await callClaude(sys.classification_model, system, user, 60, { component: "ai_process.wa_route", userId: msg.user_id, refId: msg.id });
   let taskId: string | "NEW" = "NEW";
   try {
     const m = result.text.match(/\{[\s\S]*\}/);
@@ -1975,7 +2013,7 @@ When genuinely torn, prefer INFO — a missed follow-up costs one reminder, a
 noise follow-up erodes trust in every suggestion.
 
 Respond EXACTLY: FOLLOWUP | <short reason in Hebrew> OR INFO | <short reason in Hebrew>`;
-  const result = await callClaude(model, cachedSystem(system), `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100);
+  const result = await callClaude(model, system, `Subject: ${msg.subject || ""}\nTo: ${msg.recipient || (msg.metadata as any)?.to || ""}\n\n${bodyForClassify(msg, sys.body_truncate_classify)}`, 100, { component: "ai_process.check_followup", userId: msg.user_id, refId: msg.id });
   return { isFollowup: result.text.trim().toUpperCase().startsWith("FOLLOWUP"), reason: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
@@ -2357,14 +2395,16 @@ async function checkCrossSourceLink(
 
     const userMessage = `EMAIL:\nSubject: ${msg.subject || ""}\nBody:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ OPEN TASKS (last 90 days) ═══\n${taskList}`;
 
-    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
+    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
       const m = result.text.match(/\{[\s\S]*\}/);
       if (!m) return null;
       const parsed = JSON.parse(m[0]);
-      if (parsed.match && parsed.matched_id) {
+      // Only an id that was actually IN the candidate list — never a fabricated
+      // or remembered one (same guard findDuplicateOpenTask applies).
+      if (parsed.match && parsed.matched_id && (tasks as any[]).some((t) => t.id === parsed.matched_id)) {
         return { taskId: String(parsed.matched_id), reason: String(parsed.reason ?? "") };
       }
     } catch { /* ignore */ }
@@ -2396,14 +2436,14 @@ async function checkCrossSourceLink(
 
     const userMessage = `DRIVE DOCUMENT:\nTitle: ${msg.subject || ""}\nContent:\n${bodyForAI(msg).substring(0, 3000)}\n\n═══ PAST CONFIRMATION EMAILS (last 90 days) ═══\n${emailList}`;
 
-    const result = await callClaude(model, cachedSystem(CROSS_SOURCE_PROMPT), userMessage, 300,
+    const result = await callClaude(model, CROSS_SOURCE_PROMPT, userMessage, 300,
       { component: "ai_process.cross_link", userId, refId: msg.id });
 
     try {
       const m = result.text.match(/\{[\s\S]*\}/);
       if (!m) return null;
       const parsed = JSON.parse(m[0]);
-      if (parsed.match && parsed.matched_id) {
+      if (parsed.match && parsed.matched_id && candidates.some((e: any) => e.id === parsed.matched_id)) {
         return { taskId: newTaskId!, sourceMessageId: String(parsed.matched_id), reason: String(parsed.reason ?? "") };
       }
     } catch { /* ignore */ }
@@ -2436,6 +2476,12 @@ interface DupeProbe {
   emails: Set<string>;
   domains: Set<string>;
   phones: Set<string>;
+  /**
+   * The incoming message's channel counterparty (sender address / chat phone) —
+   * narrower than `emails`/`phones` above, which include anything scraped from
+   * the body for RECALL. Only this field is allowed to decide identity.
+   */
+  party: PartyIds;
 }
 
 function extractEmails(...vals: (string | null | undefined)[]): Set<string> {
@@ -2483,6 +2529,173 @@ function extractUrls(text: string): string[] {
   return m ? Array.from(new Set(m)) : [];
 }
 
+// ── Party identity — verified in code, never taken on the model's word ───────
+// The AI gates below decide SAME MATTER. They must NEVER be the only authority
+// on SAME PARTY: the cheap classification_model repeatedly manufactured an
+// identity to justify a merge — "3475848008 = 347-584-8008, תואם 972584146670",
+// "מספר טלפון 972537701510 מתאים ל-7706484073 כנראה שגיאת הקלדה" — and fused two
+// unrelated people into one task. T1804 is the reference case: לאה's "she'll
+// call back" task was renamed to מענדי's AI-voices ask, keeping לאה's contact and
+// description; T276 then collected four more updates from the wrong chat because
+// the bad link also re-pointed that chat's thread memory. Replaying the last 90
+// days: of 105 two-party chat auto-merges, 81 were party-verified, 7 were
+// unverifiable — and 15 had a provably different counterparty.
+//
+// So identity is checked deterministically: the channel counterparty of the
+// incoming item vs the counterparty the candidate task records (its contact
+// fields AND the message it was born from). A verified mismatch downgrades the
+// verdict one tier instead of merging.
+interface PartyIds {
+  emails: Set<string>;
+  domains: Set<string>;
+  /** Last-9-digit phone keys — country-code / leading-zero tolerant. */
+  phones: Set<string>;
+}
+
+// Key on the last EIGHT digits, which is what survives every form the same
+// number is written in here: +1-347-584-8008 / 3475848008 / 13475848008 → 75848008,
+// +972-58-414-6670 / 058-414-6670 → 84146670, and — the reason it is 8 and not 9
+// — an Israeli 9-digit landline written locally (03-123-4567) vs internationally
+// (+972-3-123-4567), which extractPhones truncates to 7231234567: only the last
+// 8 digits agree. Two genuinely different numbers still differ (75848008 ≠
+// 84146670, the exact pair the model declared equal on T1804); a collision needs
+// the same 7-digit subscriber number AND the same final area-code digit, and it
+// would only cost a veto, never cause a wrong one.
+function phoneKeys(...vals: (string | null | undefined)[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of extractPhones(...vals)) if (p.length >= 9) out.add(p.slice(-8));
+  return out;
+}
+
+function partyIdsFrom(
+  emailish: (string | null | undefined)[],
+  phonish: (string | null | undefined)[],
+): PartyIds {
+  const emails = extractEmails(...emailish);
+  return { emails, domains: emailDomains(emails), phones: phoneKeys(...phonish) };
+}
+
+// Who the INCOMING item is with: the channel counterparty ONLY — sender address,
+// chat phone. Deliberately NOT the body: a number quoted inside a message is not
+// the party, and scraping those is exactly how a "same phone" fantasy gets
+// manufactured. Self-chat rows (whatsapp_echo/sms_echo) have no counterparty, so
+// they yield no verdict and keep their existing behaviour.
+function msgPartyIds(msg: any): PartyIds {
+  if (msg?.source_type === "whatsapp_echo" || msg?.source_type === "sms_echo") {
+    return partyIdsFrom([], []);
+  }
+  const md = (msg?.metadata ?? {}) as any;
+  // On the user's OWN outbound mail the sender is the user — the counterparty is
+  // the recipient. metadata.to is used for gmail_sent ONLY: on incoming mail it
+  // holds the user's own alias, and folding that in would make every pair of
+  // emails "share a party" and disable the check entirely.
+  if (msg?.source_type === "gmail_sent") return partyIdsFrom([md?.to], []);
+  return partyIdsFrom([msg?.sender_email, msg?.sender], [md?.fromPhone, md?.peerPhone, md?.chatId]);
+}
+
+/** Who a candidate TASK is with, from the contact fields the builder filled. */
+function taskPartyIds(task: any): PartyIds {
+  return partyIdsFrom(
+    [task?.related_contact_email, task?.related_contact],
+    [task?.related_contact_phone, task?.related_contact],
+  );
+}
+
+function mergeParties(a: PartyIds, b: PartyIds): PartyIds {
+  return {
+    emails: new Set([...a.emails, ...b.emails]),
+    domains: new Set([...a.domains, ...b.domains]),
+    phones: new Set([...a.phones, ...b.phones]),
+  };
+}
+
+// mail.dep.nyc.gov and dep.nyc.gov are the same authority (the DEP dunning case
+// the matcher must keep merging); a.com and b.com are not.
+function domainsRelated(a: string, b: string): boolean {
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/**
+ * True only when the two sides carry COMPARABLE identifiers of the same kind
+ * (phone↔phone or email↔email) and they are verifiably NOT the same party.
+ *
+ * Two deliberate non-verdicts, so this stays a mismatch detector and not a
+ * blanket "different source" block:
+ *  • One side anonymous (a calendar event, a Drive scan, a task with no contact)
+ *    — nothing to compare, and those are the genuine cross-source links this
+ *    matcher exists for.
+ *  • Nothing comparable (a WhatsApp phone vs a task known only by email) — a
+ *    person can own both, so this is UNVERIFIABLE, not proven different.
+ * A match on ANY kind clears the whole check: a shared email is identity even if
+ * some phone in the free-text contact field differs.
+ */
+function partiesConflict(incoming: PartyIds, task: PartyIds): boolean {
+  const comparable =
+    (incoming.phones.size > 0 && task.phones.size > 0) ||
+    (incoming.emails.size > 0 && task.emails.size > 0);
+  return comparable && !partiesMatch(incoming, task);
+}
+
+/** A POSITIVE identity match — a shared phone, address, or related domain. */
+function partiesMatch(a: PartyIds, b: PartyIds): boolean {
+  for (const p of a.phones) if (b.phones.has(p)) return true;
+  for (const e of a.emails) if (b.emails.has(e)) return true;
+  for (const d of a.domains) for (const d2 of b.domains) if (domainsRelated(d, d2)) return true;
+  return false;
+}
+
+/**
+ * The task's own TEXT already names the incoming counterparty (their number or
+ * address appears in its title/description) → they really are involved in this
+ * matter even though the contact fields point elsewhere. This is the evidence
+ * that rescues the legitimate case: a person replying from their own number
+ * about a matter opened through someone else (T1086 — Rabbi Nagel's number is
+ * written in the task the model matched). Evidence in the data, not a claim in
+ * the reason string.
+ */
+function taskTextNamesParty(task: any, incoming: PartyIds): boolean {
+  const blob = `${task?.title_he ?? ""} ${task?.title ?? ""} ${String(task?.description ?? "")}`;
+  const ids = partyIdsFrom([blob], [blob]);
+  if (partiesMatch(incoming, ids)) return true;
+  // Domain named in the text, even without a full address: covers a vendor that
+  // rotates sending domains (billing@x.com → notices@x-mail.net) where the task
+  // itself says who it is about. Generic consumer domains are already filtered
+  // out of PartyIds.domains, so "gmail.com" can never rescue a merge.
+  const lower = blob.toLowerCase();
+  for (const d of incoming.domains) if (lower.includes(d)) return true;
+  return false;
+}
+
+/** Compact "who" for the audit trail in the log / ✨ panel. */
+function describeParty(p: PartyIds): string {
+  const ids = [...p.phones, ...p.emails];
+  return ids.length ? ids.slice(0, 3).join(", ") : "—";
+}
+
+/**
+ * True when `tkey` is NOT the thread/chat the task was born in. Used to keep
+ * thread_memory honest: binding a whole WhatsApp chat to a task born in another
+ * chat routes every FUTURE message from that contact onto a stranger's matter
+ * (how T276 kept collecting updates from the wrong person long after the one bad
+ * link). A task with no originating thread (calendar / Drive / manual) never
+ * crosses, so genuine cross-source bindings still register.
+ */
+async function threadCrossesTask(taskId: string, tkey: string): Promise<boolean> {
+  // Fails CLOSED: a lookup that errors reports "crosses", because a query blip
+  // must not license a cross-party binding — that is how the T276 damage
+  // persisted. Cost of a false "crosses" is one lost auto-attach, which the next
+  // message on the thread re-establishes.
+  const { data: t, error: taskErr } = await supabase
+    .from("tasks").select("source_message_id").eq("id", taskId).maybeSingle();
+  if (taskErr) return true;
+  if (!t?.source_message_id) return false;
+  const { data: origin, error: originErr } = await supabase
+    .from("source_messages").select("source_type, metadata").eq("id", t.source_message_id).maybeSingle();
+  if (originErr) return true;
+  const originKey = origin ? threadKey(origin) : null;
+  return originKey !== null && originKey !== tkey;
+}
+
 function dayDiff(a: string | null, b: string | null): number | null {
   if (!a || !b) return null;
   const ta = Date.parse(a.length === 10 ? `${a}T00:00:00Z` : a);
@@ -2526,6 +2739,7 @@ function buildProbe(msg: any, ownerContact?: string | null): DupeProbe {
     emails,
     domains: emailDomains(emails),
     phones,
+    party: msgPartyIds(msg),
   };
 }
 
@@ -2552,6 +2766,10 @@ function buildProbeFromTask(msg: any, task: any): DupeProbe {
     emails,
     domains: emailDomains(emails),
     phones,
+    // Identity is still the MESSAGE's counterparty — a produced task's own text
+    // may name other people, but the party this item arrived from is the chat /
+    // sender it came in on.
+    party: msgPartyIds(msg),
   };
 }
 
@@ -2568,12 +2786,35 @@ confidence:
 
 NEVER match on person alone. NEVER match on topic alone. Two DIFFERENT meetings with the same person are NOT a match. A recurring event's separate occurrences are NOT a match unless the date is the same. When unsure, return {"match": false}. A false match is worse than a missed one.
 
+IDENTIFIERS ARE LITERAL (mandatory): a phone number, email address, account /
+invoice / case number counts as the SAME PARTY only when the identifiers are
+identical character-for-character after stripping formatting (spaces, dashes,
+parentheses, a leading + or country code). Numbers that merely look similar
+belong to DIFFERENT people. NEVER reason that a number matches "when you swap
+the country code", is "probably a typo", "seems to be the same family", or "is
+likely the same person" — if you cannot point at identical digits, the party
+does NOT match, and you must not write that it does. Two different WhatsApp
+chats / phone numbers are two different parties even when both write about the
+same subject on the same day.
+
+DIFFERENT PARTIES: when the two items are from different parties, return
+{"match": false} — unless the SAME concrete reference (invoice / order / case
+number, document name, or named event) appears VERBATIM in both. "Same day +
+related topic" between two different people is NEVER a match: those are two
+people talking to the user about a shared subject, which is normal and must stay
+two separate matters.
+
 ACTION GATE (mandatory — applies even when 2+ pillars above agree): a match ALSO requires the SAME underlying obligation/action. From a single high-volume sender (Amazon, a bank, a marketplace, a SaaS) "same party + a nearby date" is NOT sufficient on its own. "Review / skip an upcoming delivery", "fix a failed or expired payment method", "track a shipment", "claim a refund", and "a price-change notice" are DIFFERENT obligations even when they arrive from the same sender in the same week — do NOT merge one into another. Merge ONLY when the new item is the SAME obligation: a follow-up about the very same delivery, invoice, appointment, reference/order number, or decision.
 
 DUNNING EXCEPTION (mandatory): a bill, its payment reminder, its overdue / past-due / "interest is accruing" notice, and a final/collection warning about the SAME account, invoice, or service address are the SAME obligation — the one debt escalating over time, NOT separate matters. Match them even though the wording and the amount differ (an overdue notice shows a different running balance than the original bill). Signals that it is the same debt: identical account number, invoice number, service address, or property. Example: "Your DEP water bill is available" (675 Rutland Rd) and "Let us help with your overdue balance — interest is accruing" (675 Rutland Rd) from NoReply@mail.dep.nyc.gov are the SAME obligation → match.
 
-Return ONLY valid JSON, no markdown:
-{"match": true, "matched_task_id": "<id from the candidate list>", "confidence": "high", "reason_he": "<Hebrew: name the 2+ matching specifics — date, party, subject>"}
+Return ONLY the JSON object — no markdown fence, and not one word before or
+after it. Do NOT write your reasoning outside the JSON: reason_he is the only
+explanation there is room for, and it must be 12 Hebrew words or fewer. A longer
+reply runs past the output limit, gets cut off mid-JSON, and is discarded — which
+silently loses the match you just found. Short and complete beats thorough and
+truncated.
+{"match": true, "matched_task_id": "<id from the candidate list>", "confidence": "high", "reason_he": "<Hebrew, MAX 12 words: name the 2+ matching specifics — date, party, subject>"}
 OR
 {"match": false}`;
 
@@ -2591,7 +2832,7 @@ async function findDuplicateOpenTask(
   const titleTokens = textTokens(`${probe.title} ${probe.description.slice(0, 300)}`);
   if (probe.emails.size === 0 && probe.phones.size === 0 && !probe.dueDate && titleTokens.size < 2) return null;
 
-  const cols = "id, serial_display, title_he, title, description, due_date, related_contact, related_contact_email, related_contact_phone, status, recurrence_parent_id";
+  const cols = "id, serial_display, title_he, title, description, due_date, related_contact, related_contact_email, related_contact_phone, status, recurrence_parent_id, source_message_id";
   const since = new Date(Date.now() - 120 * 86_400_000).toISOString();
   const { data: open, error: openErr } = await supabase
     .from("tasks")
@@ -2688,13 +2929,44 @@ async function findDuplicateOpenTask(
 
   const userMessage = `NEW ITEM (about to become a task):\nTitle: ${probe.title}\nDate: ${probe.dueDate || "—"}\nContact emails: ${[...probe.emails].join(", ") || "—"}\nContact phones: ${[...probe.phones].join(", ") || "—"}\nBody:\n${probe.description.substring(0, 900)}\n\n═══ OPEN TASK CANDIDATES ═══\n${candList}`;
 
-  const result = await callClaude(sys.classification_model, cachedSystem(DUPE_MATCH_PROMPT), userMessage, 300,
+  const result = await callClaude(sys.classification_model, DUPE_MATCH_PROMPT, userMessage, 300,
     { component: "ai_process.dupe_match", userId, refId });
 
+  // An unparseable reply used to die here in silence. The regex needs a closing
+  // brace and JSON.parse needs valid JSON; both failure paths just returned
+  // null, which is indistinguishable from an honest "no match". Over the 30 days
+  // to 2026-07-27, 993 of 1380 of these calls (72%) ended at exactly the
+  // 300-token ceiling — cut off mid-JSON — so duplicates were being dropped at a
+  // rate nobody could measure. Parse on its own now, and log when it fails, with
+  // the output-token count so a ceiling hit is obvious from the row.
+  let parsed: any = null;
+  let parseError = "";
   try {
     const m = result.text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]);
+    if (m) parsed = JSON.parse(m[0]);
+    else parseError = "no complete JSON object in the reply";
+  } catch (e) {
+    parseError = `JSON.parse failed: ${(e as Error).message}`;
+  }
+  if (!parsed) {
+    await supabase.from("log_entries").insert({
+      user_id: userId,
+      level: "warning",
+      category: "ai_process_dupe_match",
+      status: "failed",
+      source_message_id: refId,
+      ai_model_used: sys.classification_model,
+      ai_input_tokens: result.inputTokens,
+      ai_output_tokens: result.outputTokens,
+      error_message:
+        `dupe_match reply unparseable — ${parseError}. ${result.outputTokens} output tokens` +
+        (result.outputTokens >= 300 ? " (hit the max_tokens ceiling, so the reply was cut off)" : "") +
+        ". Treated as no match; a real duplicate may have been missed.",
+    });
+    return null;
+  }
+
+  try {
     if (parsed.match && parsed.matched_task_id && (parsed.confidence === "high" || parsed.confidence === "medium")) {
       let chosen = candidates.find((c) => c.id === parsed.matched_task_id);
       if (!chosen) return null; // guard against a hallucinated id
@@ -2723,11 +2995,46 @@ async function findDuplicateOpenTask(
         }
       }
 
+      // ── Identity veto: the model does not get the last word on WHO ─────────
+      // Verify the party in code (see partiesConflict). The task's identity is
+      // its contact fields PLUS the message it was born from — a WhatsApp task's
+      // chat phone is identity even when related_contact is null, which is how a
+      // chunk of these merges escaped any contact comparison at all.
+      // A verified mismatch costs the verdict one tier: high becomes a
+      // user-decidable suggestion, medium disappears. That way a wrong guess can
+      // never rewrite a task, and the "duplicate of a completed task"
+      // suppression can never silently swallow a real ask from someone else.
+      let confidence: "high" | "medium" = parsed.confidence;
+      let reason = String(parsed.reason_he ?? "");
+      let taskParty = taskPartyIds(chosen);
+      let originUnknown = false;
+      if (chosen.source_message_id) {
+        const { data: origin, error: originErr } = await supabase
+          .from("source_messages")
+          .select("sender, sender_email, source_type, metadata")
+          .eq("id", chosen.source_message_id)
+          .maybeSingle();
+        if (originErr) originUnknown = true;
+        else if (origin) taskParty = mergeParties(taskParty, msgPartyIds(origin));
+      }
+      // A failed origin lookup may have hidden the task's ONLY identity (a chat
+      // task whose related_contact is null), and "no verdict" is exactly the hole
+      // this veto exists to close. So when the origin is unknown, auto-merging
+      // requires a POSITIVE identity match rather than merely the absence of a
+      // provable conflict.
+      const partyConflict = partiesConflict(probe.party, taskParty)
+        || (originUnknown && !partiesMatch(probe.party, taskParty));
+      if (partyConflict && !taskTextNamesParty(chosen, probe.party)) {
+        if (confidence !== "high") return null;
+        confidence = "medium";
+        reason = `⚠️ זהות הצדדים לא אומתה (${describeParty(probe.party)} ≠ ${describeParty(taskParty)}) — לא מוזג אוטומטית, הצעה בלבד: ${reason}`;
+      }
+
       return {
         taskId: String(chosen.id),
         serial: chosen.serial_display || "",
-        confidence: parsed.confidence,
-        reason: String(parsed.reason_he ?? ""),
+        confidence,
+        reason,
         // snoozed matches (the same-day recurring guard above) fold like an open
         // task — linkAndEnrichDuplicate suppresses the duplicate instead of the
         // escalation path spawning a tagged re-creation.
@@ -2735,7 +3042,8 @@ async function findDuplicateOpenTask(
         status: String(chosen.status),
       };
     }
-  } catch { /* ignore parse errors — treat as no match */ }
+  } catch { /* verdict processing / origin lookup failed — treat as no match. Parse
+               failures no longer land here; they are logged above. */ }
   return null;
 }
 
@@ -2767,7 +3075,7 @@ async function detectMaterialChanges(
     const userMessage =
       `EXISTING TASK:\nTitle: ${existing.title_he || "—"}\nDescription: ${String(existing.description || "—").slice(0, 1200)}\nCurrent due_date: ${existing.due_date || "—"}\n\n` +
       `NEW RELATED DOCUMENT:\n${msgBody.slice(0, 3000)}`;
-    const result = await callClaude(sys.classification_model, cachedSystem(MATERIAL_CHANGE_PROMPT), userMessage, 500,
+    const result = await callClaude(sys.classification_model, MATERIAL_CHANGE_PROMPT, userMessage, 500,
       { component: "ai_process.material_change", userId, refId });
     const m = result.text.match(/\{[\s\S]*\}/);
     if (!m) return null;
@@ -2812,6 +3120,14 @@ async function linkAndEnrichDuplicate(
     // Don't clobber the existing task's description with this message's summary;
     // record the cross-source link reason + the verbatim deep link(s) instead.
     newSummary: "",
+    // Same reason the summary is dropped, and just as mandatory: a linked
+    // message is EVIDENCE on an existing matter, never a re-definition of it.
+    // Letting the link carry newTitle through renamed the task to the new
+    // message's ask while its contact and description stayed with the original
+    // party — T1804 read "מענדי מבקש כמה קולות AI" on לאה's callback task — and
+    // the renamed title then fed detectMaterialChanges below, which dutifully
+    // reported a "⚠️ מה השתנה" diff between two unrelated matters.
+    newTitle: "",
     completionSignal: false,
     completionReason: "",
     reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
@@ -2863,8 +3179,15 @@ async function linkAndEnrichDuplicate(
 
   // Register thread memory for the NEW message's own thread (Gmail/WhatsApp)
   // so the next reply on it attaches here too. Calendar has no thread key.
+  // NEVER for a CHAT whose task was born in a different chat: a WhatsApp/SMS
+  // thread key is a PERSON, so binding it to someone else's task routes every
+  // future message from that contact onto a stranger's matter — one bad link on
+  // T276 kept pulling in a second chat's messages for hours. Gmail thread keys
+  // are matter-scoped (not person-scoped), so they still register as before.
   const tk = threadKey(msg);
-  if (tk) await upsertThreadMemory(msg.user_id, tk, { related_task_id: taskId, last_message_id: msg.id });
+  if (tk && !(isConversational(msg) && await threadCrossesTask(taskId, tk))) {
+    await upsertThreadMemory(msg.user_id, tk, { related_task_id: taskId, last_message_id: msg.id });
+  }
 }
 
 // MEDIUM-confidence: the new task was created normally but flagged as a
@@ -4002,6 +4325,12 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         if (targetTask) {
           const completionAnalysis: ThreadAnalysis = {
             ...analysis,
+            // A confirmation email CLOSES the matched task — it does not get to
+            // rename it or overwrite its description with this email's own
+            // summary (the same clobber that made T1804 unreadable). Only the
+            // completion signal and the linking reason cross over.
+            newSummary: "",
+            newTitle: "",
             completionSignal: true,
             completionReason: link.reason,
             reason: link.reason,
@@ -4055,10 +4384,20 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   // ── Persist thread memory ─────────────────────────────────────────────────
   if (tkey) {
     try {
+      // Keep the pointer honest. A chat's thread key is a PERSON, so it must
+      // never point at a task born in a DIFFERENT chat — that is what turned
+      // every later message from מענדי into an update on לאה's task (T1804) after
+      // a single bad cross-source link. Cross-chat → keep the previous pointer.
+      // Checked only when the pointer would actually change, so the common
+      // same-chat case costs nothing.
+      const crossChat = !!linkedTaskId
+        && isConversational(msg)
+        && linkedTaskId !== memory?.related_task_id
+        && await threadCrossesTask(linkedTaskId, tkey);
       await upsertThreadMemory(msg.user_id, tkey, {
         summary: analysis.newSummary || memory?.summary || "",
         state: analysis.state,
-        related_task_id: linkedTaskId ?? memory?.related_task_id ?? null,
+        related_task_id: (crossChat ? memory?.related_task_id : linkedTaskId ?? memory?.related_task_id) ?? null,
         last_message_id: msg.id,
       });
     } catch (e) {
@@ -4109,23 +4448,32 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
   });
 }
 
+// Rates live in _shared/ai-pricing.ts — ONE table for every edge function, so a
+// rate correction can no longer land in some functions and miss others (which
+// is how drive_ocr and project_detection stayed on Haiku-3.5 prices for months
+// after this function was fixed).
+//
+// `type` is a price family, not a model id, because two call sites price a
+// hypothetical model against Haiku's and Sonnet's rates side by side (the
+// shadow-eval cost comparison). A family name maps to a representative id.
+const FAMILY_MODEL_ID: Record<string, string> = {
+  haiku: "claude-haiku-4-5",
+  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-5",
+};
+
 function estimateCost(input: number, output: number, cacheRead: number, cacheWrite: number, type: string): number {
-  // Rates verified against platform.claude.com/docs/en/about-claude/pricing on
-  // 2026-07-26: Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.7–5 $5/$25 per 1M.
-  // Previous values were Haiku 3.5's ($0.80/$4) and Opus 4.1's ($15/$75), which
-  // under-reported Haiku spend ~25% and over-reported Opus 3×.
-  const rate = type === "haiku" ? { in: 1, out: 5 } : type === "opus" ? { in: 5, out: 25 } : { in: 3, out: 15 };
-  // cache read = 0.1× input. Cache WRITE = 2× input, because every cache_control
-  // block this function sends asks for a 1-hour TTL (see cachedSystem). This was
-  // 1.25× — the 5-minute rate — which under-reported every cached write by
-  // 37.5%; over the 14 days to 2026-07-26 that was ~$2.6 across classify + task.
-  return (input * rate.in + output * rate.out + cacheRead * rate.in * 0.1 + cacheWrite * rate.in * 2) / 1_000_000;
+  // Cache WRITE bills at 2× input because every cache_control block this
+  // function sends asks for a 1-hour TTL (see cachedSystem). Priced at the 5m
+  // rate it would under-report each cached write by 37.5%.
+  return anthropicCostUsdFromCounts(
+    FAMILY_MODEL_ID[type] ?? FAMILY_MODEL_ID.sonnet,
+    input, output, cacheRead, cacheWrite, "1h",
+  );
 }
 
 function modelTypeFromName(model: string): "haiku" | "sonnet" | "opus" {
-  if (model.includes("haiku")) return "haiku";
-  if (model.includes("opus"))  return "opus";
-  return "sonnet";
+  return anthropicFamily(model);
 }
 
 // ── Shadow eval (tiered-classifier validation) ─────────────────────────────
