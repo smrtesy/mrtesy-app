@@ -243,7 +243,9 @@ export async function callGeminiDetailed(opts: GeminiCallOptions): Promise<CallG
       component: "gemini.pdf",
       model,
       input_tokens: usage?.promptTokenCount ?? 0,
-      output_tokens: usage?.candidatesTokenCount ?? 0,
+      // Thinking tokens bill as output and are priced into costUsd, so they
+      // belong in this column too (see estimateGeminiCost).
+      output_tokens: (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0),
       cost_usd: costUsd,
     });
   } catch { /* ledger insert must not break the caller */ }
@@ -300,7 +302,9 @@ export async function generateText(
       component: "smrtbot.ai-answer",
       model,
       input_tokens: data.usageMetadata?.promptTokenCount ?? 0,
-      output_tokens: data.usageMetadata?.candidatesTokenCount ?? 0,
+      // Thinking tokens bill as output and are priced into the cost below.
+      output_tokens:
+        (data.usageMetadata?.candidatesTokenCount ?? 0) + (data.usageMetadata?.thoughtsTokenCount ?? 0),
       cost_usd: estimateGeminiCost(model, data.usageMetadata),
     });
   } catch { /* ledger insert must not break the caller */ }

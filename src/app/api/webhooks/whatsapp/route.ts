@@ -1503,7 +1503,10 @@ async function callGemini(
       component: "gemini.whatsapp",
       model,
       input_tokens: usage?.promptTokenCount ?? 0,
-      output_tokens: usage?.candidatesTokenCount ?? 0,
+      // Thinking tokens bill as output and ARE priced in below, so they belong
+      // in this column too — logging candidates alone made the per-call cost
+      // look impossible to derive from the tokens shown in /admin/usage.
+      output_tokens: (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0),
       cost_usd: estimateGeminiCostLocal(model, usage),
     });
     if (usageInsertError) {
