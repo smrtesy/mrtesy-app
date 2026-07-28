@@ -349,14 +349,32 @@ async function executeRunBody(runId: string): Promise<void> {
   // still holds the history, so the turn is resumed rather than started, and the
   // prompt carries only what the user just said.
   let resumeSession: string | null = null;
+  // Split-child inheritance, read on the FIRST turn only (session_id still null):
+  //   forkFromSession — method A: resume the PARENT's session with --fork-session.
+  //   seedContext     — method B: prepend the handover to the first prompt.
+  let forkFromSession: string | null = null;
+  let seedContext: string | null = null;
+  // A method-A fork child must run in the PARENT's working directory, because the
+  // engine stores sessions per project dir — both the parent session it forks from
+  // and the forked session it then owns live there. Its own dir would find neither.
+  // workspace_thread_id carries that directory key durably (it survives the parent's
+  // deletion — see the migration), so it is the authority on where turns run.
+  let workspaceThreadId: string | null = run.thread_id;
   if (run.thread_id) {
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
-      .select("session_id")
+      .select("session_id, fork_from_session, seed_context, workspace_thread_id")
       .eq("id", run.thread_id)
       .maybeSingle();
     if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
     resumeSession = thread?.session_id ?? null;
+    if (thread?.workspace_thread_id) workspaceThreadId = thread.workspace_thread_id;
+    // Only when the thread has no session of its own yet — a split child's first
+    // turn. Once it has resumed once, it owns a session and these are irrelevant.
+    if (!resumeSession) {
+      forkFromSession = thread?.fork_from_session ?? null;
+      seedContext = thread?.seed_context ?? null;
+    }
   }
 
   // ── the working directory ──
@@ -371,7 +389,7 @@ async function executeRunBody(runId: string): Promise<void> {
   // Held for the whole function, not just the clone: anything the run prints can
   // echo a tokenised remote URL, so the final error text has to be redacted too.
   let ghToken: string | null = null;
-  const workDir = run.thread_id ? await threadWorkspace(run.thread_id) : null;
+  const workDir = workspaceThreadId ? await threadWorkspace(workspaceThreadId) : null;
 
   if (run.repo) {
     ghToken = await getGitHubToken();
@@ -441,6 +459,15 @@ async function executeRunBody(runId: string): Promise<void> {
   // --file flag is for Anthropic Files API ids, NOT local paths, so pointing at
   // the path is the correct contract here, not a workaround.
   let promptText = run.prompt;
+  // Method B handover: the seed goes in FRONT of the first message, so the child
+  // opens knowing its topic. Prepended (not appended) so it reads as background the
+  // message then acts on. Written back to the row too, so the stored prompt matches
+  // what actually ran.
+  if (seedContext && !resumeSession) {
+    promptText = `# רקע מהשיחה הקודמת\n\n${seedContext}\n\n---\n\n${promptText}`;
+    const { error: sErr } = await db.from("claude_runs").update({ prompt: promptText }).eq("id", runId);
+    if (sErr) console.error("[claude/runner] seed prompt update failed:", sErr.message);
+  }
   if (cwd) {
     const { paths, failures } = await materializeAttachments(runId, cwd);
     if (paths.length > 0) {
@@ -469,12 +496,17 @@ async function executeRunBody(runId: string): Promise<void> {
    * constant, precisely so the same turn can be re-run as a fresh session when the
    * resume target turns out to be gone (the fallback below).
    */
-  const buildArgs = (resume: string | null): string[] => {
+  const buildArgs = (resume: string | null, fork = false): string[] => {
     const a = ["-p", promptText, "--output-format", "stream-json", "--verbose"];
     // THE line that makes a thread a conversation: resume the engine session the
     // thread already owns, so this turn sees every earlier turn. Without it each
     // message would start from nothing and the chat would have no memory.
     if (resume) a.push("--resume", resume);
+    // Method A split ("take everything"): the child's first turn resumes the
+    // PARENT's session and forks it — a new session id that starts with the whole
+    // parent history and diverges. Only the first turn passes fork=true; afterwards
+    // the child owns its own session and resumes it plainly.
+    if (fork) a.push("--fork-session");
     // Omitted when unset rather than defaulted, so a run without a choice follows
     // the CLI's current default instead of being pinned to a model that will age.
     if (run.model) a.push("--model", run.model);
@@ -535,8 +567,8 @@ async function executeRunBody(runId: string): Promise<void> {
    * resume that finds no transcript can be retried as a fresh session without
    * duplicating the stream-parsing machinery.
    */
-  const runEngine = async (resume: string | null): Promise<Attempt> => {
-    const args = buildArgs(resume);
+  const runEngine = async (resume: string | null, fork = false): Promise<Attempt> => {
+    const args = buildArgs(resume, fork);
     let sessionId: string | null = null;
     let lastResult: string | null = null;
     // The whole `result` event, kept because its usage/cost/turn figures are what
@@ -654,7 +686,11 @@ async function executeRunBody(runId: string): Promise<void> {
     };
   };
 
-  let attempt = await runEngine(resumeSession);
+  // The first attempt resumes the thread's own session if it has one; otherwise, on
+  // a method-A fork child's first turn, it resumes the PARENT's session and forks it.
+  const initialResume = resumeSession ?? forkFromSession;
+  const initialFork = !resumeSession && !!forkFromSession;
+  let attempt = await runEngine(initialResume, initialFork);
   // What the turn ACTUALLY resumed into. Diverges from resumeSession only when the
   // fallback fires, and the thread/DB updates below key off this rather than the
   // original request.
@@ -675,9 +711,11 @@ async function executeRunBody(runId: string): Promise<void> {
     /no conversation found|no conversation with session|session id .*not found|could not (?:find|resume) session/i.test(
       `${attempt.lastResult ?? ""} ${attempt.stderrTail}`,
     );
-  if (resumeSession && resumeMissing) {
+  // Guarded on initialResume (not just resumeSession) so a fork child whose parent
+  // session is gone also recovers as a fresh session instead of dead-ending.
+  if (initialResume && resumeMissing) {
     console.warn(
-      `[claude/runner] resume ${resumeSession} not found for run ${runId} — retrying as a fresh session`,
+      `[claude/runner] resume ${initialResume} not found for run ${runId} — retrying as a fresh session`,
     );
     effectiveResume = null;
     attempt = await runEngine(null);
