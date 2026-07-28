@@ -1650,7 +1650,9 @@
     "triageClass_filter": "כלל סינון",
     "triageClass_covered": "כבר מכוסה",
     "triageClass_duplicate": "כפילות",
-    "triageClass_unclear": "לא ברור"
+    "triageClass_needs_question": "יש שאלה",
+    "triageClass_unclear": "לא ברור",
+    "triageUnderstood": "הבנתי: {text}"
   },
   "calendarPage": {
     "noTitle": "(ללא כותרת)",

@@ -41,19 +41,25 @@ import { notify } from "../../../lib/platform/notify";
 
 /** The verdicts triage may return. Only "prompt" ever reaches the classifier. */
 export const PROMPT_CLASSES = [
-  "prompt",   // a real classification rule → belongs in the prompt
-  "code",     // describes a bug in the pipeline → belongs in a work item
-  "ui",       // about how something looks/behaves on screen
-  "filter",   // a skip/routing rule → belongs in rules_memory, not the prompt
-  "covered",  // the prompt already says this
-  "duplicate",// another correction already says this
-  "unclear",  // not actionable as written
+  "prompt",        // a real classification rule → belongs in the prompt
+  "code",          // describes a bug in the pipeline → belongs in a work item
+  "ui",            // about how something looks/behaves on screen
+  "filter",        // a skip/routing rule → belongs in rules_memory, not the prompt
+  "covered",       // the prompt already says this
+  "duplicate",     // another correction already says this
+  "needs_question",// not understood well enough to act → ask the user
+  "unclear",       // not actionable as written
 ] as const;
 export type PromptClass = (typeof PROMPT_CLASSES)[number];
 
 interface TriageVerdict {
   prompt_class: PromptClass;
   reason_he: string;
+  /** One-line restatement of what the correction wants — the understanding
+   *  gate made visible. Shown to the user so a misread is caught before acting. */
+  understood_he?: string | null;
+  /** For prompt_class="needs_question": the question to ask before classifying. */
+  question_he?: string | null;
   /** For prompt_class="prompt": the exact one-line rule to inject. */
   suggested_rule_he?: string | null;
   /** For prompt_class="duplicate": the correction it repeats. */
@@ -181,6 +187,12 @@ function buildPrompt(note: string, evidence: string): string {
     "",
     evidence,
     "",
+    "## שלב ראשון — הבנה (חובה לפני הסיווג)",
+    "לפני שאתה מסווג, נסח ב-understood_he במשפט אחד מה ההערה מבקשת, במילים שלך.",
+    "אם אינך מבין את ההערה מספיק כדי לפעול לפיה בביטחון — אל תנחש. החזר",
+    'prompt_class="needs_question" ונסח ב-question_he שאלה קצרה אחת בעברית שתבהיר.',
+    "עדיף לשאול מאשר לסווג לא נכון.",
+    "",
     "## הקטגוריות",
     'prompt — כלל סיווג אמיתי שהמודל יכול לפעול לפיו ("חוזה בלי בקשה לחתום אינו משימת חתימה").',
     "code — מתאר באג בצינור: תזמון, כפילויות, הודעה שחוזרת, שדה שלא התעדכן, משימה שלא נסגרת. שינוי בפרומפט לא יתקן את זה.",
@@ -188,6 +200,7 @@ function buildPrompt(note: string, evidence: string): string {
     "filter — בקשה לחסום/לנתב שולח, כתובת או דומיין. מקומו ב-rules_memory ולא בפרומפט.",
     "covered — הפרומפט או הכללים הקיימים כבר אומרים את זה.",
     "duplicate — כלל שכבר נכנס לפרומפט אומר את אותו הדבר. החזר את המזהה שלו ב-duplicate_of.",
+    "needs_question — לא הבנת מספיק כדי לפעול. החזר שאלה אחת ב-question_he.",
     "unclear — לא ניתן לפעול לפי הניסוח, או שאין מספיק מידע.",
     "",
     "## חוקים",
@@ -195,9 +208,10 @@ function buildPrompt(note: string, evidence: string): string {
     "2. אל תמציא עובדות. אם הנתונים למעלה לא תומכים בהערה, זה unclear.",
     "3. עבור prompt בלבד: כתוב ב-suggested_rule_he כלל אחד, שורה אחת, בציווי, כללי — לא מקרה פרטי ולא שם של אדם.",
     "4. שמור על כתובות וקישורים במלואם אם הם חלק מהכלל.",
+    "5. תמיד מלא את understood_he, גם כשאתה שואל שאלה.",
     "",
     "החזר JSON אחד בלבד, בלי טקסט לפניו ואחריו, בלי גדרות markdown:",
-    '{"prompt_class":"<אחת מהקטגוריות>","reason_he":"<משפט אחד למה>","suggested_rule_he":null,"duplicate_of":null}',
+    '{"understood_he":"<מה ההערה מבקשת, משפט אחד>","prompt_class":"<אחת מהקטגוריות>","reason_he":"<משפט אחד למה>","question_he":null,"suggested_rule_he":null,"duplicate_of":null}',
   ].join("\n");
 }
 
@@ -215,9 +229,15 @@ function parseVerdict(raw: string): TriageVerdict | null {
   const cls = String(parsed.prompt_class ?? "").toLowerCase() as PromptClass;
   if (!PROMPT_CLASSES.includes(cls)) return null;
   const rule = typeof parsed.suggested_rule_he === "string" ? parsed.suggested_rule_he.trim() : "";
+  const understood = typeof parsed.understood_he === "string" ? parsed.understood_he.trim() : "";
+  const question = typeof parsed.question_he === "string" ? parsed.question_he.trim() : "";
   return {
     prompt_class: cls,
     reason_he: String(parsed.reason_he ?? "").trim().slice(0, 600),
+    understood_he: understood ? understood.slice(0, 400) : null,
+    // Only meaningful for needs_question; carried verbatim so the notification
+    // and the /log screen can show the exact question awaiting an answer.
+    question_he: question ? question.slice(0, 400) : null,
     // A "prompt" verdict with no rule text is not usable as a rule; downgrade it
     // rather than accept a class the approval step cannot act on.
     suggested_rule_he: rule ? rule.slice(0, 400) : null,
@@ -232,6 +252,7 @@ const CLASS_LABEL_HE: Record<PromptClass, string> = {
   filter: "כלל סינון",
   covered: "כבר מכוסה",
   duplicate: "כפילות",
+  needs_question: "יש שאלה",
   unclear: "לא ברור",
 };
 
@@ -261,17 +282,23 @@ async function runTriage(correctionId: string): Promise<void> {
     const raw = await runOneShot(buildPrompt(note, evidence), { timeoutMs: 120_000 });
     const verdict = raw ? parseVerdict(raw) : null;
 
-    // A "prompt" verdict whose rule text is missing cannot be approved as a
-    // rule, so it is not one. Downgrading here keeps the approval step honest.
+    // Two downgrades that keep the approval step honest: a "prompt" verdict with
+    // no rule text cannot be approved as a rule, and a "needs_question" verdict
+    // with no actual question cannot be answered. Both become "unclear" rather
+    // than a class the next step cannot act on.
     const effective: TriageVerdict = verdict
       ? verdict.prompt_class === "prompt" && !verdict.suggested_rule_he
         ? { ...verdict, prompt_class: "unclear", reason_he: verdict.reason_he || "סווג ככלל אך לא נוסח כלל" }
-        : verdict
+        : verdict.prompt_class === "needs_question" && !verdict.question_he
+          ? { ...verdict, prompt_class: "unclear", reason_he: verdict.reason_he || "סומן כשאלה אך לא נוסחה שאלה" }
+          : verdict
       : {
           prompt_class: "unclear",
           reason_he: raw
             ? "המיון האוטומטי החזיר תשובה שלא ניתן לפרסר"
             : "המיון האוטומטי לא הצליח לרוץ",
+          understood_he: null,
+          question_he: null,
           suggested_rule_he: null,
           duplicate_of: null,
         };
@@ -296,6 +323,8 @@ async function runTriage(correctionId: string): Promise<void> {
         at: new Date().toISOString(),
         by: "claude-code-oneshot",
         reason_he: effective.reason_he,
+        understood_he: effective.understood_he ?? null,
+        question_he: effective.question_he ?? null,
         suggested_rule_he: effective.suggested_rule_he,
         duplicate_of: effective.duplicate_of,
         failed,
@@ -335,23 +364,38 @@ async function runTriage(correctionId: string): Promise<void> {
       if (serial) serialPrefix = `${serial} · `;
     }
 
-    const bodyLines = [
-      `התיקון: ${note.slice(0, 200)}`,
-      `מיון: ${label} — ${effective.reason_he}`,
-    ];
-    if (effective.prompt_class === "prompt" && effective.suggested_rule_he) {
-      bodyLines.push(`הכלל המוצע: ${effective.suggested_rule_he}`);
-      bodyLines.push("ממתין לאישור שלך כדי להיכנס לפרומפט הסיווג.");
-    } else if (effective.prompt_class === "code") {
-      bodyLines.push("זה באג בקוד — שינוי בפרומפט לא יתקן אותו. לא נכנס לסיווג.");
+    // A step-by-step report the user can read at a glance, not a code diff (the
+    // user does not read code — see docs/corrections-triage-v2-plan.md). Status
+    // in the title says where it stands; the body walks understood → classified
+    // → what happens next.
+    const isQuestion = effective.prompt_class === "needs_question";
+    const isPromptRule = effective.prompt_class === "prompt" && !!effective.suggested_rule_he;
+    const status = isQuestion ? "יש שאלה" : isPromptRule ? "ממתין לאישור" : "בדק ומצא";
+
+    const bodyLines: string[] = [`התיקון שלך: ${note.slice(0, 160)}`];
+    if (isQuestion) {
+      bodyLines.push("בדקתי, ויש לי שאלה כדי להבין בדיוק:");
+      bodyLines.push(`❓ ${effective.question_he}`);
+      bodyLines.push("ענה ואמשיך מכאן.");
     } else {
-      bodyLines.push("לא נכנס לפרומפט הסיווג.");
+      if (effective.understood_he) bodyLines.push(`✓ הבנתי: ${effective.understood_he}`);
+      bodyLines.push(`✓ סיווג: ${label} — ${effective.reason_he}`);
+      if (isPromptRule) {
+        bodyLines.push(`✓ הכלל המוצע: ${effective.suggested_rule_he}`);
+        bodyLines.push("ממתין לאישור שלך כדי להיכנס לפרומפט הסיווג.");
+      } else if (effective.prompt_class === "code" || effective.prompt_class === "ui") {
+        bodyLines.push("לא כלל סיווג — צריך תיקון קוד/ממשק. לא נכנס לפרומפט.");
+      } else {
+        bodyLines.push("לא נכנס לפרומפט הסיווג.");
+      }
     }
 
     await notify(orgId, userId, {
       app_slug: "smrttask",
-      type: effective.prompt_class === "prompt" ? "action_required" : "info",
-      title: `${serialPrefix}תיקון מיון: ${label}`,
+      // A question needs the user; a proposed rule needs approval; a diagnosis
+      // is informational.
+      type: isQuestion || isPromptRule ? "action_required" : "info",
+      title: `${serialPrefix}תיקון מיון · ${status}`,
       body: bodyLines.join("\n"),
       link: "/log",
       entity_type: "task_correction",

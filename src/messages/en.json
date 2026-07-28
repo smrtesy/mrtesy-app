@@ -1650,7 +1650,9 @@
     "triageClass_filter": "Filter rule",
     "triageClass_covered": "Already covered",
     "triageClass_duplicate": "Duplicate",
-    "triageClass_unclear": "Unclear"
+    "triageClass_needs_question": "Has a question",
+    "triageClass_unclear": "Unclear",
+    "triageUnderstood": "Understood: {text}"
   },
   "calendarPage": {
     "noTitle": "(No title)",

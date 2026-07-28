@@ -16,10 +16,23 @@ import {
 import { Gavel, Check, X } from "lucide-react";
 
 /** Mirrors the server's PromptClass. Only "prompt" can reach the classifier. */
-type PromptClass = "prompt" | "code" | "ui" | "filter" | "covered" | "duplicate" | "unclear";
+type PromptClass =
+  | "prompt"
+  | "code"
+  | "ui"
+  | "filter"
+  | "covered"
+  | "duplicate"
+  | "needs_question"
+  | "unclear";
 
 interface TriageBlock {
   reason_he?: string | null;
+  /** What the triage understood the correction to want — shown so a misread is
+   *  caught before acting. */
+  understood_he?: string | null;
+  /** For prompt_class="needs_question": the question awaiting an answer. */
+  question_he?: string | null;
   suggested_rule_he?: string | null;
   approved?: boolean;
   decided_at?: string | null;
@@ -143,8 +156,16 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                       {t(`triageClass_${cls}`)}
                     </span>
                   </div>
+                  {tri.understood_he && (
+                    <p className="text-xs text-muted-foreground" dir="auto">
+                      {t("triageUnderstood", { text: tri.understood_he })}
+                    </p>
+                  )}
                   {tri.reason_he && (
                     <p className="text-xs text-muted-foreground" dir="auto">{tri.reason_he}</p>
+                  )}
+                  {cls === "needs_question" && tri.question_he && (
+                    <p className="text-xs font-medium" dir="auto">❓ {tri.question_he}</p>
                   )}
                   {isRule && (
                     <div className="space-y-1">
