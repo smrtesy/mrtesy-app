@@ -4187,7 +4187,10 @@
         "review": "סקירה",
         "content": "תוכן",
         "other": "אחר"
-      }
+      },
+      "instructionsLabel": "גוף ההוראות",
+      "codeView": "תצוגת קוד",
+      "richView": "עריכה מעוצבת"
     },
     "instructions": {
       "title": "הוראות קבועות",

@@ -10,19 +10,22 @@
  * to the prompt, so choosing "מחקר" really does mean "work by the research plan we
  * built", not just a label on the run.
  *
- * Editing is deliberately one textarea in a dialog. The method's canonical text
- * stays the repo document the link opens; what is edited here is the operative
- * instruction body sent with the run.
+ * The method's canonical text stays the repo document the link opens; what is
+ * edited here is the operative instruction body sent with the run. That body
+ * is markdown, so it gets the same two views as the standing instructions:
+ * edit it as the rendered document, or drop to the source.
  *
  * Dates render in America/New_York (CLAUDE.md), never in local or raw UTC.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ExternalLink, Loader2, Pencil, Plus, RefreshCw, Trash2, Download } from "lucide-react";
+import { Code2, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 
+import { LazyMarkdownEditor } from "@/components/common/LazyMarkdownEditor";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -99,6 +102,12 @@ export function PlaybookList({
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
+  /**
+   * Which view the body is edited in. Reset whenever the dialog opens on a
+   * different method, so the choice does not leak between playbooks — and so
+   * the rich editor is what greets you, the same as everywhere else.
+   */
+  const [codeView, setCodeView] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -211,7 +220,10 @@ export function PlaybookList({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setDraft({ ...EMPTY })}
+            onClick={() => {
+              setCodeView(false);
+              setDraft({ ...EMPTY });
+            }}
             aria-label={t("add")}
             title={t("add")}
           >
@@ -272,15 +284,16 @@ export function PlaybookList({
                 )}
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setCodeView(false);
                     setDraft({
                       id: p.id,
                       kind: p.kind,
                       name: p.name,
                       doc_url: p.doc_url ?? "",
                       instructions: p.instructions ?? "",
-                    })
-                  }
+                    });
+                  }}
                   aria-label={t("edit")}
                   title={t("edit")}
                   className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -303,7 +316,7 @@ export function PlaybookList({
       )}
 
       <Dialog open={!!draft} onOpenChange={(o) => !o && setDraft(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{draft?.id ? t("editTitle") : t("addTitle")}</DialogTitle>
           </DialogHeader>
@@ -332,12 +345,39 @@ export function PlaybookList({
                 onChange={(e) => setDraft({ ...draft, doc_url: e.target.value })}
                 placeholder={t("docUrlPlaceholder")}
               />
-              <Textarea
-                value={draft.instructions}
-                onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
-                placeholder={t("instructionsPlaceholder")}
-                rows={10}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-muted-foreground">{t("instructionsLabel")}</p>
+                <IconButton
+                  label={codeView ? t("richView") : t("codeView")}
+                  color="primary"
+                  onClick={() => setCodeView((v) => !v)}
+                >
+                  {codeView ? <Pencil className="size-4" /> : <Code2 className="size-4" />}
+                </IconButton>
+              </div>
+              {codeView ? (
+                /* dir=ltr on purpose: source reads like source only when the
+                   markers (`#`, `-`, `|`) stay in the left gutter. */
+                <Textarea
+                  dir="ltr"
+                  value={draft.instructions}
+                  onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
+                  placeholder={t("instructionsPlaceholder")}
+                  rows={12}
+                  className="font-mono text-xs"
+                />
+              ) : (
+                <div className="max-h-[50vh] overflow-y-auto rounded-lg border bg-card p-3 focus-within:ring-1 focus-within:ring-ring">
+                  {/* Functional update: the editor holds its own onChange for the
+                      life of the document, so closing over `draft` here would
+                      write every edit on top of a stale name/url. */}
+                  <LazyMarkdownEditor
+                    value={draft.instructions}
+                    onChange={(md) => setDraft((d) => (d ? { ...d, instructions: md } : d))}
+                    placeholder={t("instructionsPlaceholder")}
+                  />
+                </div>
+              )}
               <p className="text-[11px] text-muted-foreground">{t("instructionsHint")}</p>
             </div>
           )}

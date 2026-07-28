@@ -61,7 +61,10 @@ const DialogHeader = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex flex-col space-y-1.5 text-center sm:text-left",
+      // `text-start`, not shadcn's stock `text-left`: in RTL a left-aligned
+      // title runs straight into the close button, which is correctly at the
+      // logical `end-4` (i.e. the left) — they overlapped in every dialog.
+      "flex flex-col space-y-1.5 text-center sm:text-start",
       className
     )}
     {...props}

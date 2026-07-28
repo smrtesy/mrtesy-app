@@ -4188,7 +4188,10 @@
         "review": "Review",
         "content": "Content",
         "other": "Other"
-      }
+      },
+      "instructionsLabel": "Instruction body",
+      "codeView": "Code view",
+      "richView": "Rich editing"
     },
     "instructions": {
       "title": "Standing instructions",

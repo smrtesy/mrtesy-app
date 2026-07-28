@@ -15,28 +15,15 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import dynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
 import { Code2, ExternalLink, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
+import { LazyMarkdownEditor } from "@/components/common/LazyMarkdownEditor";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api/client";
-
-/**
- * The rich editor drags in ProseMirror (~110 kB) and this panel is collapsed
- * by default, so it must not sit in the runs screen's first load. It also
- * needs a DOM to construct, hence no SSR.
- */
-const MarkdownEditor = dynamic(
-  () => import("@/components/common/MarkdownEditor").then((m) => m.MarkdownEditor),
-  {
-    ssr: false,
-    loading: () => <p className="text-xs text-muted-foreground">…</p>,
-  },
-);
 
 const REPO_DOC_URL =
   "https://github.com/smrtesy/mrtesy-app/blob/main/docs/claude-console/standing-instructions.md";
@@ -157,7 +144,7 @@ export function StandingInstructions({ locale }: { locale: string }) {
               {/* Uncontrolled by design — it reads `body` once and then owns
                   the document. Toggling to the code view unmounts it, so
                   coming back re-seeds it with whatever the source edit left. */}
-              <MarkdownEditor value={body} onChange={setBody} placeholder={t("placeholder")} />
+              <LazyMarkdownEditor value={body} onChange={setBody} placeholder={t("placeholder")} />
             </div>
           )}
           <div className="flex items-center justify-between gap-2">
