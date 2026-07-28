@@ -500,7 +500,15 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
   // Defense in depth: even though Storage's RLS would block reads, the
   // service-role client bypasses RLS, so we enforce ownership ourselves.
   // Path convention is "<user_id>/<wamid>-<filename>".
-  if (!path.startsWith(`${req.user!.id}/`)) {
+  //
+  // The prefix check alone is NOT sufficient and was a cross-tenant read:
+  // "<myUuid>/../<victimUuid>/<wamid>.jpg" starts with the caller's prefix,
+  // storage-js forwards the literal, and the URL parser then collapses the
+  // dot-segment so the signed URL resolves inside the other tenant's folder.
+  // Rejecting a ".." SEGMENT (rather than demanding a strict shape) closes it
+  // without invalidating legacy object names, which can contain arbitrary
+  // characters from the sender's original filename.
+  if (!path.startsWith(`${req.user!.id}/`) || path.split("/").includes("..")) {
     return res.status(403).json({ error: "forbidden" });
   }
 

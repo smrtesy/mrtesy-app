@@ -342,13 +342,12 @@ async function attachSmsMediaUrls(
   messages: any[],
   userId: string,
 ): Promise<void> {
-  const ownPrefix = `${userId}/`;
   const paths = new Set<string>();
   for (const m of messages) {
     const parts = m.media_parts as SmsMediaPart[] | null;
     if (!Array.isArray(parts)) continue;
     for (const p of parts) {
-      if (typeof p?.path === "string" && p.path.startsWith(ownPrefix)) paths.add(p.path);
+      if (typeof p?.path === "string" && isOwnedSmsMediaPath(p.path, userId)) paths.add(p.path);
     }
   }
   if (paths.size === 0) return;
@@ -372,14 +371,34 @@ async function attachSmsMediaUrls(
   }
 }
 
+/**
+ * Is this storage path inside the caller's own folder — for real?
+ *
+ * A `startsWith` prefix check ALONE is not enough and is a cross-tenant read:
+ * "<myUuid>/../<victimUuid>/mmsdl_42-0.jpg" starts with the caller's prefix,
+ * storage-js passes the literal through, and the URL parser then collapses the
+ * dot-segment so the signed URL resolves inside the victim's folder. SMS object
+ * names are guessable (`mmsdl_<small int>-<i>.jpg`), so the only thing standing
+ * in the way would be guessing a UUID.
+ *
+ * The webhook builds every key as "<user_id>/<sanitized messageId>-<i>.<ext>",
+ * so the strict shape below is exactly what a legitimate path looks like — no
+ * second slash, no dot-segment, no percent-encoding to un-escape later.
+ */
+function isOwnedSmsMediaPath(path: string, userId: string): boolean {
+  if (!path.startsWith(`${userId}/`)) return false;
+  const rest = path.slice(userId.length + 1);
+  return /^[A-Za-z0-9._-]+$/.test(rest) && rest !== "." && rest !== "..";
+}
+
 // GET /sms/media?path=<storage path> → a fresh signed URL. The fallback for a
 // batch-sign failure and for a page left open past the URL's TTL.
 router.get("/sms/media", ...gate, async (req: Request, res: Response) => {
   const path = String(req.query.path ?? "");
   if (!path) return res.status(400).json({ error: "path is required" });
-  // Path convention is "<user_id>/<message_id>-<index>.<ext>". Enforced here
-  // because the service-role client bypasses Storage RLS.
-  if (!path.startsWith(`${req.user!.id}/`)) {
+  // Ownership is enforced here, not by Storage RLS — the service-role client
+  // bypasses RLS entirely.
+  if (!isOwnedSmsMediaPath(path, req.user!.id)) {
     return res.status(403).json({ error: "forbidden" });
   }
 

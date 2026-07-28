@@ -33,6 +33,9 @@ type Db = SupabaseClient<any, any, any>;
  */
 export const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
 
+/** Hard ceiling on a single Gemini request — see the comment at its fetch. */
+const GEMINI_CALL_TIMEOUT_MS = 25_000;
+
 interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
   finishReason?: string;
@@ -150,11 +153,17 @@ async function callGemini(
     },
   };
 
+  // Per-call timeout. Without one a hung Gemini connection runs the whole
+  // serverless function past its maxDuration, so it dies before writing
+  // anything — and the webhook's caller (Meta, or the SMS gateway) redelivers
+  // and pays for the same analysis again, potentially forever. 25s leaves room
+  // for the 5xx retry below inside a 60s budget.
   const fetchOnce = async () =>
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
     });
 
   let res = await fetchOnce();
