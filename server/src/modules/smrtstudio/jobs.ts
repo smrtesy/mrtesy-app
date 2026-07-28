@@ -22,7 +22,15 @@ import { sweepToCompletion, SweepError } from "./sweep";
 const router = Router();
 
 function secretOk(req: Request): boolean {
-  const expected = process.env.SMRTSTUDIO_INTERNAL_SECRET || process.env.CRON_SECRET || "";
+  // SMRTBOT_INTERNAL_SECRET is in the chain because it is what Railway
+  // actually provisions today (CLAUDE.md). Leaving it out meant the weekly
+  // cron would 401 forever, silently, until someone added a brand-new env var
+  // nobody knew was required.
+  const expected =
+    process.env.SMRTSTUDIO_INTERNAL_SECRET ||
+    process.env.CRON_SECRET ||
+    process.env.SMRTBOT_INTERNAL_SECRET ||
+    "";
   // No secret configured means the route is CLOSED, never open. An unset env
   // var must not be the thing that exposes a catalog rewrite.
   return !!expected && req.get("x-cron-secret") === expected;
@@ -57,9 +65,20 @@ router.post("/api/studio/jobs/sweep", async (req: Request, res: Response) => {
 
   const orgIds = [...new Set((memberships ?? []).map((m) => String(m.org_id)).filter(Boolean))];
   const results: Record<string, unknown>[] = [];
+  // ONE deadline for the whole call, shared across orgs. A per-org budget
+  // multiplies: five orgs at nine minutes each is 45 minutes against the
+  // migration's 10-minute `timeout_milliseconds`, so pg_net would record a
+  // timeout and the cron would never get a success signal even when the work
+  // was fine. Each org gets whatever is left.
+  const until = Date.now() + 9 * 60_000;
   for (const orgId of orgIds) {
+    const left = until - Date.now();
+    if (left <= 0) {
+      results.push({ org_id: orgId, ok: true, skipped: "deadline" });
+      continue;
+    }
     try {
-      const r = await sweepToCompletion(orgId, { probeLimit });
+      const r = await sweepToCompletion(orgId, { probeLimit, deadlineMs: left });
       results.push({
         org_id: orgId,
         ok: true,

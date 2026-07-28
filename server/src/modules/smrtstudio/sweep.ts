@@ -269,22 +269,25 @@ export async function runProbeRound(
   opts: { probeLimit?: number } = {},
 ): Promise<{ probed: number; driving: number; remaining: number }> {
   const probeLimit = Math.min(Math.max(Number(opts.probeLimit ?? 150), 0), 400);
-  if (probeLimit <= 0) return { probed: 0, driving: 0, remaining: 0 };
+  // -1 rather than 0: "we probed nothing because we were told to" must not
+  // read as "nothing is left", which would report the sweep complete.
+  if (probeLimit <= 0) return { probed: 0, driving: 0, remaining: -1 };
 
-  // Only what still needs probing, and only the columns the probe reads.
-  // `limit` is deliberately larger than probeLimit so `remaining` is real.
-  const { data: todoRows, error: todoErr } = await db
+  // `remaining` comes from an exact COUNT, not from how many rows we happened
+  // to read. Reading a capped page and subtracting understates it the moment
+  // more than a page is unprobed — and that number is printed on screen as
+  // "N left", so a cold catalog would have said 850 when 1094 were left.
+  const { data: todoRows, error: todoErr, count } = await db
     .from("studio_models")
-    .select("endpoint_id,fal_category,summary,verified_schema")
+    .select("endpoint_id,fal_category,summary,verified_schema", { count: "exact" })
     .eq("org_id", orgId)
     .eq("audio_probed", false)
     .order("endpoint_id")
-    .limit(1000);
+    .limit(probeLimit);
   if (todoErr) throw new SweepError(todoErr.message, 500);
 
-  const todoAll = todoRows ?? [];
-  const batch = todoAll.slice(0, probeLimit);
-  const remaining = Math.max(0, todoAll.length - batch.length);
+  const batch = todoRows ?? [];
+  const remaining = Math.max(0, (count ?? batch.length) - batch.length);
 
   let probed = 0;
   let driving = 0;
@@ -392,7 +395,8 @@ export async function sweepToCompletion(
     audio_driving_found_this_run: drivingTotal,
     // The caller must be able to tell "finished" from "ran out of time", or a
     // run that stopped early looks exactly like a run that succeeded.
-    complete: remaining === 0,
+    // A run told to probe nothing has not finished anything.
+    complete: remaining === 0 && (opts.probeLimit ?? 150) > 0,
     stopped_because:
       remaining === 0
         ? "done"

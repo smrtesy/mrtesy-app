@@ -501,10 +501,11 @@ router.get("/studio/investment", async (req: Request, res: Response) => {
  *
  * Body / query:
  *   probe_audio  — also run the audio probe over video endpoints (default true)
- *   probe_limit  — cap the probe at N endpoints this call (default 120). The
- *                  probe skips endpoints already probed, so repeated calls walk
- *                  the remaining set instead of one request outliving its own
- *                  timeout.
+ *   probe_limit  — cap the probe at N endpoints per round (default 150). The
+ *                  probe skips endpoints already probed.
+ *   until_done   — loop rounds until nothing is left (default true). The
+ *                  catalog pass runs once; only the probe repeats.
+ *   probe_audio  — false skips pass 2 entirely, and implies until_done:false.
  *
  * Restricted to super-admins: it rewrites the shared catalog, which is a
  * platform-level action rather than per-user work.
@@ -523,7 +524,9 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
   // and a single round covers 150 — so "press it seven more times" had quietly
   // become the interface. `complete: false` in the reply means the round cap or
   // the deadline stopped it, not that the work is done.
-  const runToEnd = body.until_done !== false;
+  // `probe_audio:false` has to win: without it in this condition the caller
+  // asked to skip the probe and still got up to fifteen probe rounds.
+  const runToEnd = body.until_done !== false && probeAudioFlag;
 
   try {
     const result = runToEnd
