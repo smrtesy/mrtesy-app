@@ -3396,8 +3396,16 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         resendContext = `↩ חזרה של עניין ש${verb} (${dup.serial || dup.taskId}) — ${dup.reason}`;
         classificationReason = `escalation of ${dup.status} ${dup.serial || dup.taskId} (high) — tagged, not suppressed — ${dup.reason}`;
       } else if (dup && dup.confidence === "high") {
-        await linkAndEnrichDuplicate(dup.taskId, msg, analysis, dup.reason, sys);
+        // Claim the link BEFORE the await, not after. linkAndEnrichDuplicate can
+        // throw past the point where appendUpdateToTask already recorded the
+        // completion (the thread-memory writes at its tail), and the catch below
+        // only logs — so with the assignment after the await, linkedTaskId stayed
+        // null, the builder loop ran with a fresh completionClaimed=false, and a
+        // SECOND task could claim the same message's completion. Assigning first
+        // means a partial failure suppresses creation instead of duplicating the
+        // verdict; the message is already recorded on the task either way.
         linkedTaskId = dup.taskId;
+        await linkAndEnrichDuplicate(dup.taskId, msg, analysis, dup.reason, sys);
         classification = "actionable_followup";
         classificationReason = `cross-source duplicate of ${dup.serial || dup.taskId} (high) — ${dup.reason}`;
       } else if (dup && dup.confidence === "medium" && !dup.closed) {
