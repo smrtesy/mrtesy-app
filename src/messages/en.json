@@ -4095,7 +4095,7 @@
     "audioUnprobed": "Not probed yet",
     "indexRun": "Sweep the catalog",
     "indexRunning": "Sweeping…",
-    "indexDone": "Catalog swept: {total} models on fal, {written} written. Probed {probed} video endpoints — {driving} take our audio as a driver. {remaining} left to probe — press again to continue.",
+    "indexDone": "Catalog swept: {total} models on fal, {written} written. Probed {probed} endpoints, {driving} of them audio-driven. {remaining} left.",
     "audioRole": {
       "driving": "Driving",
       "reference": "Reference",
@@ -4224,7 +4224,8 @@
     "priceTiered": "Tiered — see detail",
     "priceUnpublished": "Not published",
     "modelsAudioVideo": "Video taking our audio",
-    "indexIncomplete": "⚠️ The sweep did not reach the total fal reports — the catalog is partial, run it again."
+    "indexIncomplete": "⚠️ The sweep did not reach the total fal reports — the catalog is partial, run it again.",
+    "modelsProbeIncomplete": "The sweep is not finished — schemas read for {probed} of {total} endpoints. Press \"Run sweep\" to continue."
   },
   "claudeRuns": {
     "title": "Claude runs",

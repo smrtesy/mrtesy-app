@@ -172,6 +172,13 @@ const GROUP_BY_CATEGORY: Record<string, string> = {
   training: "training",
 };
 
+/** A `date` column rejects anything that is not a date, and one bad value
+ *  fails the entire 250-row upsert chunk and aborts the sweep. */
+function isoDate(v: unknown): string | null {
+  const s = String(v ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
 function groupOf(category: string): string {
   return GROUP_BY_CATEGORY[category] ?? "tools";
 }
@@ -313,7 +320,18 @@ function bucket(category: string): { kind: string; stage: string | null; order: 
  * driving hints, because "use as the audio for the video" also contains the
  * word audio and would otherwise read as driving.
  */
-export function classifyAudioRole(
+export type RoleVerdict = {
+  role: AudioRole;
+  /** Which tier of evidence actually decided it. Reported by the classifier
+   *  rather than re-derived afterwards: a second regex over the same text is a
+   *  second source of truth, and ours was narrower than the rules below — rows
+   *  settled by the field's own wording ("talking", "lip-sync", "animate")
+   *  were being stamped "fal did not describe the field", which is a lie
+   *  printed on screen. null = neither tier spoke; the default fired. */
+  tier: "field_description" | "model_purpose" | null;
+};
+
+export function classifyAudioRoleVerdict(
   field: string,
   description: string,
   falCategory = "",
@@ -321,13 +339,14 @@ export function classifyAudioRole(
   /** The endpoint's own summary/about. Tier 2 evidence: used only when the
    *  field description says nothing, and only ever to conclude `driving`. */
   purpose = "",
-): AudioRole {
+): RoleVerdict {
   const d = description.toLowerCase();
 
   // 1. A field that names lip-sync only to DENY it is decisive, and beats every
   //    positive signal below: "Audio track to attach to the output. No lip-sync
   //    is performed."
-  if (/\bno lip[- ]?sync|\bnot? sync|without lip[- ]?sync|does not sync/.test(d)) return "mux";
+  if (/\bno lip[- ]?sync|\bnot? sync|without lip[- ]?sync|does not sync/.test(d))
+    return { role: "mux", tier: "field_description" };
 
   // 2. An explicit statement that THIS field drives generation. Checked before
   //    the mux wording because a driving field often also mentions background
@@ -340,7 +359,7 @@ export function classifyAudioRole(
       d,
     )
   ) {
-    return "driving";
+    return { role: "driving", tier: "field_description" };
   }
 
   // 3. Pasted onto the output. Lips do not move to it — the trap that catches
@@ -350,25 +369,26 @@ export function classifyAudioRole(
       d,
     )
   ) {
-    return "mux";
+    return { role: "mux", tier: "field_description" };
   }
 
   // 4. Explicitly a reference/guide rather than a driver.
-  if (/reference audio|to guide|guidance|style of the audio|as a reference/.test(d)) return "reference";
+  if (/reference audio|to guide|guidance|style of the audio|as a reference/.test(d))
+    return { role: "reference", tier: "field_description" };
 
   // 5. Weaker driving phrasings.
   if (/driving|drive[sn]?\b|lip[- ]?sync|talking|speech to animate|animate.*audio/.test(d)) {
-    return "driving";
+    return { role: "driving", tier: "field_description" };
   }
-  if (/driv/.test(field)) return "driving";
+  if (/driv/.test(field)) return { role: "driving", tier: "field_description" };
   if (/generate the video from|generate a video from|from the audio|audio to video|to dub/.test(d)) {
-    return "driving";
+    return { role: "driving", tier: "field_description" };
   }
 
   // 6. An `audio-to-video` endpoint takes audio as its PREMISE — the category
   //    means "make a video from this audio". Many such schemas describe the field
   //    as flatly as "The URL of the audio file.", with no verb to match on.
-  if (falCategory === "audio-to-video") return "driving";
+  if (falCategory === "audio-to-video") return { role: "driving", tier: "model_purpose" };
 
   // 7. Avatar and lip-sync FAMILIES are audio-driven by construction, and fal
   //    files them under plain image-to-video / video-to-video. The signal lives
@@ -380,11 +400,11 @@ export function classifyAudioRole(
       `${endpointId} ${field}`.toLowerCase(),
     )
   ) {
-    return "driving";
+    return { role: "driving", tier: "model_purpose" };
   }
 
   // 8. A bare `reference_audio_*` name with no wording either way.
-  if (/^reference_audio/.test(field)) return "reference";
+  if (/^reference_audio/.test(field)) return { role: "reference", tier: "field_description" };
 
   // 9. TIER 2 — the field said nothing, so fall back to what the ENDPOINT is
   //    for. Plenty of schemas describe the field as no more than "The URL of
@@ -403,12 +423,23 @@ export function classifyAudioRole(
       purpose,
     )
   ) {
-    return "driving";
+    return { role: "driving", tier: "model_purpose" };
   }
 
   // 10. Present but unexplained anywhere. `reference` is the weaker claim, so an
   //     unverified endpoint is never promoted into the category we act on.
-  return "reference";
+  return { role: "reference", tier: null };
+}
+
+/** Back-compat: the role alone, for callers that do not need the tier. */
+export function classifyAudioRole(
+  field: string,
+  description: string,
+  falCategory = "",
+  endpointId = "",
+  purpose = "",
+): AudioRole {
+  return classifyAudioRoleVerdict(field, description, falCategory, endpointId, purpose).role;
 }
 
 async function getJson(url: string, timeoutMs = 20_000): Promise<unknown> {
@@ -519,7 +550,7 @@ export async function fetchCatalog(): Promise<{
       price_usd: price.usd,
       price_unit: price.unit,
       price_ambiguous: price.ambiguous,
-      published_at: String(m.publishedAt ?? m.date ?? "").slice(0, 10) || null,
+      published_at: isoDate(m.publishedAt ?? m.date),
       is_pipeline_tool: /ffmpeg-api|workflow-utilities/.test(id),
       shot_estimate_usd: shot?.usd ?? null,
       shot_estimate_basis: shot?.basis ?? "",
@@ -564,10 +595,6 @@ export type AudioProbe = {
   cap_seed: boolean;
   cap_audio_channels: number;
 };
-
-/** Wording in a field description that settles the role on its own. */
-const FIELD_SAYS =
-  /\bno lip[- ]?sync|driving audio|drives? (the )?(generation|video|avatar|animation)|to drive|articulate|background music|use (it )?as the audio|attach to the output|as the audio track|reference audio|to guide|@Audio|generate the video from|matches its duration/i;
 
 /** Pass 2 — read one endpoint's official schema: what it does with our audio,
  *  and what it can be fed. */
@@ -640,8 +667,8 @@ export async function probeAudio(
   // does with the file, and nothing but the field docs can settle them.
   const blob = audioFields.map((a) => `${a.field}: ${a.note}`).join(" || ");
   const primary = audioFields[0];
-  const role = classifyAudioRole(primary.field, blob, falCategory, endpointId, purposeText);
-  const fromField = FIELD_SAYS.test(blob);
+  const verdict = classifyAudioRoleVerdict(primary.field, blob, falCategory, endpointId, purposeText);
+  const role = verdict.role;
 
   return {
     ...empty,
@@ -651,12 +678,15 @@ export async function probeAudio(
     audio_note: primary.note,
     // Tier 2 only ever concludes `driving`: "this is a lip-sync model" is
     // evidence the audio drives it and evidence of nothing else.
-    audio_classified_from: fromField
-      ? "field_description"
-      : role === "driving" || purposeText
-        ? "model_purpose"
+    audio_classified_from: verdict.tier,
+    // Only a VIDEO endpoint builds anything. The probe now covers the whole
+    // catalog, and classifyAudioBuild falls through to "avatar" — so a dubbing
+    // or singing model reaching `driving` via its id or summary was being
+    // labelled "a talking head from a photo", which it is not.
+    audio_build:
+      role === "driving" && VIDEO_CATEGORIES.has(falCategory)
+        ? classifyAudioBuild(endpointId, falCategory)
         : null,
-    audio_build: role === "driving" ? classifyAudioBuild(endpointId, falCategory) : null,
   };
 }
 

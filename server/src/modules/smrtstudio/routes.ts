@@ -296,11 +296,13 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     if (skip !== "cat" && str("category")) out = out.eq("fal_category", str("category"));
     if (skip !== "audio" && audioRole) out = out.eq("audio_input", audioRole);
     if (skip !== "build" && build) out = out.eq("audio_build", build);
-    if (skip !== "caps") {
-      for (const c of caps) {
-        if (c === "ma") out = out.gt("cap_audio_channels", 1);
-        else if (CAP_COLUMNS[c]) out = out.eq(CAP_COLUMNS[c], true);
-      }
+    for (const c of caps) {
+      // `skip` names ONE cap to leave out — the one whose chip is being
+      // counted. Dropping all of them made every chip report a number that
+      // ignored the other active caps.
+      if (skip === `cap:${c}`) continue;
+      if (c === "ma") out = out.gt("cap_audio_channels", 1);
+      else if (CAP_COLUMNS[c]) out = out.eq(CAP_COLUMNS[c], true);
     }
     if (verifiedOnly) out = out.eq("verified_schema", true);
     if (term) {
@@ -359,6 +361,26 @@ router.get("/studio/models", async (req: Request, res: Response) => {
   // not of the slice you are already looking at. Everything below the tabs is
   // faceted: counted with every OTHER filter applied, so a chip reading 0 means
   // "no results if you also click this", and disabling it costs nothing.
+  // The tools group is a catch-all: `groupOf()` sends every UNMAPPED fal
+  // category there, so its chip list cannot be a fixed array or a category fal
+  // adds tomorrow is invisible and the chips stop summing to the tab. Read the
+  // distinct values instead. Safe against the 1000-row cap because the tools
+  // group is two dozen rows, and it is the only group whose list is open-ended.
+  let toolsCategories: string[] | null = null;
+  if (group === "tools") {
+    const { data: tRows, error: tErr } = await db
+      .from("studio_models")
+      .select("fal_category")
+      .eq("org_id", orgId)
+      .eq("group_key", "tools")
+      .limit(1000);
+    if (tErr) return res.status(500).json({ error: tErr.message });
+    toolsCategories = [
+      ...new Set((tRows ?? []).map((r) => String((r as Row).fal_category || "unknown"))),
+    ].sort();
+  }
+  const categoryList = toolsCategories ?? CATEGORIES_IN_GROUP(group);
+
   const [
     kindCounts,
     groupCounts,
@@ -380,8 +402,8 @@ router.get("/studio/models", async (req: Request, res: Response) => {
       CAP_KEYS.map((c) =>
         tally((q) =>
           c === "ma"
-            ? applyFilters(q, "caps").gt("cap_audio_channels", 1)
-            : applyFilters(q, "caps").eq(CAP_COLUMNS[c], true),
+            ? applyFilters(q, `cap:${c}`).gt("cap_audio_channels", 1)
+            : applyFilters(q, `cap:${c}`).eq(CAP_COLUMNS[c], true),
         ),
       ),
     ),
@@ -392,9 +414,7 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     // every chip on this screen sum to 1000. A head count returns no rows, so
     // no cap can apply.
     Promise.all(
-      CATEGORIES_IN_GROUP(group).map((c) =>
-        tally((q) => applyFilters(q, "cat").eq("fal_category", c)),
-      ),
+      categoryList.map((c) => tally((q) => applyFilters(q, "cat").eq("fal_category", c))),
     ),
     tally((q) => q),
     tally((q) => q.eq("verified_schema", true)),
@@ -425,7 +445,7 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     return out;
   };
 
-  const categoryCounts = byIndex(CATEGORIES_IN_GROUP(group), categoryCountRows);
+  const categoryCounts = byIndex(categoryList, categoryCountRows);
 
   res.json({
     items: data ?? [],
@@ -599,14 +619,28 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
   let driving = 0;
   let remaining = 0;
   if (probeAudioFlag && probeLimit > 0) {
-    const { data: doneRows, error: doneErr } = await db
-      .from("studio_models")
-      .select("endpoint_id")
-      .eq("org_id", orgId)
-      .eq("audio_probed", true)
-      .range(0, 4999);
-    if (doneErr) return res.status(500).json({ error: doneErr.message });
-    const alreadyProbed = new Set((doneRows ?? []).map((r) => String((r as Row).endpoint_id)));
+    // Paged in 1000-row chunks, NOT one `.range(0, 4999)`. PostgREST's
+    // db-max-rows is 1000 and it clamps a wider range silently. That was
+    // harmless while only the ~513 video endpoints were ever probed, but the
+    // probe now covers all ~1394: from roughly the seventh press onward the
+    // "already done" set would hold only 1000 of them, so `todo` floored at
+    // ~394, `remaining` froze at ~244 and never reached 0, and every further
+    // press re-probed 150 endpoints that were already done — a sweep that
+    // could never finish and kept telling the operator to press again.
+    const alreadyProbed = new Set<string>();
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data: page, error: pageErr } = await db
+        .from("studio_models")
+        .select("endpoint_id")
+        .eq("org_id", orgId)
+        .eq("audio_probed", true)
+        .order("endpoint_id")
+        .range(from, from + PAGE - 1);
+      if (pageErr) return res.status(500).json({ error: pageErr.message });
+      for (const r of page ?? []) alreadyProbed.add(String((r as Row).endpoint_id));
+      if (!page || page.length < PAGE) break;
+    }
 
     const todo = probeIds.filter((id) => !alreadyProbed.has(id));
     remaining = Math.max(0, todo.length - probeLimit);

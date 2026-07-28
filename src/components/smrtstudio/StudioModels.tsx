@@ -199,9 +199,11 @@ export function StudioModels() {
   const categories = useMemo(
     () =>
       Object.entries(data?.category_counts ?? {})
-        .filter(([, n]) => n > 0 || false)
+        // The active chip stays even at 0 — otherwise a search term that empties
+        // it removes the only control that can clear it, and the filter sticks.
+        .filter(([c, n]) => n > 0 || c === category)
         .sort((a, b) => b[1] - a[1]),
-    [data],
+    [data, category],
   );
 
   const priceCell = (m: StudioModel) => {
@@ -470,7 +472,18 @@ export function StudioModels() {
         <Skeleton className="h-64 w-full" />
       ) : !data || data.items.length === 0 ? (
         <p className="rounded-lg border bg-card px-3 py-6 text-center text-xs text-muted-foreground">
-          {data && data.total === 0 ? t("modelsEmptyCatalog") : t("modelsNoMatch")}
+          {data && data.total === 0
+            ? t("modelsEmptyCatalog")
+            : // A half-probed catalog is empty here for a reason the operator
+              // cannot guess: the audio+video tab needs the schema probe, and
+              // one press covers 150 of ~1394. Say so instead of "no match",
+              // which reads as "fal has nothing like this".
+              data && data.audio_probed_total < data.total
+              ? t("modelsProbeIncomplete", {
+                  probed: data.audio_probed_total,
+                  total: data.total,
+                })
+              : t("modelsNoMatch")}
         </p>
       ) : (
         <div

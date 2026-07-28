@@ -4094,7 +4094,7 @@
     "audioUnprobed": "טרם נבדק",
     "indexRun": "סרוק את הקטלוג",
     "indexRunning": "סורק…",
-    "indexDone": "הקטלוג נסרק: {total} מודלים ב-fal, {written} נכתבו. נבדקו {probed} נקודות-קצה וידאו — {driving} מקבלות את האודיו שלנו כמניע. נשארו {remaining} לבדיקה — לחץ שוב כדי להמשיך.",
+    "indexDone": "הקטלוג נסרק: {total} מודלים ב-fal, {written} נכתבו. נסרקו {probed} נקודות-קצה, מהן {driving} מקבלות אודיו מניע. נותרו {remaining}.",
     "audioRole": {
       "driving": "מניע",
       "reference": "רפרנס",
@@ -4223,7 +4223,8 @@
     "priceTiered": "מדורג — ראה פירוט",
     "priceUnpublished": "לא פורסם",
     "modelsAudioVideo": "וידאו שמקבל את האודיו שלנו",
-    "indexIncomplete": "⚠️ הסריקה לא הגיעה לסך שfal מדווחת — הקטלוג חלקי, הרץ שוב."
+    "indexIncomplete": "⚠️ הסריקה לא הגיעה לסך שfal מדווחת — הקטלוג חלקי, הרץ שוב.",
+    "modelsProbeIncomplete": "הסריקה עוד לא הושלמה — נקראה סכמה ל-{probed} מתוך {total} נקודות-קצה. לחץ \"הרץ סריקה\" כדי להמשיך."
   },
   "claudeRuns": {
     "title": "עבודות קלוד",
