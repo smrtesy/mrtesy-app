@@ -28,6 +28,18 @@ const router = Router();
 // Every correction route requires auth + active org + smrtTask enabled.
 router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
+/**
+ * Strip the server-owned keys out of a client-supplied `context`. `prompt_class`
+ * and `triage` decide whether a correction reaches the classifier prompt, so
+ * they are written by triage and by the decision endpoint only — never by the
+ * request that creates the correction.
+ */
+function sanitizeClientContext(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const { prompt_class: _pc, triage: _t, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
+
 const SCOPES = ["general", "personal"] as const;
 const CORRECTION_TYPES = ["reclassify", "status", "note", "other"] as const;
 
@@ -100,7 +112,13 @@ router.post("/corrections", async (req: Request, res: Response) => {
     new_value: body.new_value != null ? String(body.new_value) : null,
     note,
     scope,
-    context: body.context && typeof body.context === "object" ? body.context : {},
+    // The client may attach context, but NOT the triage verdict. Left open, a
+    // caller could POST {prompt_class:"prompt", triage:{approved:true}} and put
+    // arbitrary text into their own classifier prompt with no triage and no
+    // approval — the two gates this whole flow exists to impose. Scope is
+    // per-user so it reached no one else, but self-injection still defeats the
+    // point. These keys are owned by the server from here on.
+    context: sanitizeClientContext(body.context),
   };
 
   const { data, error } = await db

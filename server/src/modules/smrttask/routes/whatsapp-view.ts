@@ -55,6 +55,12 @@ const gate = [requireAuth, requireOrg, requireApp("smrttask"), requireFullTask];
 function isOwnedWhatsappMediaPath(path: string, userId: string): boolean {
   if (!path.startsWith(`${userId}/`)) return false;
   if (/[\t\n\r]/.test(path)) return false;
+  // Trailing whitespace / C0 control is stripped from the WHOLE url by the
+  // parser, so "<mine>/..%20" loses its space, the ".." pops, and the path
+  // resolves to the bucket root. Nothing can follow a trailing character so no
+  // other tenant's key is reachable, but a request that resolves outside the
+  // caller's folder must not pass this predicate on a technicality.
+  if (/[\s\u0000-\u001f]$/.test(path)) return false;
   const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
   return !path.split(/[/\\]/).some((seg) => DOT_SEGMENT.test(seg));
 }

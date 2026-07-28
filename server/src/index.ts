@@ -31,6 +31,7 @@ import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publi
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
 import smrtstudioRouter, { jobsRouter as smrtstudioJobsRouter } from "./modules/smrtstudio";
+import correctionsJobsRouter from "./modules/smrttask/corrections/jobs";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 import claudeRouter from "./modules/claude";
@@ -161,6 +162,10 @@ app.use(smrtbotJobsRouter);
 // comes BEFORE the auth-guarded routers (same reasoning as smrtBot jobs).
 app.use(smrtplanJobsRouter);
 app.use(smrtstudioJobsRouter);
+// Correction-triage recovery sweep — same shared-secret pattern, so a triage
+// lost to a redeploy is picked up instead of leaving the user's correction
+// silently unjudged.
+app.use(correctionsJobsRouter);
 
 // smrtTask Claude Code session proposals — x-cron-secret guarded (the Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.

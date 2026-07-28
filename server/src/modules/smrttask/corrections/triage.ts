@@ -64,6 +64,22 @@ interface TriageVerdict {
 const SOURCE_EXCERPT_CHARS = 1200;
 
 /**
+ * One triage at a time, process-wide.
+ *
+ * Each run spawns a Claude Code CLI child on the API dyno. Nothing rate-limits
+ * how fast a user can file corrections, so a burst of ten would have spawned ten
+ * concurrent children — enough memory pressure to take the API process down, and
+ * the corrections it was triaging with it. A single-slot queue keeps the cost of
+ * a burst linear in TIME instead of in memory; a correction that waits is fine,
+ * because the user is not waiting on it either.
+ */
+let triageChain: Promise<void> = Promise.resolve();
+function enqueueTriage(run: () => Promise<void>): Promise<void> {
+  triageChain = triageChain.then(run, run);
+  return triageChain;
+}
+
+/**
  * Everything the triage needs to judge a correction against REALITY rather than
  * against the correction's own wording. The user's standing instruction is that
  * a correction is checked against the real data first — what the message
@@ -225,7 +241,7 @@ const CLASS_LABEL_HE: Record<PromptClass, string> = {
  * Never throws: the caller is the correction-create request, and a triage
  * failure must not fail the user's correction. Every exit path notifies.
  */
-export async function triageCorrection(correctionId: string): Promise<void> {
+async function runTriage(correctionId: string): Promise<void> {
   try {
     const { data: correction, error } = await db
       .from("task_corrections")
@@ -314,4 +330,46 @@ export async function triageCorrection(correctionId: string): Promise<void> {
     // it does not reach the prompt. Loud in the log, never fatal to the request.
     console.error("[corrections.triage] threw:", e instanceof Error ? e.message : e);
   }
+}
+
+/**
+ * Queue a triage. The public entry point — callers never spawn a CLI child
+ * directly, so the single-slot queue above is impossible to bypass.
+ */
+export function triageCorrection(correctionId: string): Promise<void> {
+  return enqueueTriage(() => runTriage(correctionId));
+}
+
+/**
+ * Pick up corrections that never got a verdict and triage them.
+ *
+ * The create path fires triage without awaiting it, which is right — the user
+ * should not wait tens of seconds for a 201. But it means a redeploy or a crash
+ * inside the run window loses that triage with nothing to notice: the correction
+ * sits with no class, the allow-list keeps it out of the prompt, and no
+ * notification ever arrives. That is precisely the silent loss this design
+ * claims to prevent, so the claim needs a sweep behind it rather than an
+ * assumption that the process stays up.
+ *
+ * Runs oldest-first and bounded, because it shares the one-slot queue with live
+ * corrections and must never starve them.
+ */
+export async function sweepUntriagedCorrections(limit = 5): Promise<number> {
+  const { data, error } = await db
+    .from("task_corrections")
+    .select("id")
+    .eq("app_slug", "smrttask")
+    .is("context->triage", null)
+    .order("created_at", { ascending: true })
+    .limit(Math.max(1, Math.min(limit, 25)));
+  if (error) {
+    console.error("[corrections.triage] sweep query failed:", error.message);
+    return 0;
+  }
+  const ids = (data ?? []).map((r) => r.id as string);
+  for (const id of ids) await triageCorrection(id);
+  if (ids.length > 0) {
+    console.log(`[corrections.triage] swept ${ids.length} untriaged correction(s)`);
+  }
+  return ids.length;
 }

@@ -4643,7 +4643,18 @@ Deno.serve(async (req) => {
           const from = (c as any).old_value ? ` (not "${asCategory((c as any).old_value)}")` : "";
           personalRuleLines.push(`- classify as "${asCategory((c as any).new_value)}"${from}: ${note}`);
         } else {
-          personalRuleLines.push(`- ${note}`);
+          // Prefer the APPROVED rule wording over the raw note. Triage proposes a
+          // crisp one-line rule and the approval step lets the user reword it —
+          // and until now none of that reached the prompt, which injected the
+          // original complaint text instead. The notification told the user
+          // "this exact rule is awaiting approval" and then a different string
+          // was used, which is the kind of gap that makes the whole approval
+          // step untrustworthy. Falls back to the note for the legacy rows that
+          // were hand-classified and have no triage block.
+          const approvedRule = String(
+            ((ctx?.triage ?? {}) as Record<string, unknown>)?.suggested_rule_he ?? "",
+          ).trim();
+          personalRuleLines.push(`- ${approvedRule || note}`);
         }
       }
       settings.__personalRules = personalRuleLines.join("\n");
