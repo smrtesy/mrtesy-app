@@ -219,10 +219,9 @@
     "planMy": "My tasks",
     "planTeam": "By worker",
     "planScore": "Score outputs",
-    "studio": "smrtStudio",
+    "studio": "Dashboard",
     "studioModels": "Model catalog",
     "studioResearch": "Research centre",
-    "studioInvestor": "Investor page",
     "claude": "Claude"
   },
   "account": {
@@ -4057,7 +4056,6 @@
     "close": "Close",
     "navModels": "Model catalog",
     "navResearch": "Research centre",
-    "navInvestor": "Investor page",
     "waitingTitle": "What is waiting for you",
     "waitScore": "Outputs to score",
     "waitScoreSub": "Runs that still have no score",
