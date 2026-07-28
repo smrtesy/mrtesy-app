@@ -444,6 +444,10 @@ async function getAppSecret(
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody): Promise<void> {
+  // One deadline for the whole delivery's media analysis, taken at the start so
+  // several voice notes in one POST share it instead of each getting a full
+  // ceiling of its own. See WHATSAPP_MEDIA_BUDGET_MS.
+  const mediaDeadline = Date.now() + WHATSAPP_MEDIA_BUDGET_MS;
   if (!payload.entry || payload.entry.length === 0) return;
 
   const perUser = new Map<string, NormalizedMessage[]>();
@@ -532,7 +536,7 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
   for (const [userId, messages] of perUser.entries()) {
     if (messages.length === 0) continue;
     const accessToken = tokenByUser.get(userId) ?? null;
-    await processUserBatch(db, userId, messages, accessToken);
+    await processUserBatch(db, userId, messages, accessToken, mediaDeadline);
   }
 }
 
@@ -687,6 +691,7 @@ async function processUserBatch(
   userId: string,
   messages: NormalizedMessage[],
   accessToken: string | null,
+  mediaDeadline: number,
 ): Promise<void> {
   const isHistoryBatch = messages.some((m) => m.isHistory);
   const sessionId = await createRunSession(db, userId, "part2", "whatsapp").catch(() => null);
@@ -761,7 +766,7 @@ async function processUserBatch(
     }
 
     try {
-      const built = await buildMessageRow(db, userId, nm, accessToken);
+      const built = await buildMessageRow(db, userId, nm, accessToken, mediaDeadline);
       const { error } = await db
         .from("whatsapp_messages")
         .upsert(built, { onConflict: "user_id,wamid" });
@@ -909,6 +914,21 @@ async function closeRunSession(
 // AUDIO_TRANSCRIBE_MAX_BYTES, transcribeAudio and performImageOcr now live in
 // @/lib/media/gemini so the SMS/MMS webhook runs the SAME code, not a copy.
 
+/**
+ * Wall-clock budget for ALL Gemini analysis in one webhook delivery, and the
+ * floor below which a part is stored but not analysed.
+ *
+ * A per-CALL timeout is not enough here. Meta can deliver several messages in
+ * one POST, processUserBatch loops over them, and each voice note was free to
+ * take the full no-budget ceiling — so two long notes in one delivery could run
+ * ~90s against maxDuration = 60. The function then dies having written nothing
+ * and Meta redelivers the whole payload, which is how one voice note once became
+ * five paid Gemini calls. A delivery-wide deadline bounds the batch, not just its
+ * individual calls; the SMS webhook has had one since it was written.
+ */
+const WHATSAPP_MEDIA_BUDGET_MS = 40_000;
+const WHATSAPP_MIN_ANALYSIS_SLICE_MS = 6_000;
+
 // Has this exact wamid already been stored with a REAL transcript (not a
 // placeholder)? Used to skip re-transcribing on Meta webhook redelivery.
 // Returns the stored media fields too — the caller's upsert overwrites the
@@ -994,6 +1014,7 @@ async function buildMessageRow(
   userId: string,
   nm: NormalizedMessage,
   accessToken: string | null,
+  mediaDeadline: number,
 ): Promise<WhatsappMessageRow> {
   const m = nm.meta;
   const type = (m.type ?? "unknown").toLowerCase();
@@ -1036,6 +1057,16 @@ async function buildMessageRow(
           break;
         }
         try {
+          // The DOWNLOAD is gated too, not only the analysis. It runs before any
+          // Gemini call and used to be unbounded, so several large notes in one
+          // delivery could burn the whole 60s ceiling on transfers alone and die
+          // before writing anything — which makes Meta redeliver the batch. Past
+          // the deadline the message is recorded with an honest placeholder and
+          // the redelivery guards let a retry pick up just the tail.
+          if (mediaDeadline - Date.now() < 2 * META_FETCH_TIMEOUT_MS) {
+            body = "[אודיו — נגמר הזמן להורדה בקליטה]";
+            break;
+          }
           const blob = await downloadMetaMedia(db, mediaId, accessToken);
           // Persist the audio blob to storage alongside images. Without this
           // media_url stays NULL and the WhatsApp thread view can only show
@@ -1072,11 +1103,19 @@ async function buildMessageRow(
             break;
           }
 
+          // Delivery budget: the audio is already stored above, so running out
+          // of time costs the transcript, never the recording.
+          const budgetMs = mediaDeadline - Date.now();
+          if (budgetMs < WHATSAPP_MIN_ANALYSIS_SLICE_MS) {
+            body = "[אודיו — נגמר הזמן לתמלול בקליטה, נשמר בלבד]";
+            break;
+          }
           const transcript = await transcribeAudio(
             db,
             blob.base64,
             blob.mimeType,
             "gemini.whatsapp",
+            budgetMs,
           );
           body = transcript;
         } catch (e) {
@@ -1109,10 +1148,18 @@ async function buildMessageRow(
           break;
         }
         let blob: MetaMediaBlob | null = null;
-        try {
-          blob = await downloadMetaMedia(db, mediaId, accessToken);
-        } catch (e) {
-          console.error("[whatsapp-webhook] image download failed:", e);
+        let skippedForBudget = false;
+        if (mediaDeadline - Date.now() < 2 * META_FETCH_TIMEOUT_MS) {
+          // Same reasoning as the audio gate above: the download is what can run
+          // away, so it is bounded before it starts rather than after.
+          skippedForBudget = true;
+          console.warn("[whatsapp-webhook] image download skipped — delivery budget spent");
+        } else {
+          try {
+            blob = await downloadMetaMedia(db, mediaId, accessToken);
+          } catch (e) {
+            console.error("[whatsapp-webhook] image download failed:", e);
+          }
         }
 
         if (blob) {
@@ -1132,11 +1179,18 @@ async function buildMessageRow(
           }
 
           try {
+            const budgetMs = mediaDeadline - Date.now();
+            if (budgetMs < WHATSAPP_MIN_ANALYSIS_SLICE_MS) {
+              // Stored above; only the OCR is skipped, and the caption survives.
+              body = caption || "[תמונה — נגמר הזמן ל-OCR בקליטה, נשמרה בלבד]";
+              break;
+            }
             const ocr = await performImageOcr(
               db,
               blob.base64,
               blob.mimeType,
               "gemini.whatsapp",
+              budgetMs,
             );
             body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
           } catch (e) {
@@ -1144,7 +1198,12 @@ async function buildMessageRow(
             body = caption || "[תמונה]";
           }
         } else {
-          body = caption || "[תמונה - שגיאת הורדה]";
+          // Say which it was. Reporting a download ERROR for an image whose
+          // download was never attempted sends the reader looking for a fault
+          // that does not exist.
+          body = caption || (skippedForBudget
+            ? "[תמונה — נגמר הזמן להורדה בקליטה]"
+            : "[תמונה - שגיאת הורדה]");
         }
       } else {
         body = caption || "[תמונה - אין מפתחות ל-OCR]";
@@ -1296,6 +1355,21 @@ async function buildMessageRow(
 // Media — Meta fetch + Supabase Storage upload
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Ceiling on each of the two Meta fetches a media download performs.
+ *
+ * They had no timeout at all, and they run BEFORE the Gemini budget check — so a
+ * Meta CDN that accepts the connection and then stalls held the function until
+ * the platform killed it, having written nothing, and Meta redelivered the whole
+ * payload. The Gemini deadline could not help: it only bounds work that happens
+ * after the bytes are in hand. Two large notes at ~10s of download each also ate
+ * the headroom the 40s analysis budget was sized against.
+ */
+const META_FETCH_TIMEOUT_MS = 15_000;
+// A download is TWO of those fetches (metadata, then the file), so a caller
+// gating on the deadline must reserve 2x — reserving one let a download that
+// started just inside the budget finish ~15s past it.
+
 async function downloadMetaMedia(
   db: SupabaseAdmin,
   mediaId: string,
@@ -1304,6 +1378,7 @@ async function downloadMetaMedia(
   const apiVersion = await getMetaApiVersion(db);
   const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
   });
   if (!metaRes.ok) {
     throw new Error(
@@ -1313,7 +1388,10 @@ async function downloadMetaMedia(
   const meta = (await metaRes.json()) as { url?: string; mime_type?: string };
   if (!meta.url) throw new Error("Meta media response missing url");
 
-  const fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+  const fileRes = await fetch(meta.url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
+  });
   if (!fileRes.ok) throw new Error(`Meta media download ${fileRes.status}`);
   const buf = Buffer.from(await fileRes.arrayBuffer());
 

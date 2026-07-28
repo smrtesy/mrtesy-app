@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, ChevronDown, ChevronUp, Copy, Check, PencilLine, ArrowUpRight, Search, X } from "lucide-react";
 import { CorrectionDialog, type CorrectionDraft } from "@/components/smrttask/log/CorrectionDialog";
+import { CorrectionsTriageReview } from "@/components/smrttask/log/CorrectionsTriageReview";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
 import { useOpenSmsChat, smsPeerFromSourceUrl } from "@/hooks/useOpenSmsChat";
@@ -523,6 +524,7 @@ export function LogPageClient({ locale }: { locale: string }) {
             </button>
           )}
         </div>
+        <CorrectionsTriageReview refreshKey={correctionsRefreshKey} />
         <CorrectionsExportButton refreshKey={correctionsRefreshKey} />
       </div>
 

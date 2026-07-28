@@ -17,20 +17,48 @@ arrive.
 
 ### Why the app side alone cannot fix this
 
-Verified 2026-07-28, twice, before writing any code:
+**CORRECTED 2026-07-28 after reading the fork.** The original version of this
+section said the gateway sends no media bytes at all. That was wrong, and wrong
+in a way that would have sent the next session to rewrite code that already
+works. What the two verifications below actually establish is narrower than the
+conclusion drawn from them:
 
 1. **Upstream docs** (`docs.sms-gate.app/features/webhooks/`) — nine events.
    `mms:received` carries `messageId`, `transactionId`, `subject`, `size`,
    `contentClass`, `sender`, `recipient`, `simNumber`, `receivedAt`. Metadata
-   only. No base64, no URL, no parts.
+   only. True — but `mms:received` is the pre-download header event, and the
+   FORK adds `mms:downloaded`, which upstream does not have.
 2. **Production data** — every distinct key across all 287 archived
    `sms_messages.raw_payload` rows: `recipient`, `messageId`, `message`,
-   `phoneNumber`, `simNumber`, `sentAt`, `sender`, `receivedAt`. Nothing else
-   has ever arrived.
+   `phoneNumber`, `simNumber`, `sentAt`, `sender`, `receivedAt`. True — but this
+   is evidence about the events that ARRIVED, and `mms:downloaded` has never
+   arrived because it is not registered on the phone. Absence of the event, not
+   absence of the capability.
+
+**What the fork actually does today** (`smrtesy/android-sms-gateway`,
+`03122bc`):
+
+- **Incoming is DONE.** `MmsContentReader.read()` already queries
+  `content://mms/$id/part`, skips `application/smil` and `text/*`, reads each
+  part through `openInputStream` and base64-encodes it with `Base64.NO_WRAP`.
+  `ReceiverService` maps that into `MmsDownloadedPayload`, which has carried an
+  `attachments` array with `data` from the start. Nothing to build — just
+  register the `mms:downloaded` webhook on the device (see "Device setup").
+- **Outgoing was the gap.** `SentMmsContentObserver.emitSentObserved()` called
+  the same reader — attachments and all — and then emitted
+  `SmsEventPayload.SmsSentObserved`, which has no attachments field. The bytes
+  were read off the provider and dropped. That is exactly the 16 `empty_body`
+  rows below: an outgoing photo with no caption. Fixed on branch
+  `claude/mms-attachments-on-sent-observed` with a new `MmsSentObservedPayload`
+  that keeps the existing field names and adds `attachments`, reusing
+  `MmsDownloadedPayload.Attachment` so both directions share one shape.
+- **No size budget existed** in either direction. Added to `MmsContentReader`:
+  3 MB of raw parts per message, past which a part keeps its metadata and sends
+  `data = null`.
 
 The gateway runs in **local mode** on the user's phone, unreachable from
-Vercel, so we cannot pull the bytes either. They have to be pushed, by the
-fork, in the webhook body.
+Vercel, so we cannot pull the bytes either — they have to be pushed in the
+webhook body, which is why the fix belongs in the fork rather than the app.
 
 ### What that costs today
 
@@ -58,7 +86,7 @@ the device (the earlier handoff lists only `sms:received`, `sms:sent` and
 (2) the observer isn't firing. Whichever it is, incoming MMS is invisible
 end-to-end today. See "Device setup" below.
 
-## Contract — the payload `mrtesy-app` already accepts
+## Contract — the payload `mrtesy-app` accepts, and the fork now sends
 
 Add an `attachments` array to the payload of `mms:downloaded` and
 `mms:sent-observed`. Everything else in the payload stays exactly as it is.
@@ -116,7 +144,12 @@ the message body.
   app. The app side already namespaces `mms:downloaded` ids as `mmsdl:<id>` to
   keep them from colliding with `content://sms` ids.
 
-## The fork patch (`smrtesy/android-sms-gateway`)
+## The fork patch — DONE on `claude/mms-attachments-on-sent-observed`
+
+Kept below as the record of what was changed and why. The incoming reader and
+payload already existed; only the outgoing emit and the size budget were added.
+
+### Original plan (superseded — the reader already did most of this)
 
 The fork already has an MMS observer reading `content://mms` — that is what
 emits `mms:sent-observed` today. The patch extends it to read the message's

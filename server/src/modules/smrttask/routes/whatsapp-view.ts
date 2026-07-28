@@ -27,6 +27,44 @@ import { metaErrorSummary } from "../../../lib/meta-errors";
 const router = Router();
 const gate = [requireAuth, requireOrg, requireApp("smrttask"), requireFullTask];
 
+/**
+ * Is `path` a whatsapp-media object key the given user may read?
+ *
+ * ONE predicate, used by both the per-path endpoint and the batch signer, so the
+ * rule cannot be fixed in one place and left stale in the other — which is the
+ * failure mode that produced the traversal hole below in the first place.
+ *
+ * Rejects:
+ *  - anything outside the caller's own "<user_id>/" folder;
+ *  - raw tab / LF / CR, which the WHATWG URL parser STRIPS before it collapses
+ *    dot-segments, so ".%09." arrives as ".\t." (past a ".." test) and becomes
+ *    ".." inside the parser. Verified: "<mine>/.%09./<victim>/x.jpg" resolved to
+ *    "<victim>/x.jpg". No legitimate object name contains one;
+ *  - any dot-segment in any of the six spellings the URL spec defines — ".",
+ *    "..", "%2e", "%2e%2e", ".%2e", "%2e." — split on "\\" as well as "/",
+ *    since backslash is a separator for special schemes. Express decodes the
+ *    query param once, so "%252e%252e" arrives as the literal "%2e%2e" and
+ *    reaches the parser still encoded, where it IS collapsed; the %2e
+ *    alternation is therefore load-bearing, not defence in depth.
+ *
+ * Deliberately NOT a strict character allowlist: legacy objects here were keyed
+ * "<user_id>/<wamid>-<filename>" with the sender's own filename, so Hebrew,
+ * spaces and a literal "%" must stay valid. /sms/media can afford the strict
+ * form because the webhook wrote every one of its keys itself.
+ */
+function isOwnedWhatsappMediaPath(path: string, userId: string): boolean {
+  if (!path.startsWith(`${userId}/`)) return false;
+  if (/[\t\n\r]/.test(path)) return false;
+  // Trailing whitespace / C0 control is stripped from the WHOLE url by the
+  // parser, so "<mine>/..%20" loses its space, the ".." pops, and the path
+  // resolves to the bucket root. Nothing can follow a trailing character so no
+  // other tenant's key is reachable, but a request that resolves outside the
+  // caller's folder must not pass this predicate on a technicality.
+  if (/[\s\u0000-\u001f]$/.test(path)) return false;
+  const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+  return !path.split(/[/\\]/).some((seg) => DOT_SEGMENT.test(seg));
+}
+
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour — long enough to open a PDF, short enough to bound exposure.
 
 // ── Threads ───────────────────────────────────────────────────────────────
@@ -405,12 +443,11 @@ router.get("/whatsapp/messages", ...gate, async (req: Request, res: Response) =>
     media_signed_url?: string | null;
   };
   const messages: MessageOut[] = [...(data ?? [])].reverse();
-  const ownPrefix = `${req.user!.id}/`;
   const mediaPaths = [
     ...new Set(
       messages
         .map((m) => m.media_url as string | null)
-        .filter((p): p is string => Boolean(p) && p!.startsWith(ownPrefix)),
+        .filter((p): p is string => Boolean(p) && isOwnedWhatsappMediaPath(p!, req.user!.id)),
     ),
   ];
   if (mediaPaths.length > 0) {
@@ -520,11 +557,17 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
   // this bucket were keyed "<user_id>/<wamid>-<filename>" with the sender's own
   // filename, so arbitrary characters (Hebrew, spaces, '%') must stay valid.
   // /sms/media can afford the strict form because it wrote every key itself.
-  const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
-  if (
-    !path.startsWith(`${req.user!.id}/`) ||
-    path.split(/[/\\]/).some((seg) => DOT_SEGMENT.test(seg))
-  ) {
+  //
+  // AND the six spellings are not the whole story — this is what the previous
+  // version of this check missed. The URL parser REMOVES ASCII tab, LF and CR
+  // from the input before it collapses dot-segments, so ".%09." arrives as
+  // ".\t.", passes a segment test looking for "..", and then becomes ".." inside
+  // the parser. Verified: "<mine>/.%09./<victim>/x.jpg" resolved to
+  // "<victim>/x.jpg". Same for %0a, %0d, "%2e%09%2e", "..%09", "%09..".
+  // No legitimate Storage object name contains a raw tab or newline, so they are
+  // refused outright rather than stripped — refusing needs no argument about
+  // what the parser does next.
+  if (!isOwnedWhatsappMediaPath(path, req.user!.id)) {
     return res.status(403).json({ error: "forbidden" });
   }
 

@@ -21,11 +21,24 @@ import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
+import { triageCorrection, PROMPT_CLASSES, type PromptClass } from "./triage";
 
 const router = Router();
 
 // Every correction route requires auth + active org + smrtTask enabled.
 router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
+
+/**
+ * Strip the server-owned keys out of a client-supplied `context`. `prompt_class`
+ * and `triage` decide whether a correction reaches the classifier prompt, so
+ * they are written by triage and by the decision endpoint only — never by the
+ * request that creates the correction.
+ */
+function sanitizeClientContext(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const { prompt_class: _pc, triage: _t, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
 
 const SCOPES = ["general", "personal"] as const;
 const CORRECTION_TYPES = ["reclassify", "status", "note", "other"] as const;
@@ -99,7 +112,13 @@ router.post("/corrections", async (req: Request, res: Response) => {
     new_value: body.new_value != null ? String(body.new_value) : null,
     note,
     scope,
-    context: body.context && typeof body.context === "object" ? body.context : {},
+    // The client may attach context, but NOT the triage verdict. Left open, a
+    // caller could POST {prompt_class:"prompt", triage:{approved:true}} and put
+    // arbitrary text into their own classifier prompt with no triage and no
+    // approval — the two gates this whole flow exists to impose. Scope is
+    // per-user so it reached no one else, but self-injection still defeats the
+    // point. These keys are owned by the server from here on.
+    context: sanitizeClientContext(body.context),
   };
 
   const { data, error } = await db
@@ -109,7 +128,85 @@ router.post("/corrections", async (req: Request, res: Response) => {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
+  // Triage runs on the Claude Code CLI (subscription, zero paid API tokens) and
+  // takes tens of seconds, so it is deliberately NOT awaited: the user gets their
+  // 201 immediately and the verdict arrives as an inbox notification. Detached on
+  // purpose — a triage failure must never turn into a failed correction. Nothing
+  // it decides reaches the classifier without the approval step below.
+  void triageCorrection(data.id as string);
+
   res.status(201).json({ correction: data });
+});
+
+/**
+ * POST /corrections/:id/decision — the approval step.
+ * body: { decision: "approve" | "reject", prompt_class?: PromptClass, rule?: string }
+ *
+ * Only an APPROVED correction whose class is "prompt" is ever injected into the
+ * classifier prompt (ai-process uses an allow-list). "approve" on any other class
+ * records the user's agreement with the triage without granting prompt access, so
+ * approving a "code" verdict cannot accidentally start steering classification.
+ *
+ * The user may also override the class outright — triage proposes, the user
+ * decides, and an override is recorded as theirs rather than silently replacing
+ * the machine verdict.
+ */
+router.post("/corrections/:id/decision", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  const body = req.body ?? {};
+  const decision = body.decision === "approve" ? "approve" : body.decision === "reject" ? "reject" : null;
+  if (!decision) return res.status(400).json({ error: "decision must be approve or reject" });
+
+  const { data: existing, error: findErr } = await db
+    .from("task_corrections")
+    .select("id, context")
+    .eq("id", id)
+    .eq("user_id", req.user!.id)
+    .eq("app_slug", "smrttask")
+    .maybeSingle();
+  if (findErr) return res.status(500).json({ error: findErr.message });
+  if (!existing) return res.status(404).json({ error: "not_found" });
+
+  const prev = (existing.context ?? {}) as Record<string, unknown>;
+  const prevTriage = (prev.triage ?? {}) as Record<string, unknown>;
+
+  const overrideClass =
+    typeof body.prompt_class === "string" && PROMPT_CLASSES.includes(body.prompt_class as PromptClass)
+      ? (body.prompt_class as PromptClass)
+      : null;
+  const finalClass = overrideClass ?? (prev.prompt_class as PromptClass | undefined) ?? "unclear";
+
+  // An approved rule can be reworded on the way in — the user's wording wins over
+  // the suggestion, and the note itself is never rewritten.
+  const rule =
+    typeof body.rule === "string" && body.rule.trim()
+      ? body.rule.trim().slice(0, 400)
+      : (prevTriage.suggested_rule_he as string | null | undefined) ?? null;
+
+  const context = {
+    ...prev,
+    prompt_class: finalClass,
+    triage: {
+      ...prevTriage,
+      suggested_rule_he: rule,
+      approved: decision === "approve",
+      decided_at: new Date().toISOString(),
+      decided_by: "user",
+      class_overridden_by_user: overrideClass !== null,
+    },
+  };
+
+  const { data, error } = await db
+    .from("task_corrections")
+    .update({ context, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("user_id", req.user!.id)
+    .select("*")
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ correction: data });
 });
 
 /**

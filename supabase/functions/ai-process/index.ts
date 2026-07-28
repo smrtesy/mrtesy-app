@@ -4597,17 +4597,36 @@ Deno.serve(async (req) => {
       // hectoring, W6 weekday, R1 BCC, the direction guard), so re-injecting the
       // complaint text is a worse-worded duplicate.
       //
-      // `context.prompt_class` carries the verdict: prompt | covered | code |
-      // filter | unclear. An UNTRIAGED correction (no class yet) is still
-      // injected — a correction the user just filed must take effect now, not
-      // after someone gets round to triaging it. Only a class that is KNOWN not
-      // to belong is dropped.
-      const PROMPT_EXCLUDED = new Set(["code", "covered", "filter", "unclear"]);
+      // `context.prompt_class` carries the verdict, and this is an ALLOW-LIST:
+      // only class "prompt" is injected, and only once the user has approved it
+      // (context.triage.approved). Everything else — code, ui, filter, covered,
+      // duplicate, unclear, AND an untriaged correction with no class at all —
+      // stays out.
+      //
+      // It was a deny-list until 2026-07-28, and the difference is not academic.
+      // A deny-list treats "not yet judged" as "safe to inject", so the moment
+      // the manual triage of the first 68 was done, the very next correction the
+      // user wrote — a UI request about how completed tasks look in the inbox —
+      // went straight into the classifier prompt, because null is not in a deny
+      // set. An allow-list makes the untriaged case fail CLOSED by construction
+      // rather than by remembering to enumerate it.
+      //
+      // What stops that from silently swallowing feedback is on the other side:
+      // server/src/modules/smrttask/corrections/triage.ts triages every new
+      // correction on the Claude subscription and notifies the user with the
+      // verdict, so "did not enter the prompt" always arrives as a message
+      // rather than as silence.
       for (const c of (correctionsRes.data ?? [])) {
         const note = String((c as any).note ?? "").trim();
         if (!note) continue;
-        const cls = String(((c as any).context ?? {})?.prompt_class ?? "").toLowerCase();
-        if (PROMPT_EXCLUDED.has(cls)) continue;
+        const ctx = ((c as any).context ?? {}) as Record<string, unknown>;
+        const cls = String(ctx?.prompt_class ?? "").toLowerCase();
+        if (cls !== "prompt") continue;
+        // Legacy rows carry prompt_class from the one-off manual triage and have
+        // no triage block; those were approved by hand, so treat a MISSING triage
+        // as approved and only an explicit approved=false as pending.
+        const triage = (ctx?.triage ?? null) as Record<string, unknown> | null;
+        if (triage && triage.approved !== true) continue;
         const key = ruleKey(note);
         if (!key || seenRules.has(key)) continue;
         seenRules.add(key);
@@ -4624,7 +4643,18 @@ Deno.serve(async (req) => {
           const from = (c as any).old_value ? ` (not "${asCategory((c as any).old_value)}")` : "";
           personalRuleLines.push(`- classify as "${asCategory((c as any).new_value)}"${from}: ${note}`);
         } else {
-          personalRuleLines.push(`- ${note}`);
+          // Prefer the APPROVED rule wording over the raw note. Triage proposes a
+          // crisp one-line rule and the approval step lets the user reword it —
+          // and until now none of that reached the prompt, which injected the
+          // original complaint text instead. The notification told the user
+          // "this exact rule is awaiting approval" and then a different string
+          // was used, which is the kind of gap that makes the whole approval
+          // step untrustworthy. Falls back to the note for the legacy rows that
+          // were hand-classified and have no triage block.
+          const approvedRule = String(
+            ((ctx?.triage ?? {}) as Record<string, unknown>)?.suggested_rule_he ?? "",
+          ).trim();
+          personalRuleLines.push(`- ${approvedRule || note}`);
         }
       }
       settings.__personalRules = personalRuleLines.join("\n");

@@ -157,6 +157,12 @@ export function CorrectionDialog({ open, draft, onClose, onSaved }: CorrectionDi
               dir="auto"
               autoFocus
             />
+            {/* How to write one. A correction phrased as a question about a single
+                message ("why is this here?") is a bug report, which triage will
+                route away from the classifier — so saying this up front is the
+                difference between feedback that changes behaviour and feedback
+                that only gets filed. */}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">{t("noteHowTo")}</p>
           </div>
         </div>
 
