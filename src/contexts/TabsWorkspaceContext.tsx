@@ -38,6 +38,10 @@ type TabsWorkspaceValue = {
   tabs: WorkspaceTab[];
   activeId: string | null;
   widths: PaneWidths;
+  /** True once localStorage has been read. Consumers that react to the tab set
+   *  (TabsArea's route adoption) must wait for it — before hydration `tabs` is
+   *  always empty and every route would look like "nothing is covering me". */
+  hydrated: boolean;
   /** When set, this pane takes the whole workspace and the others are hidden
    *  (not closed). Wide screens — the model-comparison grid is the reason —
    *  are unusable in a half-width pane. */
@@ -124,20 +128,28 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     const pathOf = (h: string) => h.split("?")[0].split("#")[0].replace(/\/+$/, "");
     const path = pathOf(href);
     setTabs((prev) => {
+      // While a pane is maximized, solo FOLLOWS whatever is being opened.
+      // Dropping solo instead (what this used to do for a new pane) throws the
+      // operator back into the split view they had deliberately left; leaving
+      // it alone is worse still — focusing an existing pane while another one
+      // is solo used to show nothing at all, since the maximized pane keeps
+      // covering the workspace. Either way the page they asked for has to be
+      // the one on screen.
       const existing = prev.find((t) => pathOf(t.href) === path);
       if (existing) {
         setActiveId(existing.id);
+        setSoloId((cur) => (cur ? existing.id : null));
         return href === existing.href
           ? prev
           : prev.map((t) => (t.id === existing.id ? { ...t, href } : t));
       }
       setActiveId(href);
-      // A new pane changes the layout — drop manual widths so the set
-      // re-lays out with the automatic default; the user can re-drag. It also
-      // leaves solo mode: a pane opened while another is maximized would
-      // otherwise be invisible.
-      setWidthsState({});
-      setSoloId(null);
+      setSoloId((cur) => (cur ? href : null));
+      // Manual widths are deliberately KEPT. They are keyed by tab id and
+      // resolveFractions ignores a partially-explicit set, so the workspace
+      // already falls back to the automatic layout while this pane is open —
+      // clearing them would only mean the operator's arrangement is gone for
+      // good instead of coming back when the pane is closed.
       return [...prev, { id: href, href, label }];
     });
   }, []);
@@ -195,6 +207,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         activeId,
         widths,
         soloId,
+        hydrated,
         openTab,
         closeTab,
         setActive,

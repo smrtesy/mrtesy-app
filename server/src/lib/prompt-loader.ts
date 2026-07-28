@@ -32,8 +32,8 @@ export async function loadPrompt(
 
   let content: string = data.content;
   if (ctx) {
-    // {{gmailLine}} renders the full sentence when an address exists, empty string otherwise —
-    // matches the conditional in buildDeepClassifierSystem exactly.
+    // {{gmailLine}} renders the full sentence when an address exists, empty
+    // string otherwise ("Their primary Gmail address is X. ").
     const gmailLine = ctx.gmailAddress
       ? `Their primary Gmail address is ${ctx.gmailAddress}. `
       : "";

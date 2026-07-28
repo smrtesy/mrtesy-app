@@ -6,7 +6,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound, SlidersHorizontal, FileText } from "lucide-react";
+import { Activity, Sparkles, BookOpen, ArrowLeft, KeyRound, SlidersHorizontal, FileText, LineChart } from "lucide-react";
 import { AppStatusCard } from "@/components/admin/AppStatusCard";
 import { getAdminSections, type AdminSectionKey } from "@/lib/apps/registry";
 
@@ -54,6 +54,7 @@ export default async function AdminAppDetailPage({
   > = {
     services:   { titleKey: "appServicesTitle",   descKey: "appServicesDesc",   icon: Activity,         path: "services" },
     prompts:    { titleKey: "appPromptsTitle",    descKey: "appPromptsDesc",    icon: Sparkles,         path: "prompts" },
+    quality:    { titleKey: "appQualityTitle",    descKey: "appQualityDesc",    icon: LineChart,        path: "quality" },
     secrets:    { titleKey: "appSecretsTitle",    descKey: "appSecretsDesc",    icon: KeyRound,         path: "secrets" },
     parameters: { titleKey: "appParametersTitle", descKey: "appParametersDesc", icon: SlidersHorizontal, path: "parameters" },
     documents:  { titleKey: "appDocumentsTitle",  descKey: "appDocumentsDesc",  icon: FileText,         path: "documents" },

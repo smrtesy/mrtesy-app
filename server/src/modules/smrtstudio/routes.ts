@@ -18,7 +18,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
 import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
-import { fetchCatalog, probeAudio, isVideoCategory } from "./indexer";
+import { fetchCatalog, probeAudio, isVideoCategory, fetchModelSchema } from "./indexer";
+import { MODEL_RECIPES } from "./recipes";
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
@@ -259,26 +260,50 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     .limit(limit);
   if (error) return res.status(500).json({ error: error.message });
 
-  // Kind tallies over the whole catalog, independent of the current filter.
-  const { data: allKinds, error: kindsErr, count: kindsCount } = await db
-    .from("studio_models")
-    .select("kind,verified_schema,audio_input,audio_probed", { count: "exact" })
-    .eq("org_id", orgId)
-    .range(0, 4999);
-  if (kindsErr) return res.status(500).json({ error: kindsErr.message });
+  // Tallies come from COUNT queries, never from counting rows in JS.
+  //
+  // They used to be computed by fetching every row and tallying client-side with
+  // `.range(0, 4999)`. PostgREST caps a response at its `db-max-rows` (1000
+  // here) and silently clamps a wider range, so with 1,394 models every chip
+  // showed a number derived from an arbitrary first 1,000 rows — the counts
+  // summed to exactly 1000 and the lip-sync chip read 0 while six models sat in
+  // it. A count with `head: true` returns no rows at all, so no cap can apply.
+  const KINDS = ["image", "voice", "video", "video_audio", "lipsync", "qc", "other"];
+  const ROLES = ["driving", "reference", "mux"];
+
+  const tally = (build: (q: ReturnType<typeof baseCount>) => ReturnType<typeof baseCount>) =>
+    build(baseCount());
+  function baseCount() {
+    return db
+      .from("studio_models")
+      .select("id", { count: "exact", head: true })
+      .eq("org_id", orgId);
+  }
+
+  const [kindCounts, roleCounts, totalRes, verifiedRes, probedRes] = await Promise.all([
+    Promise.all(KINDS.map((k) => tally((q) => q.eq("kind", k)))),
+    Promise.all(ROLES.map((r) => tally((q) => q.eq("audio_input", r)))),
+    tally((q) => q),
+    tally((q) => q.eq("verified_schema", true)),
+    tally((q) => q.eq("audio_probed", true)),
+  ]);
+
+  const firstTallyError =
+    kindCounts.find((r) => r.error)?.error ??
+    roleCounts.find((r) => r.error)?.error ??
+    totalRes.error ??
+    verifiedRes.error ??
+    probedRes.error;
+  if (firstTallyError) return res.status(500).json({ error: firstTallyError.message });
 
   const counts: Record<string, number> = {};
+  KINDS.forEach((k, i) => {
+    counts[k] = kindCounts[i].count ?? 0;
+  });
   const audioCounts: Record<string, number> = {};
-  let verifiedTotal = 0;
-  let probedTotal = 0;
-  for (const m of allKinds ?? []) {
-    const k = String((m as Row).kind);
-    counts[k] = (counts[k] ?? 0) + 1;
-    if ((m as Row).verified_schema === true) verifiedTotal += 1;
-    if ((m as Row).audio_probed === true) probedTotal += 1;
-    const role = (m as Row).audio_input;
-    if (typeof role === "string") audioCounts[role] = (audioCounts[role] ?? 0) + 1;
-  }
+  ROLES.forEach((r, i) => {
+    audioCounts[r] = roleCounts[i].count ?? 0;
+  });
 
   res.json({
     items: data ?? [],
@@ -286,12 +311,10 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     returned: (data ?? []).length,
     limit,
     counts,
-    // The exact count, so a capped page reports the catalog size honestly.
-    total: kindsCount ?? (allKinds ?? []).length,
-    tallied: (allKinds ?? []).length,
-    verified_total: verifiedTotal,
+    total: totalRes.count ?? 0,
+    verified_total: verifiedRes.count ?? 0,
     audio_counts: audioCounts,
-    audio_probed_total: probedTotal,
+    audio_probed_total: probedRes.count ?? 0,
   });
 });
 
@@ -418,6 +441,21 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
     if (error) return res.status(500).json({ error: `refresh failed: ${error.message}` });
   }
 
+  // Pass 1 rebuilt `kind` from fal's category, which UNDOES what pass 2 decided
+  // on an earlier sweep: an endpoint filed by fal as `image-to-video` but probed
+  // as audio-driven goes back to plain `video`, and pass 2 then skips it because
+  // it is already probed. The result was a `video_audio` count that shrank every
+  // time the sweep ran. Re-assert the probe's verdict for shelf rows before pass
+  // 2 begins — the probe is the stronger evidence, and this is self-healing.
+  const { error: reassertErr } = await db
+    .from("studio_models")
+    .update({ kind: "video_audio", stage_slug: "motion", stage_order: 7 })
+    .eq("org_id", orgId)
+    .eq("verified_schema", false)
+    .eq("audio_input", "driving")
+    .neq("kind", "video_audio");
+  if (reassertErr) return res.status(500).json({ error: `re-assert failed: ${reassertErr.message}` });
+
   // ── pass 2: the audio probe ──
   const videoModels = catalog.models.filter((m) => isVideoCategory(m.fal_category));
   const videoIds = videoModels.map((m) => m.endpoint_id);
@@ -465,10 +503,18 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
             audio_note: probe.audio_note,
           };
           if (probe.audio_input === "driving") {
-            patch.kind = "video_audio";
-            patch.stage_slug = "motion";
-            patch.stage_order = 7;
             driving += 1;
+            // Re-file only SHELF rows. A curated row keeps the category a human
+            // gave it: the six lip-sync models are audio-driven by nature, and
+            // moving them to `video_audio`/motion emptied the lip-sync category
+            // and lost the stage they actually belong to. Being audio-driven is
+            // recorded in `audio_input` either way — that is the fact; `kind` is
+            // the judgement, and the judgement stays human.
+            if (!curated.has(id)) {
+              patch.kind = "video_audio";
+              patch.stage_slug = "motion";
+              patch.stage_order = 7;
+            }
           }
           const { error } = await db
             .from("studio_models")
@@ -499,6 +545,59 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
     audio_probed_this_call: probed,
     audio_driving_found_this_call: driving,
     audio_probe_remaining: remaining,
+  });
+});
+
+/**
+ * GET /studio/models/detail?endpoint_id=… — everything known about one model.
+ *
+ * Three sources, deliberately kept distinct on the way out so the screen can
+ * show WHERE each claim comes from:
+ *
+ *   row     — our catalog record: rank, stage, price, and the audio-role
+ *             classification with fal's own wording as its evidence.
+ *   recipe  — the written method: when to use it, the feeding method, prompt
+ *             structure, tricks and limits. Prose a human wrote.
+ *   schema  — the INPUT CONTRACT, read live from fal on this request. Not cached
+ *             on purpose: a stored copy of someone else's contract can go stale
+ *             silently, and this program has already been burned by relying on
+ *             an inferred field instead of the published one.
+ *
+ * The endpoint id arrives as a query parameter rather than a path segment
+ * because it contains slashes ("fal-ai/kling-video/v3/pro/image-to-video").
+ */
+router.get("/studio/models/detail", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const endpointId = typeof req.query.endpoint_id === "string" ? req.query.endpoint_id.trim() : "";
+  if (!endpointId) return res.status(400).json({ error: "endpoint_id is required" });
+
+  const { data: row, error } = await db
+    .from("studio_models")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("endpoint_id", endpointId)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!row) return res.status(404).json({ error: "model not in this org's catalog" });
+
+  // The live read is allowed to fail without failing the screen: the recipe and
+  // our own record are still worth showing, and `schema.available: false` says
+  // plainly that the contract could not be read rather than implying no inputs.
+  const schema = await fetchModelSchema(endpointId);
+
+  res.json({
+    model: row,
+    recipe: MODEL_RECIPES[endpointId] ?? null,
+    schema,
+    /** Where to read the original, verbatim — the model page and, when a recipe
+     *  exists, the file in video-lab that holds the method. */
+    links: {
+      fal: `https://fal.ai/models/${endpointId}`,
+      schema: `https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=${encodeURIComponent(endpointId)}`,
+      recipe: MODEL_RECIPES[endpointId]
+        ? `https://github.com/smrtesy/video-lab/blob/main/${MODEL_RECIPES[endpointId].file}`
+        : null,
+    },
   });
 });
 
