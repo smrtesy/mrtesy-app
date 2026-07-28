@@ -1652,7 +1652,9 @@
     "triageClass_duplicate": "כפילות",
     "triageClass_needs_question": "יש שאלה",
     "triageClass_unclear": "לא ברור",
-    "triageUnderstood": "הבנתי: {text}"
+    "triageUnderstood": "הבנתי: {text}",
+    "triageFixStarted": "התיקון התחיל לרוץ — Claude מיישם ופותח PR",
+    "triageFixOpen": "צפה בשיחה"
   },
   "calendarPage": {
     "noTitle": "(ללא כותרת)",

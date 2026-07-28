@@ -22,6 +22,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
 import { triageCorrection, PROMPT_CLASSES, type PromptClass } from "./triage";
+import { createFixThread, autofixEnabled } from "./execute";
 
 const router = Router();
 
@@ -160,7 +161,7 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
 
   const { data: existing, error: findErr } = await db
     .from("task_corrections")
-    .select("id, context")
+    .select("id, context, note, task_id, source_message_id, organization_id")
     .eq("id", id)
     .eq("user_id", req.user!.id)
     .eq("app_slug", "smrttask")
@@ -184,6 +185,50 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
       ? body.rule.trim().slice(0, 400)
       : (prevTriage.suggested_rule_he as string | null | undefined) ?? null;
 
+  // Slice 4 — approving a code/ui correction spawns a fix thread that implements
+  // it and opens a PR (never merges). Dark unless SMRTTASK_CORRECTIONS_AUTOFIX=1,
+  // so by default this block is a no-op and approval behaves exactly as before.
+  let fixThreadId: string | null = null;
+  if (decision === "approve" && (finalClass === "code" || finalClass === "ui") && autofixEnabled()) {
+    let serial: string | null = null;
+    let taskTitle: string | null = null;
+    if (existing.task_id) {
+      const { data: task } = await db
+        .from("tasks")
+        .select("serial_display, title_he")
+        .eq("id", existing.task_id as string)
+        .maybeSingle();
+      serial = (task?.serial_display as string | null) ?? null;
+      taskTitle = (task?.title_he as string | null) ?? null;
+    }
+    let msgSubject: string | null = null;
+    let msgSender: string | null = null;
+    if (existing.source_message_id) {
+      const { data: sm } = await db
+        .from("source_messages")
+        .select("subject, sender, sender_email")
+        .eq("id", existing.source_message_id as string)
+        .maybeSingle();
+      msgSubject = (sm?.subject as string | null) ?? null;
+      msgSender = ((sm?.sender ?? sm?.sender_email) as string | null) ?? null;
+    }
+    fixThreadId = await createFixThread(
+      id,
+      finalClass,
+      (existing.organization_id as string) ?? req.org!.id,
+      req.user!.id,
+      {
+        note: String(existing.note ?? ""),
+        understood_he: (prevTriage.understood_he as string | null) ?? null,
+        reason_he: (prevTriage.reason_he as string | null) ?? null,
+        serial,
+        task_title: taskTitle,
+        msg_subject: msgSubject,
+        msg_sender: msgSender,
+      },
+    );
+  }
+
   const context = {
     ...prev,
     prompt_class: finalClass,
@@ -195,6 +240,9 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
       decided_by: "user",
       class_overridden_by_user: overrideClass !== null,
     },
+    ...(fixThreadId
+      ? { execution: { thread_id: fixThreadId, at: new Date().toISOString() } }
+      : {}),
   };
 
   const { data, error } = await db
@@ -206,7 +254,7 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
     .single();
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json({ correction: data });
+  res.json({ correction: data, fix_thread_id: fixThreadId });
 });
 
 /**

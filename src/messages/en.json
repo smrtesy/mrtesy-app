@@ -1652,7 +1652,9 @@
     "triageClass_duplicate": "Duplicate",
     "triageClass_needs_question": "Has a question",
     "triageClass_unclear": "Unclear",
-    "triageUnderstood": "Understood: {text}"
+    "triageUnderstood": "Understood: {text}",
+    "triageFixStarted": "Fix started — Claude is implementing it and opening a PR",
+    "triageFixOpen": "View the conversation"
   },
   "calendarPage": {
     "noTitle": "(No title)",

@@ -107,18 +107,29 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
         // a top-level JSON string, which express.json() rejects with
         // entity.parse.failed — so every approve and reject 400'd. Both sibling
         // components here pass an object; reading one of them would have caught it.
-        await api(`/api/corrections/${c.id}/decision`, {
-          method: "POST",
-          body: {
-            decision,
-            // Only send a rule when approving one — the server keeps the
-            // suggestion otherwise.
-            ...(decision === "approve" && edited[c.id]?.trim()
-              ? { rule: edited[c.id].trim() }
-              : {}),
+        const resp = await api<{ fix_thread_id?: string | null }>(
+          `/api/corrections/${c.id}/decision`,
+          {
+            method: "POST",
+            body: {
+              decision,
+              // Only send a rule when approving one — the server keeps the
+              // suggestion otherwise.
+              ...(decision === "approve" && edited[c.id]?.trim()
+                ? { rule: edited[c.id].trim() }
+                : {}),
+            },
           },
-        });
-        toast.success(decision === "approve" ? t("triageApproved") : t("triageRejected"));
+        );
+        // A code/ui approval may have spawned a fix thread (autofix on). Point the
+        // user at the live conversation to watch it implement + open the PR.
+        if (decision === "approve" && resp?.fix_thread_id) {
+          toast.success(t("triageFixStarted"), {
+            action: { label: t("triageFixOpen"), onClick: () => window.open("/claude", "_blank") },
+          });
+        } else {
+          toast.success(decision === "approve" ? t("triageApproved") : t("triageRejected"));
+        }
         await load();
       } catch (e) {
         toast.error(e instanceof Error ? e.message : String(e));
