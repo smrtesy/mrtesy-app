@@ -18,7 +18,7 @@
  * Dates render in America/New_York (CLAUDE.md), never in local or raw UTC.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Code2, ExternalLink, Loader2, Pencil, Plus, RefreshCw, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -108,6 +108,19 @@ export function PlaybookList({
    * the rich editor is what greets you, the same as everywhere else.
    */
   const [codeView, setCodeView] = useState(false);
+  /**
+   * The draft as it was opened, so closing can tell "nothing typed" from
+   * "about to lose a body someone just wrote". A ref, not state: it is only
+   * ever read at close time and must not trigger a render.
+   */
+  const opened = useRef<Draft | null>(null);
+
+  /** Open the editor on a draft, recording what it looked like. */
+  const openDraft = useCallback((next: Draft) => {
+    opened.current = next;
+    setCodeView(false);
+    setDraft(next);
+  }, []);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -157,6 +170,41 @@ export function PlaybookList({
     } finally {
       setWorking(false);
     }
+  }
+
+  /**
+   * Escape means "get me out of this text box" before it means "close the
+   * dialog". Inside the rich editor a keyboard user has no other exit —
+   * ProseMirror binds Tab itself inside lists and tables — so the first
+   * Escape blurs back to the dialog (Tab works again from there) and only
+   * the next one closes. Radix listens for Escape in the CAPTURE phase, so
+   * this has to hang off its own hook; stopPropagation from inside the
+   * editor is already too late.
+   */
+  function escapeLeavesEditorFirst(e: KeyboardEvent) {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused.closest(".ProseMirror")) {
+      focused.blur();
+      e.preventDefault();
+    }
+  }
+
+  /**
+   * Every way out of the dialog funnels through here — Escape, the X, and
+   * Cancel all land on `onOpenChange(false)`. `open` is ours, so simply not
+   * clearing the draft keeps the dialog up.
+   */
+  function requestClose() {
+    const before = opened.current;
+    const changed =
+      !!draft &&
+      !!before &&
+      (draft.kind !== before.kind ||
+        draft.name !== before.name ||
+        draft.doc_url !== before.doc_url ||
+        draft.instructions !== before.instructions);
+    if (changed && !window.confirm(t("confirmDiscard"))) return;
+    setDraft(null);
   }
 
   async function save() {
@@ -220,10 +268,7 @@ export function PlaybookList({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => {
-              setCodeView(false);
-              setDraft({ ...EMPTY });
-            }}
+            onClick={() => openDraft({ ...EMPTY })}
             aria-label={t("add")}
             title={t("add")}
           >
@@ -284,16 +329,15 @@ export function PlaybookList({
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    setCodeView(false);
-                    setDraft({
+                  onClick={() =>
+                    openDraft({
                       id: p.id,
                       kind: p.kind,
                       name: p.name,
                       doc_url: p.doc_url ?? "",
                       instructions: p.instructions ?? "",
-                    });
-                  }}
+                    })
+                  }
                   aria-label={t("edit")}
                   title={t("edit")}
                   className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -315,14 +359,20 @@ export function PlaybookList({
         </ul>
       )}
 
-      <Dialog open={!!draft} onOpenChange={(o) => !o && setDraft(null)}>
-        <DialogContent className="max-w-2xl">
+      <Dialog open={!!draft} onOpenChange={(o) => !o && requestClose()}>
+        {/* Outside clicks never dismiss: this dialog can hold a long body,
+            and a stray click beside it must not be able to bin the lot. */}
+        <DialogContent
+          className="max-w-2xl"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={escapeLeavesEditorFirst}
+        >
           <DialogHeader>
             <DialogTitle>{draft?.id ? t("editTitle") : t("addTitle")}</DialogTitle>
           </DialogHeader>
           {draft && (
             <div className="space-y-2">
-              <Select value={draft.kind} onValueChange={(v) => setDraft({ ...draft, kind: v })}>
+              <Select value={draft.kind} onValueChange={(v) => setDraft((d) => (d ? { ...d, kind: v } : d))}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -336,17 +386,19 @@ export function PlaybookList({
               </Select>
               <Input
                 value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                onChange={(e) => setDraft((d) => (d ? { ...d, name: e.target.value } : d))}
                 placeholder={t("namePlaceholder")}
               />
               <Input
                 dir="ltr"
                 value={draft.doc_url}
-                onChange={(e) => setDraft({ ...draft, doc_url: e.target.value })}
+                onChange={(e) => setDraft((d) => (d ? { ...d, doc_url: e.target.value } : d))}
                 placeholder={t("docUrlPlaceholder")}
               />
               <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-muted-foreground">{t("instructionsLabel")}</p>
+                <label htmlFor="pb-instructions" className="text-xs font-medium text-muted-foreground">
+                  {t("instructionsLabel")}
+                </label>
                 <IconButton
                   label={codeView ? t("richView") : t("codeView")}
                   color="primary"
@@ -359,9 +411,10 @@ export function PlaybookList({
                 /* dir=ltr on purpose: source reads like source only when the
                    markers (`#`, `-`, `|`) stay in the left gutter. */
                 <Textarea
+                  id="pb-instructions"
                   dir="ltr"
                   value={draft.instructions}
-                  onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
+                  onChange={(e) => setDraft((d) => (d ? { ...d, instructions: e.target.value } : d))}
                   placeholder={t("instructionsPlaceholder")}
                   rows={12}
                   className="font-mono text-xs"
@@ -382,7 +435,7 @@ export function PlaybookList({
             </div>
           )}
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setDraft(null)}>
+            <Button variant="ghost" onClick={requestClose}>
               {t("cancel")}
             </Button>
             <Button onClick={save} disabled={saving || !draft?.name.trim()}>

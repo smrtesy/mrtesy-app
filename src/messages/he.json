@@ -4190,7 +4190,8 @@
       },
       "instructionsLabel": "גוף ההוראות",
       "codeView": "תצוגת קוד",
-      "richView": "עריכה מעוצבת"
+      "richView": "עריכה מעוצבת",
+      "confirmDiscard": "לבטל את העריכה? השינויים שלא נשמרו יאבדו."
     },
     "instructions": {
       "title": "הוראות קבועות",
