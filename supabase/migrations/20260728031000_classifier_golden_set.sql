@@ -1,3 +1,7 @@
+-- APPLIED to the Smrtesy production project on 2026-07-28 with the user's
+-- explicit go-ahead, and seeded the same day: 206 rows (163 labelled, 43
+-- needs_review) across all 8 source types. Re-running is safe.
+--
 -- The classifier golden set (review §6.2 / fix-list §8): a labelled corpus of
 -- REAL messages that every prompt or model change must be measured against.
 --
@@ -162,31 +166,6 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   v_counts := v_counts || jsonb_build_object('reclassify_correction', v_n);
 
-  -- 3. Sender-based dismissals → not actionable. Only the two codes that mean
-  -- "this sender should never have produced a task"; see the header for why the
-  -- lifecycle codes are excluded.
-  WITH src AS (
-    SELECT DISTINCT ON (t.user_id, t.source_message_id)
-           t.user_id, t.source_message_id, t.id AS origin_ref,
-           COALESCE(t.dismissal_reason_text, t.dismissal_reason_code) AS note
-    FROM public.tasks t
-    WHERE t.status = 'dismissed'
-      AND t.source_message_id IS NOT NULL
-      AND t.dismissal_reason_code IN ('sender_unimportant', 'sender_type_unimportant')
-      AND t.created_at >= p_since
-    ORDER BY t.user_id, t.source_message_id, t.created_at DESC
-  )
-  INSERT INTO public.classifier_golden_set (
-    user_id, source_message_id, expected_classification, review_status, origin, origin_ref, note,
-    source_type, sender_email, subject, message_received_at)
-  SELECT s.user_id, s.source_message_id, 'informational', 'confirmed', 'dismissed_sender', s.origin_ref, s.note,
-         m.source_type, m.sender_email, m.subject, m.received_at
-  FROM src s
-  JOIN public.source_messages m ON m.id = s.source_message_id
-  ON CONFLICT (user_id, source_message_id) DO NOTHING;
-  GET DIAGNOSTICS v_n = ROW_COUNT;
-  v_counts := v_counts || jsonb_build_object('dismissed_sender', v_n);
-
   -- 2. Approved tasks → actionable. There are ~1,000 of these, far more than a
   -- corpus needs, and taking the newest N would skew to whatever the user
   -- happened to work on last month. Sample STRATIFIED BY source_type so
@@ -230,6 +209,31 @@ BEGIN
   ON CONFLICT (user_id, source_message_id) DO NOTHING;
   GET DIAGNOSTICS v_n = ROW_COUNT;
   v_counts := v_counts || jsonb_build_object('verified_task', v_n);
+
+  -- 3. Sender-based dismissals → not actionable. Only the two codes that mean
+  -- "this sender should never have produced a task"; see the header for why the
+  -- lifecycle codes are excluded.
+  WITH src AS (
+    SELECT DISTINCT ON (t.user_id, t.source_message_id)
+           t.user_id, t.source_message_id, t.id AS origin_ref,
+           COALESCE(t.dismissal_reason_text, t.dismissal_reason_code) AS note
+    FROM public.tasks t
+    WHERE t.status = 'dismissed'
+      AND t.source_message_id IS NOT NULL
+      AND t.dismissal_reason_code IN ('sender_unimportant', 'sender_type_unimportant')
+      AND t.created_at >= p_since
+    ORDER BY t.user_id, t.source_message_id, t.created_at DESC
+  )
+  INSERT INTO public.classifier_golden_set (
+    user_id, source_message_id, expected_classification, review_status, origin, origin_ref, note,
+    source_type, sender_email, subject, message_received_at)
+  SELECT s.user_id, s.source_message_id, 'informational', 'confirmed', 'dismissed_sender', s.origin_ref, s.note,
+         m.source_type, m.sender_email, m.subject, m.received_at
+  FROM src s
+  JOIN public.source_messages m ON m.id = s.source_message_id
+  ON CONFLICT (user_id, source_message_id) DO NOTHING;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  v_counts := v_counts || jsonb_build_object('dismissed_sender', v_n);
 
   -- 4. Free-text notes — kept as UNLABELLED hard cases. These are messages the
   -- user complained about, so they are exactly the interesting ones; inferring

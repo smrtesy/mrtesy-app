@@ -1,5 +1,9 @@
 -- Weekly quality metrics for the message classifier (review §6.4 / fix-list §9).
 --
+-- APPLIED to the Smrtesy production project on 2026-07-28 with the user's
+-- explicit go-ahead. CREATE OR REPLACE / IF NOT EXISTS throughout, so a
+-- `supabase db push` re-run is a no-op.
+--
 -- WHY THIS EXISTS
 -- Until now the only way a classifier problem surfaced was the user noticing a
 -- wrong task. Everything needed to see it earlier was already in the database —
