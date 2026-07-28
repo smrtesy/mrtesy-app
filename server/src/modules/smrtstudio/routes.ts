@@ -224,27 +224,99 @@ router.get("/studio/research", async (req: Request, res: Response) => {
  * everything else is the auto-indexed shelf. Capped so a 1,394-row catalog
  * cannot blow up a response.
  */
+/** Which fal categories live in each navigation group. Mirrors GROUP_BY_CATEGORY
+ *  in indexer.ts — the two must agree, or a chip counts a category the tab does
+ *  not actually contain. The derived tabs span whole groups rather than a fixed
+ *  category list. */
+const GROUP_CATEGORIES: Record<string, string[]> = {
+  image: ["text-to-image", "image-to-image"],
+  video: ["text-to-video", "image-to-video", "video-to-video", "audio-to-video"],
+  audio: ["text-to-speech", "text-to-audio", "audio-to-audio", "speech-to-speech", "video-to-audio"],
+  understanding: ["vision", "speech-to-text", "image-to-text", "video-to-text", "audio-to-text", "image-to-json"],
+  "3d": ["image-to-3d", "text-to-3d", "3d-to-3d"],
+  training: ["training"],
+  tools: ["llm", "json", "text-to-json", "workflow", "unknown"],
+};
+const ALL_CATEGORIES = [...new Set(Object.values(GROUP_CATEGORIES).flat())];
+
+function CATEGORIES_IN_GROUP(group: string | null): string[] {
+  if (group === "audio_video") return GROUP_CATEGORIES.video;
+  if (!group || group === "tools_pipeline") return ALL_CATEGORIES;
+  return GROUP_CATEGORIES[group] ?? ALL_CATEGORIES;
+}
+
+const CAP_COLUMNS: Record<string, string> = {
+  si: "cap_start_image",
+  ei: "cap_end_image",
+  pr: "cap_prompt",
+  lo: "cap_lora",
+};
+
 router.get("/studio/models", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
-  const kind = typeof req.query.kind === "string" && req.query.kind !== "all" ? req.query.kind : null;
+  const str = (k: string) => (typeof req.query[k] === "string" ? String(req.query[k]).trim() : "");
+  const kind = str("kind") && str("kind") !== "all" ? str("kind") : null;
+  // The seven navigation groups, plus two derived tabs that are not fal
+  // categories at all: `audio_video` (a video endpoint that takes an audio file
+  // we upload) and `tools` (the ffmpeg plumbing fal scatters across four
+  // categories, unfindable among the creative models).
+  const group = str("group") && str("group") !== "all" ? str("group") : null;
+  const audioRole = str("audio");
+  const build = str("build");
   const verifiedOnly = req.query.verified === "1";
-  const term = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const term = str("q");
+  const caps = str("caps").split(",").filter(Boolean);
   const limitRaw = Number(req.query.limit);
-  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 200;
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 1000) : 300;
 
-  let q = db.from("studio_models").select("*", { count: "exact" }).eq("org_id", orgId);
-  if (kind) q = q.eq("kind", kind);
-  if (verifiedOnly) q = q.eq("verified_schema", true);
-  if (term) {
-    // PostgREST parses `or=(...)` as structured text: a comma, dot, paren or
-    // quote in the term would rewrite the filter rather than be matched. Strip
-    // them — this is a search box, not a query language.
-    const safe = term.replace(/[,().*:"'\\]/g, "");
-    if (safe) {
-      q = q.or(`endpoint_id.ilike.%${safe}%,title.ilike.%${safe}%,vendor.ilike.%${safe}%`);
+  /** Every filter except the one named, so a chip can report how many results
+   *  it WOULD yield rather than the size of the slice it already sits in.
+   *
+   * Typed through a narrow structural shape rather than a generic constrained
+   * to the builder: PostgREST's own builder type is deep enough that inferring
+   * it through this function tripped TS2589 ("type instantiation is excessively
+   * deep"). The cast is contained here and every caller keeps its real type.
+   */
+  type Filterable = {
+    eq: (c: string, v: unknown) => Filterable;
+    gt: (c: string, v: unknown) => Filterable;
+    not: (c: string, o: string, v: unknown) => Filterable;
+    or: (f: string) => Filterable;
+  };
+  const applyFilters = <T>(builder: T, skip: string | null = null): T => {
+    let out = builder as Filterable;
+    if (group === "audio_video") {
+      out = out.eq("group_key", "video").not("audio_input", "is", null);
+    } else if (group === "tools_pipeline") {
+      out = out.eq("is_pipeline_tool", true);
+    } else if (group) {
+      out = out.eq("group_key", group);
     }
-  }
+    if (skip !== "kind" && kind) out = out.eq("kind", kind);
+    if (skip !== "cat" && str("category")) out = out.eq("fal_category", str("category"));
+    if (skip !== "audio" && audioRole) out = out.eq("audio_input", audioRole);
+    if (skip !== "build" && build) out = out.eq("audio_build", build);
+    if (skip !== "caps") {
+      for (const c of caps) {
+        if (c === "ma") out = out.gt("cap_audio_channels", 1);
+        else if (CAP_COLUMNS[c]) out = out.eq(CAP_COLUMNS[c], true);
+      }
+    }
+    if (verifiedOnly) out = out.eq("verified_schema", true);
+    if (term) {
+      // PostgREST parses `or=(...)` as structured text: a comma, dot, paren or
+      // quote in the term would rewrite the filter rather than be matched.
+      const safe = term.replace(/[,().*:"'\\]/g, "");
+      if (safe) {
+        out = out.or(
+          `endpoint_id.ilike.%${safe}%,title.ilike.%${safe}%,vendor.ilike.%${safe}%,family.ilike.%${safe}%,summary.ilike.%${safe}%`,
+        );
+      }
+    }
+    return out as T;
+  };
 
+  let q = applyFilters(db.from("studio_models").select("*", { count: "exact" }).eq("org_id", orgId));
   // Ordered the way the work flows — characters, voices, sets, frames, motion,
   // lip-sync — not alphabetically and not by fal's taxonomy. Within a stage the
   // ranked models come first, then the rest of the shelf.
@@ -270,51 +342,107 @@ router.get("/studio/models", async (req: Request, res: Response) => {
   // it. A count with `head: true` returns no rows at all, so no cap can apply.
   const KINDS = ["image", "voice", "video", "video_audio", "lipsync", "qc", "other"];
   const ROLES = ["driving", "reference", "mux"];
+  const GROUPS = ["image", "video", "audio", "understanding", "3d", "training", "tools"];
+  const BUILDS = ["full_scene", "full_body", "avatar", "mouth_fix"];
+  const CAP_KEYS = Object.keys(CAP_COLUMNS).concat("ma");
 
-  const tally = (build: (q: ReturnType<typeof baseCount>) => ReturnType<typeof baseCount>) =>
-    build(baseCount());
   function baseCount() {
     return db
       .from("studio_models")
       .select("id", { count: "exact", head: true })
       .eq("org_id", orgId);
   }
+  const tally = (build: (q: ReturnType<typeof baseCount>) => ReturnType<typeof baseCount>) =>
+    build(baseCount());
 
-  const [kindCounts, roleCounts, totalRes, verifiedRes, probedRes] = await Promise.all([
+  // Group and tab counts are unfiltered — a tab must show the size of the tab,
+  // not of the slice you are already looking at. Everything below the tabs is
+  // faceted: counted with every OTHER filter applied, so a chip reading 0 means
+  // "no results if you also click this", and disabling it costs nothing.
+  const [
+    kindCounts,
+    groupCounts,
+    roleCounts,
+    buildCounts,
+    capCounts,
+    categoryCountRows,
+    totalRes,
+    verifiedRes,
+    probedRes,
+    audioVideoRes,
+    toolRes,
+  ] = await Promise.all([
     Promise.all(KINDS.map((k) => tally((q) => q.eq("kind", k)))),
-    Promise.all(ROLES.map((r) => tally((q) => q.eq("audio_input", r)))),
+    Promise.all(GROUPS.map((g) => tally((q) => q.eq("group_key", g)))),
+    Promise.all(ROLES.map((r) => tally((q) => applyFilters(q, "audio").eq("audio_input", r)))),
+    Promise.all(BUILDS.map((b) => tally((q) => applyFilters(q, "build").eq("audio_build", b)))),
+    Promise.all(
+      CAP_KEYS.map((c) =>
+        tally((q) =>
+          c === "ma"
+            ? applyFilters(q, "caps").gt("cap_audio_channels", 1)
+            : applyFilters(q, "caps").eq(CAP_COLUMNS[c], true),
+        ),
+      ),
+    ),
+    // Counted per category with head-only queries, NOT by reading rows and
+    // tallying. PostgREST caps a response at db-max-rows (1000) and silently
+    // clamps anything wider, so a row-read tally quietly goes wrong the moment
+    // a group holds more than 1000 models — the exact failure that once made
+    // every chip on this screen sum to 1000. A head count returns no rows, so
+    // no cap can apply.
+    Promise.all(
+      CATEGORIES_IN_GROUP(group).map((c) =>
+        tally((q) => applyFilters(q, "cat").eq("fal_category", c)),
+      ),
+    ),
     tally((q) => q),
     tally((q) => q.eq("verified_schema", true)),
     tally((q) => q.eq("audio_probed", true)),
+    tally((q) => q.eq("group_key", "video").not("audio_input", "is", null)),
+    tally((q) => q.eq("is_pipeline_tool", true)),
   ]);
 
   const firstTallyError =
     kindCounts.find((r) => r.error)?.error ??
+    groupCounts.find((r) => r.error)?.error ??
     roleCounts.find((r) => r.error)?.error ??
+    buildCounts.find((r) => r.error)?.error ??
+    capCounts.find((r) => r.error)?.error ??
+    categoryCountRows.find((r) => r.error)?.error ??
     totalRes.error ??
     verifiedRes.error ??
-    probedRes.error;
+    probedRes.error ??
+    audioVideoRes.error ??
+    toolRes.error;
   if (firstTallyError) return res.status(500).json({ error: firstTallyError.message });
 
-  const counts: Record<string, number> = {};
-  KINDS.forEach((k, i) => {
-    counts[k] = kindCounts[i].count ?? 0;
-  });
-  const audioCounts: Record<string, number> = {};
-  ROLES.forEach((r, i) => {
-    audioCounts[r] = roleCounts[i].count ?? 0;
-  });
+  const byIndex = (keys: string[], rows: { count: number | null }[]) => {
+    const out: Record<string, number> = {};
+    keys.forEach((k, i) => {
+      out[k] = rows[i].count ?? 0;
+    });
+    return out;
+  };
+
+  const categoryCounts = byIndex(CATEGORIES_IN_GROUP(group), categoryCountRows);
 
   res.json({
     items: data ?? [],
     matched: count ?? (data ?? []).length,
     returned: (data ?? []).length,
     limit,
-    counts,
+    counts: byIndex(KINDS, kindCounts),
+    group_counts: byIndex(GROUPS, groupCounts),
+    category_counts: categoryCounts,
+    build_counts: byIndex(BUILDS, buildCounts),
+    cap_counts: byIndex(CAP_KEYS, capCounts),
     total: totalRes.count ?? 0,
     verified_total: verifiedRes.count ?? 0,
-    audio_counts: audioCounts,
+    audio_counts: byIndex(ROLES, roleCounts),
     audio_probed_total: probedRes.count ?? 0,
+    audio_video_total: audioVideoRes.count ?? 0,
+    pipeline_tool_total: toolRes.count ?? 0,
   });
 });
 
@@ -457,9 +585,15 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
   if (reassertErr) return res.status(500).json({ error: `re-assert failed: ${reassertErr.message}` });
 
   // ── pass 2: the audio probe ──
+  // Every model, not only the video ones. The probe used to cover the ~513
+  // video endpoints because it was looking for audio inputs alone. It now also
+  // reads the capability flags — takes a start image, an end image, a prompt, a
+  // trained LoRA — and those are the filters the catalog screen is built on, so
+  // an unprobed row is a row that silently disappears from every filter.
   const videoModels = catalog.models.filter((m) => isVideoCategory(m.fal_category));
-  const videoIds = videoModels.map((m) => m.endpoint_id);
-  const categoryOf = new Map(videoModels.map((m) => [m.endpoint_id, m.fal_category]));
+  const probeIds = catalog.models.map((m) => m.endpoint_id);
+  const categoryOf = new Map(catalog.models.map((m) => [m.endpoint_id, m.fal_category]));
+  const purposeOf = new Map(catalog.models.map((m) => [m.endpoint_id, m.summary]));
 
   let probed = 0;
   let driving = 0;
@@ -474,7 +608,7 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
     if (doneErr) return res.status(500).json({ error: doneErr.message });
     const alreadyProbed = new Set((doneRows ?? []).map((r) => String((r as Row).endpoint_id)));
 
-    const todo = videoIds.filter((id) => !alreadyProbed.has(id));
+    const todo = probeIds.filter((id) => !alreadyProbed.has(id));
     remaining = Math.max(0, todo.length - probeLimit);
 
     const batch = todo.slice(0, probeLimit);
@@ -492,7 +626,7 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
           cursor += 1;
           if (i >= batch.length) return;
           const id = batch[i];
-          const probe = await probeAudio(id, categoryOf.get(id) ?? "");
+          const probe = await probeAudio(id, categoryOf.get(id) ?? "", purposeOf.get(id) ?? "");
           // A model that takes our audio as a DRIVING input is its own category:
           // it can carry the motion stage and the lip-sync stage in one call,
           // which no silent image-to-video model can do.
@@ -501,6 +635,18 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
             audio_input: probe.audio_input,
             audio_field: probe.audio_field,
             audio_note: probe.audio_note,
+            audio_build: probe.audio_build,
+            audio_classified_from: probe.audio_classified_from,
+            schema_available: probe.schema_available,
+            input_field_count: probe.input_field_count,
+            cap_prompt: probe.cap_prompt,
+            cap_negative_prompt: probe.cap_negative_prompt,
+            cap_start_image: probe.cap_start_image,
+            cap_end_image: probe.cap_end_image,
+            cap_video_input: probe.cap_video_input,
+            cap_lora: probe.cap_lora,
+            cap_seed: probe.cap_seed,
+            cap_audio_channels: probe.cap_audio_channels,
           };
           if (probe.audio_input === "driving") {
             driving += 1;
@@ -537,11 +683,16 @@ router.post("/studio/models/index", async (req: Request, res: Response) => {
     indexed_at: indexedAt,
     catalog_total: catalog.total,
     catalog_pages: catalog.pages,
+    catalog_sweeps: catalog.sweeps,
+    // True when the convergent sweep still could not reach fal's own reported
+    // total. Surfaced rather than swallowed: the previous single-pass sweep
+    // indexed 76% of the catalog and reported success.
+    catalog_incomplete: catalog.incomplete,
     models_seen: catalog.models.length,
     models_written: written,
     curated_preserved: curated.size,
     curated_missing_from_catalog: curatedMissing,
-    video_endpoints: videoIds.length,
+    video_endpoints: videoModels.length,
     audio_probed_this_call: probed,
     audio_driving_found_this_call: driving,
     audio_probe_remaining: remaining,
