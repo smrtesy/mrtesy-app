@@ -33,8 +33,23 @@ type Db = SupabaseClient<any, any, any>;
  */
 export const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
 
-/** Hard ceiling on a single Gemini request — see the comment at its fetch. */
+/**
+ * Ceiling on a single Gemini request when the caller passes its own budget —
+ * see the comment at the fetch. Deliberately well under the SMS pass budget so
+ * one slow part cannot consume it all.
+ */
 const GEMINI_CALL_TIMEOUT_MS = 25_000;
+
+/**
+ * Ceiling when the caller passes NO budget (the WhatsApp webhook). Higher than
+ * the budgeted one on purpose: a voice note near AUDIO_TRANSCRIBE_MAX_BYTES
+ * legitimately takes longer than 25s to transcribe, and before this module had
+ * any timeout at all its only bound was the function's own 60s ceiling. A 25s
+ * abort here would turn recordings that used to transcribe fine into
+ * "[אודיו - לא ניתן לתמלל כרגע]" — trading a hang we've never seen for a
+ * regression on a case that works today.
+ */
+const NO_BUDGET_TIMEOUT_MS = 45_000;
 
 /** Never abort a request before this — below it, nothing useful can complete. */
 const GEMINI_MIN_TIMEOUT_MS = 2_000;
@@ -171,10 +186,16 @@ async function callGemini(
   // that starts just inside a 40s budget can finish past 90s and take the
   // function down with it. Bounding every attempt (and the retry decision) by
   // the time actually left means the pass can never outrun the budget.
-  const deadline = budgetMs === undefined ? null : Date.now() + budgetMs;
-  const timeLeft = () => (deadline === null ? GEMINI_CALL_TIMEOUT_MS : deadline - Date.now());
-  const attemptTimeout = () =>
-    Math.max(GEMINI_MIN_TIMEOUT_MS, Math.min(GEMINI_CALL_TIMEOUT_MS, timeLeft()));
+  // There is ALWAYS a deadline — a caller's budget when given, else
+  // NO_BUDGET_TIMEOUT_MS. Leaving the no-budget path deadline-free would put its
+  // total back at 45s + 3s backoff + 45s retry = 93s on a slow 5xx, past the
+  // 60s function ceiling. With a deadline, `sleep + attempt <= timeLeft` holds by
+  // construction, so the whole call — retry included — fits the budget.
+  const totalBudget = budgetMs ?? NO_BUDGET_TIMEOUT_MS;
+  const ceiling = budgetMs === undefined ? NO_BUDGET_TIMEOUT_MS : GEMINI_CALL_TIMEOUT_MS;
+  const deadline = Date.now() + totalBudget;
+  const timeLeft = () => deadline - Date.now();
+  const attemptTimeout = () => Math.max(GEMINI_MIN_TIMEOUT_MS, Math.min(ceiling, timeLeft()));
 
   const fetchOnce = async () =>
     fetch(url, {

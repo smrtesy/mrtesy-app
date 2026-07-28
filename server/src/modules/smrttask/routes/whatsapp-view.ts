@@ -506,11 +506,15 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
   // storage-js forwards the literal, and the URL parser then collapses the
   // dot-segment so the signed URL resolves inside the other tenant's folder.
   //
-  // Testing for a literal ".." segment is also not enough. The URL spec treats
-  // PERCENT-ENCODED dots as dot-segments too, so "%2e%2e", ".%2e" and "%2e."
-  // are collapsed identically — and a double-encoded value decodes into one of
-  // those on the way in. Hence the pattern below rather than a string compare.
-  // Backslash is included because it is a path separator for special schemes.
+  // Testing for a literal ".." segment is also not enough, and the alternation
+  // below is LOAD-BEARING, not defence in depth. The URL spec defines six
+  // dot-segments — ".", "..", "%2e", "%2e%2e", ".%2e", "%2e." (case-insensitive)
+  // — and collapses all of them. Express decodes the query param once, so a
+  // request sending "%252e%252e" arrives here as the literal "%2e%2e", which
+  // reaches the parser still encoded and IS collapsed. Storage never gets to
+  // decode it. (Triple-encoded "%25252e" arrives as "%252e", which the parser
+  // leaves alone, so nothing beyond this is needed.) Backslash is a separator
+  // for special schemes, hence the split on both.
   //
   // Only dot-segments are rejected, not a strict path shape: legacy objects in
   // this bucket were keyed "<user_id>/<wamid>-<filename>" with the sender's own
