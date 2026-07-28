@@ -26,6 +26,13 @@ type PromptClass =
   | "needs_question"
   | "unclear";
 
+interface GoldenCheck {
+  checked: number;
+  clean: boolean;
+  summary_he: string;
+  conflicts?: { subject: string; expected: string; would_be: string; why: string }[];
+}
+
 interface TriageBlock {
   reason_he?: string | null;
   /** What the triage understood the correction to want — shown so a misread is
@@ -34,6 +41,8 @@ interface TriageBlock {
   /** For prompt_class="needs_question": the question awaiting an answer. */
   question_he?: string | null;
   suggested_rule_he?: string | null;
+  /** For a prompt rule: how it measured against the golden set (plan slice 2). */
+  golden_check?: GoldenCheck | null;
   approved?: boolean;
   decided_at?: string | null;
 }
@@ -178,6 +187,14 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                         value={edited[c.id] ?? tri.suggested_rule_he ?? ""}
                         onChange={(e) => setEdited((p) => ({ ...p, [c.id]: e.target.value }))}
                       />
+                      {tri.golden_check && tri.golden_check.checked > 0 && (
+                        <p
+                          className={`text-[11px] ${tri.golden_check.clean ? "text-muted-foreground" : "text-amber-600 dark:text-amber-500"}`}
+                          dir="auto"
+                        >
+                          {tri.golden_check.summary_he}
+                        </p>
+                      )}
                     </div>
                   )}
                   <div className="flex items-center justify-end gap-2">

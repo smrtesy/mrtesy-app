@@ -38,6 +38,7 @@
 import { db } from "../../../db";
 import { runOneShot } from "../../claude/runner";
 import { notify } from "../../../lib/platform/notify";
+import { validateRuleAgainstGoldenSet, type GoldenCheck } from "./golden";
 
 /** The verdicts triage may return. Only "prompt" ever reaches the classifier. */
 export const PROMPT_CLASSES = [
@@ -316,6 +317,24 @@ async function runTriage(correctionId: string): Promise<void> {
       Record<string, unknown>;
     const attempts = Number(prevTriage.attempts ?? 0) + 1;
 
+    // Slice 2 — measure a proposed rule against the golden set before the user
+    // is asked to approve it. Only for a real prompt rule; every other class
+    // skips it. The result informs the user (a conflict is a warning, not an
+    // auto-reject — the user still decides), so it never blocks the notification.
+    let goldenCheck: GoldenCheck | null = null;
+    if (effective.prompt_class === "prompt" && effective.suggested_rule_he) {
+      let srcType: string | null = null;
+      if (correction.source_message_id) {
+        const { data: sm } = await db
+          .from("source_messages")
+          .select("source_type")
+          .eq("id", correction.source_message_id as string)
+          .maybeSingle();
+        srcType = (sm?.source_type as string | null) ?? null;
+      }
+      goldenCheck = await validateRuleAgainstGoldenSet(effective.suggested_rule_he, userId, srcType);
+    }
+
     const context = {
       ...((correction.context ?? {}) as Record<string, unknown>),
       prompt_class: effective.prompt_class,
@@ -327,6 +346,7 @@ async function runTriage(correctionId: string): Promise<void> {
         question_he: effective.question_he ?? null,
         suggested_rule_he: effective.suggested_rule_he,
         duplicate_of: effective.duplicate_of,
+        golden_check: goldenCheck,
         failed,
         attempts,
         // Nothing affects classification until the user approves. The classifier
@@ -382,6 +402,11 @@ async function runTriage(correctionId: string): Promise<void> {
       bodyLines.push(`✓ סיווג: ${label} — ${effective.reason_he}`);
       if (isPromptRule) {
         bodyLines.push(`✓ הכלל המוצע: ${effective.suggested_rule_he}`);
+        // Slice 2 — show the golden-set result so the user approves with the
+        // regression signal in hand. A conflict is a warning, not a block.
+        if (goldenCheck && goldenCheck.checked > 0) {
+          bodyLines.push(goldenCheck.clean ? `✓ ${goldenCheck.summary_he}` : goldenCheck.summary_he);
+        }
         bodyLines.push("ממתין לאישור שלך כדי להיכנס לפרומפט הסיווג.");
       } else if (effective.prompt_class === "code" || effective.prompt_class === "ui") {
         bodyLines.push("לא כלל סיווג — צריך תיקון קוד/ממשק. לא נכנס לפרומפט.");
