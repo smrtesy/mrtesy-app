@@ -296,7 +296,10 @@
     "searchPlaceholder": "חיפוש לפי מספר או טקסט…",
     "searchOpen": "חיפוש",
     "searchClose": "סגור חיפוש",
-    "searchNoResults": "לא נמצאו שיחות תואמות"
+    "searchNoResults": "לא נמצאו שיחות תואמות",
+    "attachmentImageAlt": "תמונה שהתקבלה ב-MMS",
+    "attachmentOpen": "פתח קובץ מצורף",
+    "attachmentUnavailable": "לא ניתן להציג את הקובץ"
   },
   "whatsappPage": {
     "title": "הודעות WhatsApp",

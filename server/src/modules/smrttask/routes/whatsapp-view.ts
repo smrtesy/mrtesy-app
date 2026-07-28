@@ -500,7 +500,31 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
   // Defense in depth: even though Storage's RLS would block reads, the
   // service-role client bypasses RLS, so we enforce ownership ourselves.
   // Path convention is "<user_id>/<wamid>-<filename>".
-  if (!path.startsWith(`${req.user!.id}/`)) {
+  //
+  // The prefix check alone is NOT sufficient and was a cross-tenant read:
+  // "<myUuid>/../<victimUuid>/<wamid>.jpg" starts with the caller's prefix,
+  // storage-js forwards the literal, and the URL parser then collapses the
+  // dot-segment so the signed URL resolves inside the other tenant's folder.
+  //
+  // Testing for a literal ".." segment is also not enough, and the alternation
+  // below is LOAD-BEARING, not defence in depth. The URL spec defines six
+  // dot-segments — ".", "..", "%2e", "%2e%2e", ".%2e", "%2e." (case-insensitive)
+  // — and collapses all of them. Express decodes the query param once, so a
+  // request sending "%252e%252e" arrives here as the literal "%2e%2e", which
+  // reaches the parser still encoded and IS collapsed. Storage never gets to
+  // decode it. (Triple-encoded "%25252e" arrives as "%252e", which the parser
+  // leaves alone, so nothing beyond this is needed.) Backslash is a separator
+  // for special schemes, hence the split on both.
+  //
+  // Only dot-segments are rejected, not a strict path shape: legacy objects in
+  // this bucket were keyed "<user_id>/<wamid>-<filename>" with the sender's own
+  // filename, so arbitrary characters (Hebrew, spaces, '%') must stay valid.
+  // /sms/media can afford the strict form because it wrote every key itself.
+  const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+  if (
+    !path.startsWith(`${req.user!.id}/`) ||
+    path.split(/[/\\]/).some((seg) => DOT_SEGMENT.test(seg))
+  ) {
     return res.status(403).json({ error: "forbidden" });
   }
 

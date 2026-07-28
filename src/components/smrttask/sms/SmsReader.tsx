@@ -7,7 +7,7 @@ import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { MessageSquare, ArrowRight, ArrowLeft, RefreshCw, CheckSquare, Search, X } from "lucide-react";
+import { MessageSquare, ArrowRight, ArrowLeft, RefreshCw, CheckSquare, Search, X, Paperclip } from "lucide-react";
 
 /** Normalized key for matching phone numbers stored in inconsistent formats —
  *  mirrors the server's normPhone (digits; last 10 when it's a real number). */
@@ -25,6 +25,16 @@ interface SmsThread {
   task_count?: number;
 }
 
+/** One MMS attachment stored by the webhook, with a short-lived signed URL. */
+interface SmsMediaPart {
+  path: string;
+  mime: string;
+  filename: string;
+  size: number;
+  kind: "image" | "audio" | "video" | "file";
+  signed_url?: string | null;
+}
+
 interface SmsMessage {
   id: string;
   message_id: string;
@@ -32,11 +42,89 @@ interface SmsMessage {
   from_phone: string;
   to_phone: string | null;
   body_text: string | null;
+  media_parts?: SmsMediaPart[] | null;
   is_otp: boolean;
   received_at: string;
 }
 
 const THREADS_POLL_MS = 20000;
+
+/**
+ * One MMS attachment inside a bubble. Images and audio render inline (the
+ * WhatsApp reader's behaviour); anything else is a link.
+ *
+ * The bucket is private, so the src is a signed URL. /api/sms/messages mints
+ * them in one batch for the whole page, but they carry a ~1h TTL — a
+ * conversation left open longer than that has dead media on the next render.
+ * On the element's error event we mint a fresh one, capped at a single retry so
+ * a genuinely missing object can't loop.
+ */
+function SmsAttachment({ part }: { part: SmsMediaPart }) {
+  const t = useTranslations("smsPage");
+  const [url, setUrl] = useState<string | null>(part.signed_url ?? null);
+  const [dead, setDead] = useState(false);
+  const retriedRef = useRef(false);
+
+  useEffect(() => {
+    if (url || dead) return;
+    let cancelled = false;
+    api<{ url: string }>(`/api/sms/media?path=${encodeURIComponent(part.path)}`)
+      .then((r) => {
+        if (!cancelled) setUrl(r.url);
+      })
+      .catch(() => {
+        if (!cancelled) setDead(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url, dead, part.path]);
+
+  const onError = useCallback(() => {
+    if (retriedRef.current) {
+      setDead(true);
+      return;
+    }
+    retriedRef.current = true;
+    setUrl(null); // re-runs the effect above, minting a fresh URL
+  }, []);
+
+  if (dead) {
+    return <div className="text-[11px] italic opacity-70">{t("attachmentUnavailable")}</div>;
+  }
+  if (!url) {
+    return <Skeleton className="h-24 w-40 rounded-md" />;
+  }
+  if (part.kind === "image") {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" title={t("attachmentOpen")}>
+        {/* Signed Storage URL — next/image would need the host allow-listed
+            and buys nothing for a one-off private object. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={t("attachmentImageAlt")}
+          onError={onError}
+          className="max-h-64 max-w-full rounded-md"
+        />
+      </a>
+    );
+  }
+  if (part.kind === "audio") {
+    return <audio controls src={url} onError={onError} className="w-56 max-w-full" />;
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs underline underline-offset-2"
+    >
+      <Paperclip className="h-3 w-3" />
+      {part.filename || t("attachmentOpen")}
+    </a>
+  );
+}
 
 /**
  * Read-only SMS conversation reader. Two panes on desktop (list + conversation),
@@ -322,6 +410,13 @@ export function SmsReader({
                       )}
                       dir="auto"
                     >
+                      {(m.media_parts ?? []).length > 0 && (
+                        <div className="mb-1 flex flex-col gap-1">
+                          {(m.media_parts ?? []).map((p) => (
+                            <SmsAttachment key={p.path} part={p} />
+                          ))}
+                        </div>
+                      )}
                       {m.body_text}
                       <div className={cn("mt-0.5 text-[10px]", out ? "text-primary-foreground/70" : "text-muted-foreground")}>
                         {m.is_otp && <span className="me-1">🔒</span>}
