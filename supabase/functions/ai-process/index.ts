@@ -4446,7 +4446,7 @@ Deno.serve(async (req) => {
         // The 200 cap is a runaway guard, not a memory window — at ~30 tokens
         // per line it bounds the block at ~6k tokens so a pathological history
         // can never crowd out the prompt itself. Today's 68 are nowhere near it.
-        supabase.from("task_corrections").select("note, correction_type, old_value, new_value, scope").eq("user_id", userId).eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(200),
+        supabase.from("task_corrections").select("note, correction_type, old_value, new_value, scope, context").eq("user_id", userId).eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(200),
       ]);
       const settings = settingsRes.data;
       if (!settings) continue;
@@ -4501,9 +4501,29 @@ Deno.serve(async (req) => {
       const seenRules = new Set<string>();
       const ruleKey = (s: string) =>
         s.toLowerCase().replace(/[.,!?;:"'״׳()\[\]-]/g, "").replace(/\s+/g, " ").trim();
+      // TRIAGED CLASS decides whether a correction belongs in the prompt at all.
+      // Loading every correction (2026-07-28, earlier the same day) turned out to
+      // be a net loss: of the first 68, only 5 were genuinely new prompt rules.
+      // 39 were CODE bugs — "why is this appearing now?", "why wasn't it marked
+      // answered?" — which are questions to a developer, not instructions a model
+      // can act on; they cost tokens on every message and can actively mislead
+      // (a model reading "why is this surfacing now" may start suppressing older
+      // messages nobody asked it to suppress). 19 more were already written in
+      // this prompt as proper rules (W1 register, W2 unknown sender, W5 no
+      // hectoring, W6 weekday, R1 BCC, the direction guard), so re-injecting the
+      // complaint text is a worse-worded duplicate.
+      //
+      // `context.prompt_class` carries the verdict: prompt | covered | code |
+      // filter | unclear. An UNTRIAGED correction (no class yet) is still
+      // injected — a correction the user just filed must take effect now, not
+      // after someone gets round to triaging it. Only a class that is KNOWN not
+      // to belong is dropped.
+      const PROMPT_EXCLUDED = new Set(["code", "covered", "filter", "unclear"]);
       for (const c of (correctionsRes.data ?? [])) {
         const note = String((c as any).note ?? "").trim();
         if (!note) continue;
+        const cls = String(((c as any).context ?? {})?.prompt_class ?? "").toLowerCase();
+        if (PROMPT_EXCLUDED.has(cls)) continue;
         const key = ruleKey(note);
         if (!key || seenRules.has(key)) continue;
         seenRules.add(key);
