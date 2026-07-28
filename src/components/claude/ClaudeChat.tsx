@@ -41,6 +41,8 @@ import {
 } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { Markdown } from "@/components/common/Markdown";
+import { CopyButton } from "@/components/common/CopyButton";
 import { ChatComposer } from "./ChatComposer";
 import { PlaybookList } from "./PlaybookList";
 import { RepoPicker } from "./RepoPicker";
@@ -578,7 +580,18 @@ function TurnView({ turn }: { turn: Turn }) {
   return (
     <div className="flex flex-col gap-2">
       {(turn.user_prompt || turn.attachments.length > 0) && (
-        <div className="flex justify-end">
+        <div className="group/msg flex items-start justify-end gap-1">
+          {/* Copy sits OUTSIDE the bubble, on its leading edge, so it never
+              overlaps the text and reads for the whole message. */}
+          {turn.user_prompt && (
+            <CopyButton
+              text={turn.user_prompt}
+              label={t("copyMessage")}
+              copiedLabel={t("copied")}
+              reveal="msg"
+              className="mt-0.5"
+            />
+          )}
           <div className="max-w-[85%] rounded-2xl bg-primary px-3 py-2 text-sm text-primary-foreground">
             {turn.user_prompt && (
               <p className="whitespace-pre-wrap break-words" dir="auto">
@@ -625,9 +638,20 @@ function TurnView({ turn }: { turn: Turn }) {
           )}
 
           {answer && (
-            <p className="whitespace-pre-wrap break-words text-sm" dir="auto">
-              {answer}
-            </p>
+            <div className="group/msg flex items-start gap-1">
+              {/* Rich rendering, chat density: headings, lists, tables and code
+                  the same way the .md docs render, tightened to a bubble. */}
+              <Markdown density="chat" className="min-w-0 flex-1">
+                {answer}
+              </Markdown>
+              <CopyButton
+                text={answer}
+                label={t("copyMessage")}
+                copiedLabel={t("copied")}
+                reveal="msg"
+                className="mt-0.5 shrink-0"
+              />
+            </div>
           )}
 
           {live && (

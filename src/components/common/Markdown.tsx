@@ -29,13 +29,47 @@
  * repo's deep-link rule, and open in a new tab.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy } from "lucide-react";
 
+import { CopyButton } from "@/components/common/CopyButton";
 import { cn } from "@/lib/utils";
+
+/**
+ * How much room the document gets.
+ *
+ * `doc` is a page of documentation — GitHub's proportions, where an `#` heading
+ * opens a screen-wide article. `chat` is the same renderer inside a message
+ * bubble: the structure is identical, the type scale is not. An `h1` at
+ * `text-2xl` reads as a page title, and a page title inside a chat reply looks
+ * like a mistake — so chat tightens the scale and the vertical rhythm without
+ * touching what any element MEANS.
+ */
+export type MarkdownDensity = "doc" | "chat";
+
+/** Per-level heading classes. Two columns of the same table, so a change to the
+ *  document scale is visibly a change to one of two densities, not a diff
+ *  scattered across six component definitions. */
+const HEADINGS: Record<MarkdownDensity, Record<1 | 2 | 3 | 4 | 5 | 6, string>> = {
+  doc: {
+    1: "mb-3 mt-6 border-b pb-1.5 text-2xl font-bold first:mt-0",
+    2: "mb-2.5 mt-6 border-b pb-1.5 text-xl font-bold first:mt-0",
+    3: "mb-2 mt-5 text-base font-semibold first:mt-0",
+    4: "mb-1.5 mt-4 text-sm font-semibold first:mt-0",
+    5: "mb-1.5 mt-4 text-sm font-semibold text-foreground/90 first:mt-0",
+    6: "mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground first:mt-0",
+  },
+  chat: {
+    1: "mb-2 mt-4 border-b pb-1 text-lg font-bold first:mt-0",
+    2: "mb-1.5 mt-4 text-[15px] font-bold first:mt-0",
+    3: "mb-1.5 mt-3 text-sm font-semibold first:mt-0",
+    4: "mb-1 mt-3 text-sm font-semibold first:mt-0",
+    5: "mb-1 mt-3 text-sm font-semibold text-foreground/90 first:mt-0",
+    6: "mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground first:mt-0",
+  },
+};
 
 /* ------------------------------------------------------------------ */
 /* direction                                                           */
@@ -185,7 +219,7 @@ function Heading({
 }: {
   level: 1 | 2 | 3 | 4 | 5 | 6;
   children: ReactNode;
-  className: string;
+  className?: string;
   labels: Labels;
 }) {
   const Tag = `h${level}` as const;
@@ -209,20 +243,9 @@ function Heading({
 
 /** Fenced code block: horizontal scroll, forced LTR, quiet copy button. */
 function CodeBlock({ children, labels }: { children: ReactNode; labels: Labels }) {
-  const [copied, setCopied] = useState(false);
   // Same trailing-newline strip the <code> renderer applies, so what lands on
   // the clipboard matches what the user sees in the box.
   const text = toText(children).replace(/\n$/, "");
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked (insecure context / denied) — nothing to recover */
-    }
-  }
 
   return (
     <div className="group/code relative my-3">
@@ -238,18 +261,13 @@ function CodeBlock({ children, labels }: { children: ReactNode; labels: Labels }
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label={copied ? labels.copied : labels.copyCode}
-        title={copied ? labels.copied : labels.copyCode}
-        className={cn(
-          "absolute end-2 top-2 rounded-md border bg-background/90 p-1.5 text-muted-foreground",
-          "opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 touch:opacity-100",
-        )}
-      >
-        {copied ? <Check className="size-3.5 text-status-ok" /> : <Copy className="size-3.5" />}
-      </button>
+      <CopyButton
+        text={text}
+        label={labels.copyCode}
+        copiedLabel={labels.copied}
+        reveal="code"
+        className="absolute end-2 top-2 border bg-background/90"
+      />
     </div>
   );
 }
@@ -276,41 +294,46 @@ function Table({ children }: { children: ReactNode }) {
  * the result so element identity stays stable across re-renders and nothing
  * remounts (which would drop a code block's "copied" state).
  */
-function buildComponents(labels: Labels, linkBase?: string): Components {
+function buildComponents(labels: Labels, density: MarkdownDensity, linkBase?: string): Components {
+  const h = HEADINGS[density];
+  // Chat bubbles are narrower and stacked; a doc page breathes. Everything below
+  // that carries a vertical margin reads it from here so the two densities stay
+  // internally consistent instead of each block guessing.
+  const chat = density === "chat";
   return {
     h1: ({ children }) => (
-      <Heading level={1} labels={labels} className="mb-3 mt-6 border-b pb-1.5 text-2xl font-bold first:mt-0">
+      <Heading level={1} labels={labels} className={h[1]}>
         {children}
       </Heading>
     ),
     h2: ({ children }) => (
-      <Heading level={2} labels={labels} className="mb-2.5 mt-6 border-b pb-1.5 text-xl font-bold first:mt-0">
+      <Heading level={2} labels={labels} className={h[2]}>
         {children}
       </Heading>
     ),
     h3: ({ children }) => (
-      <Heading level={3} labels={labels} className="mb-2 mt-5 text-base font-semibold first:mt-0">
+      <Heading level={3} labels={labels} className={h[3]}>
         {children}
       </Heading>
     ),
     h4: ({ children }) => (
-      <Heading level={4} labels={labels} className="mb-1.5 mt-4 text-sm font-semibold first:mt-0">
+      <Heading level={4} labels={labels} className={h[4]}>
         {children}
       </Heading>
     ),
     h5: ({ children }) => (
-      <Heading level={5} labels={labels} className="mb-1.5 mt-4 text-sm font-semibold text-foreground/90 first:mt-0">
+      <Heading level={5} labels={labels} className={h[5]}>
         {children}
       </Heading>
     ),
     h6: ({ children }) => (
-      <Heading level={6} labels={labels} className="mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground first:mt-0">
+      <Heading level={6} labels={labels} className={h[6]}>
         {children}
       </Heading>
     ),
 
     p: ({ children }) => (
-      <p dir={leafDir(children)} className="my-2.5 leading-relaxed first:mt-0 last:mb-0">
+      <p dir={leafDir(children)} className={cn(chat ? "my-2" : "my-2.5", "leading-relaxed first:mt-0 last:mb-0")}>
         {children}
       </p>
     ),
@@ -469,9 +492,14 @@ export interface MarkdownProps {
    * 404 against the app's own origin.
    */
   linkBase?: string;
+  /**
+   * Type scale and rhythm. `"doc"` (default) is a documentation page;
+   * `"chat"` is the same structure tightened to sit inside a message bubble.
+   */
+  density?: MarkdownDensity;
 }
 
-export function Markdown({ children, className, dir, linkBase }: MarkdownProps) {
+export function Markdown({ children, className, dir, linkBase, density = "doc" }: MarkdownProps) {
   const t = useTranslations("markdown");
   const text = children ?? "";
 
@@ -484,9 +512,10 @@ export function Markdown({ children, className, dir, linkBase }: MarkdownProps) 
           copyCode: t("copyCode"),
           copied: t("copied"),
         },
+        density,
         linkBase,
       ),
-    [t, linkBase],
+    [t, density, linkBase],
   );
 
   if (!text.trim()) return null;

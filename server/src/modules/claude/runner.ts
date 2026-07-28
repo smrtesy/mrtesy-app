@@ -462,40 +462,42 @@ async function executeRunBody(runId: string): Promise<void> {
 
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
-  const args = ["-p", promptText, "--output-format", "stream-json", "--verbose"];
-  // THE line that makes a thread a conversation: resume the engine session the
-  // thread already owns, so this turn sees every earlier turn. Without it each
-  // message would start from nothing and the chat would have no memory.
-  if (resumeSession) args.push("--resume", resumeSession);
-  // Omitted when unset rather than defaulted, so a run without a choice follows
-  // the CLI's current default instead of being pinned to a model that will age.
-  if (run.model) args.push("--model", run.model);
-  if (run.effort) args.push("--effort", run.effort);
-  // In a cloned workspace the run needs to be able to edit files, and print mode
-  // has no way to answer a permission prompt — an un-answerable prompt is a denial,
-  // so without this a repo run could only read. acceptEdits covers edits but NOT
-  // shell commands: pushing a branch requires the operator to opt into a stronger
-  // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
-  // operator already set a permission flag there, so their choice wins.
-  if (run.repo && !extra.some((a) => a.startsWith("--permission-mode") || a === "--dangerously-skip-permissions")) {
-    args.push("--permission-mode", "acceptEdits");
-  }
-  args.push(...extra);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 
+  /**
+   * The CLI args for one attempt. `resume` is a parameter, not a closed-over
+   * constant, precisely so the same turn can be re-run as a fresh session when the
+   * resume target turns out to be gone (the fallback below).
+   */
+  const buildArgs = (resume: string | null): string[] => {
+    const a = ["-p", promptText, "--output-format", "stream-json", "--verbose"];
+    // THE line that makes a thread a conversation: resume the engine session the
+    // thread already owns, so this turn sees every earlier turn. Without it each
+    // message would start from nothing and the chat would have no memory.
+    if (resume) a.push("--resume", resume);
+    // Omitted when unset rather than defaulted, so a run without a choice follows
+    // the CLI's current default instead of being pinned to a model that will age.
+    if (run.model) a.push("--model", run.model);
+    if (run.effort) a.push("--effort", run.effort);
+    // In a cloned workspace the run needs to be able to edit files, and print mode
+    // has no way to answer a permission prompt — an un-answerable prompt is a denial,
+    // so without this a repo run could only read. acceptEdits covers edits but NOT
+    // shell commands: pushing a branch requires the operator to opt into a stronger
+    // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
+    // operator already set a permission flag there, so their choice wins.
+    if (run.repo && !extra.some((x) => x.startsWith("--permission-mode") || x === "--dangerously-skip-permissions")) {
+      a.push("--permission-mode", "acceptEdits");
+    }
+    a.push(...extra);
+    return a;
+  };
+
+  // seq / buffer / flush are shared across attempts on purpose: every attempt's
+  // events land in the SAME run with one continuous seq, so the transcript is
+  // honest about a fallback having happened rather than hiding the first try.
   let seq = 0;
   const nextSeq = () => ++seq;
   let buffer: PendingEvent[] = [];
-  let sessionId: string | null = null;
-  let lastResult: string | null = null;
-  // The whole `result` event, kept because its usage/cost/turn figures are what
-  // the usage view is built from.
-  let resultEvent: Record<string, unknown> | null = null;
-  let stderrTail = "";
-  // A spawn failure (most often the binary not being found on the host) produces
-  // no stderr and a null exit code, so it has to be captured here or the run
-  // would be recorded as an unexplained "exit code null".
-  let spawnError: string | null = null;
 
   const flush = async () => {
     if (buffer.length === 0) return;
@@ -518,102 +520,170 @@ async function executeRunBody(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] event insert failed:", error.message);
   };
 
-  const child = spawn(bin, args, {
-    cwd: cwd || run.cwd || process.cwd(),
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  interface Attempt {
+    sessionId: string | null;
+    lastResult: string | null;
+    resultEvent: Record<string, unknown> | null;
+    stderrTail: string;
+    spawnError: string | null;
+    exitCode: number | null;
+    ok: boolean;
+  }
 
-  running.set(runId, child);
+  /**
+   * Spawn the engine once and collect its stream to completion. Extracted so a
+   * resume that finds no transcript can be retried as a fresh session without
+   * duplicating the stream-parsing machinery.
+   */
+  const runEngine = async (resume: string | null): Promise<Attempt> => {
+    const args = buildArgs(resume);
+    let sessionId: string | null = null;
+    let lastResult: string | null = null;
+    // The whole `result` event, kept because its usage/cost/turn figures are what
+    // the usage view is built from.
+    let resultEvent: Record<string, unknown> | null = null;
+    let stderrTail = "";
+    // A spawn failure (most often the binary not being found on the host) produces
+    // no stderr and a null exit code, so it has to be captured here or the run
+    // would be recorded as an unexplained "exit code null".
+    let spawnError: string | null = null;
 
-  const timer = setInterval(() => {
-    void flush();
-  }, FLUSH_INTERVAL_MS);
+    const child = spawn(bin, args, {
+      cwd: cwd || run.cwd || process.cwd(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
-  // SIGTERM first so the engine can close cleanly, then SIGKILL if it doesn't. With
-  // only SIGTERM, a child that ignores it never emits 'close' — the await below
-  // would never resolve, the run would sit in 'running' forever, and the cloned
-  // workspace (which holds the GitHub token in .git/config) would stay on disk.
-  let hardKillTimer: ReturnType<typeof setTimeout> | null = null;
-  const killTimer = setTimeout(() => {
-    child.kill("SIGTERM");
-    hardKillTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
-  }, timeoutMs);
+    running.set(runId, child);
 
-  let stdoutRest = "";
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    stdoutRest += chunk;
-    const lines = stdoutRest.split("\n");
-    stdoutRest = lines.pop() ?? "";
-    for (const raw of lines) {
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        // Not JSON — still worth keeping; the stream is the record.
+    const timer = setInterval(() => {
+      void flush();
+    }, FLUSH_INTERVAL_MS);
+
+    // SIGTERM first so the engine can close cleanly, then SIGKILL if it doesn't. With
+    // only SIGTERM, a child that ignores it never emits 'close' — the await below
+    // would never resolve, the run would sit in 'running' forever, and the cloned
+    // workspace (which holds the GitHub token in .git/config) would stay on disk.
+    let hardKillTimer: ReturnType<typeof setTimeout> | null = null;
+    const killTimer = setTimeout(() => {
+      child.kill("SIGTERM");
+      hardKillTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
+    }, timeoutMs);
+
+    let stdoutRest = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdoutRest += chunk;
+      const lines = stdoutRest.split("\n");
+      stdoutRest = lines.pop() ?? "";
+      for (const raw of lines) {
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch {
+          // Not JSON — still worth keeping; the stream is the record.
+          buffer.push({
+            seq: nextSeq(),
+            kind: "system",
+            text: truncate(trimmed),
+            tool_name: null,
+            payload: null,
+          });
+          continue;
+        }
+        const obj = parsed as Record<string, unknown>;
+        if (!sessionId && typeof obj.session_id === "string") sessionId = obj.session_id;
+        if (obj.type === "result") {
+          resultEvent = obj;
+          if (typeof obj.result === "string") lastResult = obj.result;
+        }
+        buffer.push(...mapLine(parsed, nextSeq));
+        if (buffer.length >= FLUSH_EVERY) void flush();
+      }
+    });
+
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      // Keep only the tail: stderr is diagnostics, and the run row is not a log sink.
+      stderrTail = `${stderrTail}${chunk}`.slice(-4000);
+    });
+
+    await new Promise<void>((resolve) => {
+      child.on("error", (err) => {
+        spawnError = `could not start '${bin}': ${err.message}`;
         buffer.push({
           seq: nextSeq(),
-          kind: "system",
-          text: truncate(trimmed),
+          kind: "error",
+          text: truncate(spawnError),
           tool_name: null,
           payload: null,
         });
-        continue;
-      }
-      const obj = parsed as Record<string, unknown>;
-      if (!sessionId && typeof obj.session_id === "string") sessionId = obj.session_id;
-      if (obj.type === "result") {
-        resultEvent = obj;
-        if (typeof obj.result === "string") lastResult = obj.result;
-      }
-      buffer.push(...mapLine(parsed, nextSeq));
-      if (buffer.length >= FLUSH_EVERY) void flush();
-    }
-  });
+        resolve();
+      });
+      child.on("close", () => resolve());
+    });
 
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
-    // Keep only the tail: stderr is diagnostics, and the run row is not a log sink.
-    stderrTail = `${stderrTail}${chunk}`.slice(-4000);
-  });
-
-  await new Promise<void>((resolve) => {
-    child.on("error", (err) => {
-      spawnError = `could not start '${bin}': ${err.message}`;
+    clearInterval(timer);
+    clearTimeout(killTimer);
+    if (hardKillTimer) clearTimeout(hardKillTimer);
+    // Off the registry the moment the process is gone, so a later cancel reports
+    // "nothing running" instead of signalling a recycled pid.
+    running.delete(runId);
+    if (stdoutRest.trim()) {
       buffer.push({
         seq: nextSeq(),
-        kind: "error",
-        text: truncate(spawnError),
+        kind: "system",
+        text: truncate(stdoutRest.trim()),
         tool_name: null,
         payload: null,
       });
-      resolve();
-    });
-    child.on("close", () => resolve());
-  });
+    }
+    await flush();
 
-  clearInterval(timer);
-  clearTimeout(killTimer);
-  if (hardKillTimer) clearTimeout(hardKillTimer);
-  // Off the registry the moment the process is gone, so a later cancel reports
-  // "nothing running" instead of signalling a recycled pid.
-  running.delete(runId);
-  if (stdoutRest.trim()) {
-    buffer.push({
-      seq: nextSeq(),
-      kind: "system",
-      text: truncate(stdoutRest.trim()),
-      tool_name: null,
-      payload: null,
-    });
+    const exitCode = child.exitCode;
+    return {
+      sessionId,
+      lastResult,
+      resultEvent,
+      stderrTail,
+      spawnError,
+      exitCode,
+      ok: spawnError === null && exitCode === 0,
+    };
+  };
+
+  let attempt = await runEngine(resumeSession);
+  // What the turn ACTUALLY resumed into. Diverges from resumeSession only when the
+  // fallback fires, and the thread/DB updates below key off this rather than the
+  // original request.
+  let effectiveResume = resumeSession;
+
+  // The one resume failure we can recover from: the engine session the DB remembers
+  // is simply gone — the container was recycled (Railway is ephemeral) or the
+  // workspace was swept between turns, so `--resume <id>` finds no transcript and
+  // the CLI aborts with "No conversation found with session ID: …". Left as-is this
+  // dead-ends EVERY follow-up on the thread. So retry once as a fresh session: the
+  // earlier context is already lost with the transcript, and continuing the chat
+  // beats refusing it. resumed_session=null makes the screen's "context lost" banner
+  // say exactly what happened. Guarded on `resumeSession` so a first turn (which
+  // never resumes) can't loop, and matched narrowly so an ordinary failure — an
+  // auth error, the user's own bug — is NOT silently re-run.
+  const resumeMissing =
+    !attempt.ok &&
+    /no conversation found|no conversation with session|session id .*not found|could not (?:find|resume) session/i.test(
+      `${attempt.lastResult ?? ""} ${attempt.stderrTail}`,
+    );
+  if (resumeSession && resumeMissing) {
+    console.warn(
+      `[claude/runner] resume ${resumeSession} not found for run ${runId} — retrying as a fresh session`,
+    );
+    effectiveResume = null;
+    attempt = await runEngine(null);
   }
-  await flush();
 
-  const exitCode = child.exitCode;
-  const ok = spawnError === null && exitCode === 0;
+  const { sessionId, lastResult, resultEvent, stderrTail, spawnError, exitCode, ok } = attempt;
 
   // A wrong paste in the token field surfaces as "401 Invalid bearer token" from
   // inside the stream, which reads like an outage rather than a misconfiguration.
@@ -631,6 +701,9 @@ async function executeRunBody(runId: string): Promise<void> {
   await finish({
     status: ok ? "done" : "failed",
     session_id: sessionId,
+    // Corrected here rather than trusting the value written before the spawn: if the
+    // fallback fired, this turn resumed nothing, and the row must say so.
+    resumed_session: effectiveResume,
     result_summary: truncate(lastResult === null ? null : redact(lastResult, ghToken)),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
@@ -658,9 +731,12 @@ async function executeRunBody(runId: string): Promise<void> {
     };
     // Written on EVERY turn, not only the first. `--resume` continues the
     // transcript under a NEW session id, so keeping the turn-1 id would make turn 3
-    // resume a transcript that ends at turn 1 — turn 2 silently lost. Guarded on a
-    // successful turn so a failure cannot replace a working session with nothing.
-    if (ok && sessionId && sessionId !== resumeSession) patch.session_id = sessionId;
+    // resume a transcript that ends at turn 1 — turn 2 silently lost. Compared
+    // against effectiveResume (what we actually resumed), so a fresh-session
+    // fallback correctly stores its brand-new id and the thread heals itself for
+    // the next turn. Guarded on a successful turn so a failure cannot replace a
+    // working session with nothing.
+    if (ok && sessionId && sessionId !== effectiveResume) patch.session_id = sessionId;
     const { error: tErr } = await db.from("claude_threads").update(patch).eq("id", run.thread_id);
     if (tErr) console.error("[claude/runner] thread update failed:", tErr.message);
   }

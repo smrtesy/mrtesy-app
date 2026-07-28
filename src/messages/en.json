@@ -4433,7 +4433,9 @@
     },
     "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
     "taskRouter": "Free-text task update",
-    "contextLost": "This turn started a new session — it does not know the earlier messages"
+    "contextLost": "This turn started a new session — it does not know the earlier messages",
+    "copyMessage": "Copy message",
+    "copied": "Copied"
   },
   "markdown": {
     "anchor": "Link to section {title}",
