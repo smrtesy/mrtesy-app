@@ -32,13 +32,6 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/common/Markdown";
@@ -61,6 +54,9 @@ const MODELS = [
   { id: "claude-sonnet-5", name: "Sonnet 5" },
   { id: "claude-fable-5", name: "Fable 5" },
   { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5" },
+  // Older models kept available on request. The id is sent to the engine verbatim,
+  // so only ids known to resolve are listed — a guessed id would fail the run.
+  { id: "claude-opus-4-8", name: "Opus 4.8" },
 ] as const;
 
 /** Opus by default, by request. A smarter per-task choice is a later job. */
@@ -182,6 +178,22 @@ export function ClaudeChat() {
   useEffect(() => {
     void loadThreads();
   }, [loadThreads]);
+
+  // Continue where you left off: open the most recent conversation automatically on
+  // arrival, so the screen is a running chat rather than a blank one every time.
+  // Fires ONCE (autoOpenedRef) — after that, "New chat" (activeId=null) and the poll
+  // that keeps refreshing `threads` must not yank the user back into a thread.
+  // A ?thread deep-link and an already-open thread both win over the auto-open.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current || loading) return;
+    autoOpenedRef.current = true;
+    if (deepLinkedRef.current || activeIdRef.current) return;
+    if (threads.length > 0) {
+      setActiveId(threads[0].id);
+      activeIdRef.current = threads[0].id;
+    }
+  }, [loading, threads]);
 
   useEffect(() => {
     if (activeId) void loadThread(activeId);
@@ -449,49 +461,12 @@ export function ClaudeChat() {
           </Button>
         </div>
 
-        {/* The one collapsed panel that holds everything else. */}
+        {/* The one collapsed panel that holds everything else. Model and effort used
+            to live here; they moved down to the composer toolbar (like Claude Code),
+            so the per-turn choices sit where you type and this panel keeps the
+            heavier, set-once configuration. */}
         {settingsOpen && (
           <div className="max-h-72 space-y-3 overflow-y-auto border-b bg-muted/20 p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={(thread?.model ?? (pending.model as string | undefined)) ?? DEFAULT_MODEL}
-                onValueChange={(v) => void patchThread({ model: v })}
-              >
-                <SelectTrigger className="h-8 w-64 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MODELS.map((m) => (
-                    <SelectItem key={m.id} value={m.id}>
-                      <span className="flex items-center gap-2">
-                        <span>{m.name}</span>
-                        <span dir="ltr" className="font-mono text-[10px] text-muted-foreground">
-                          {m.id}
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={(thread?.effort ?? (pending.effort as string | undefined)) ?? EFFORT_DEFAULT}
-                onValueChange={(v) => void patchThread({ effort: v === EFFORT_DEFAULT ? "" : v })}
-              >
-                <SelectTrigger className="h-8 w-32 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={EFFORT_DEFAULT}>{t("effortDefault")}</SelectItem>
-                  {EFFORTS.map((e) => (
-                    <SelectItem key={e} value={e}>
-                      {t(`effort.${e}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
             <RepoPicker
               locale={locale}
               repo={thread?.repo ?? ((pending.repo as string | null) ?? null)}
@@ -550,6 +525,13 @@ export function ClaudeChat() {
           busy={sending || !!liveTurn}
           onSend={send}
           onStop={() => void stop()}
+          models={MODELS}
+          model={(thread?.model ?? (pending.model as string | undefined)) ?? DEFAULT_MODEL}
+          onModelChange={(v) => void patchThread({ model: v })}
+          efforts={EFFORTS}
+          effort={(thread?.effort ?? (pending.effort as string | undefined)) || EFFORT_DEFAULT}
+          onEffortChange={(v) => void patchThread({ effort: v === EFFORT_DEFAULT ? "" : v })}
+          effortDefaultValue={EFFORT_DEFAULT}
         />
       </div>
     </div>
@@ -592,14 +574,17 @@ function TurnView({ turn }: { turn: Turn }) {
               className="mt-0.5"
             />
           )}
-          <div className="max-w-[85%] rounded-2xl bg-primary px-3 py-2 text-sm text-primary-foreground">
+          {/* Subtle tint + normal foreground, matching the app's own chat bubbles
+              (WhatsApp/SMS readers) — not the heavy primary fill with white text
+              the earlier version used, which was hard to read for a long message. */}
+          <div className="max-w-[85%] rounded-2xl bg-status-ok-bg px-3 py-2 text-sm text-foreground">
             {turn.user_prompt && (
-              <p className="whitespace-pre-wrap break-words" dir="auto">
+              <p className="whitespace-pre-wrap break-words text-start" dir="auto">
                 {turn.user_prompt}
               </p>
             )}
             {turn.attachments.length > 0 && (
-              <p className="mt-1 text-[11px] opacity-80" dir="auto">
+              <p className="mt-1 text-[11px] text-muted-foreground" dir="auto">
                 {turn.attachments.map((a) => a.filename).join(" · ")}
               </p>
             )}

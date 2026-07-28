@@ -18,6 +18,12 @@ import { Loader2, Paperclip, Send, Square, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { DictationButton } from "./DictationButton";
@@ -29,7 +35,12 @@ import { DictationButton } from "./DictationButton";
 // before any handler sees it. Promising 25MB here would be a lie the user only
 // discovers as an opaque error.
 const MAX_FILE_BYTES = 7 * 1024 * 1024;
-const MAX_ROWS_PX = 200;
+// Grow the input generously so a long message is visible without scrolling inside
+// the box (the request: "always show everything I write"). It still caps before it
+// could push the conversation off screen, then scrolls.
+const MAX_ROWS_PX = 360;
+/** ~3 lines: the box starts tall, like Claude Code, not a single cramped row. */
+const MIN_ROWS_PX = 76;
 
 export interface StagedAttachment {
   id: string;
@@ -53,6 +64,13 @@ export function ChatComposer({
   busy,
   onSend,
   onStop,
+  models,
+  model,
+  onModelChange,
+  efforts,
+  effort,
+  onEffortChange,
+  effortDefaultValue,
 }: {
   /** Null until a thread exists. Used only to decide whether one has to be created
    *  before an upload can be addressed to it. */
@@ -66,6 +84,17 @@ export function ChatComposer({
   busy: boolean;
   onSend: (message: string, attachmentIds: string[]) => Promise<void> | void;
   onStop: () => void;
+  /** Model + effort live in the toolbar under the input, like Claude Code, so the
+   *  per-turn choice sits where you type instead of behind the settings button. */
+  models: ReadonlyArray<{ id: string; name: string }>;
+  model: string;
+  onModelChange: (id: string) => void;
+  efforts: ReadonlyArray<string>;
+  /** The current effort, or `effortDefaultValue` when the thread lets the engine
+   *  pick — the Select never holds an empty string, which Radix forbids. */
+  effort: string;
+  onEffortChange: (value: string) => void;
+  effortDefaultValue: string;
 }) {
   const t = useTranslations("claudeChat");
   const [text, setText] = useState("");
@@ -74,13 +103,14 @@ export function ChatComposer({
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  // Grow with the content up to a ceiling, then scroll — a composer that grows
-  // without limit pushes the conversation off the screen.
+  // Grow with the content between a tall floor and a ceiling, then scroll — so
+  // everything typed stays visible, but the box can't push the conversation off the
+  // screen. Clamping to MIN keeps the resting height stable while the field is empty.
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_ROWS_PX)}px`;
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, MIN_ROWS_PX), MAX_ROWS_PX)}px`;
   }, [text]);
 
   const send = useCallback(async () => {
@@ -158,7 +188,10 @@ export function ChatComposer({
         </div>
       )}
 
-      <div className="flex items-end gap-1">
+      {/* One card: the input on top, a quiet toolbar underneath — the Claude Code
+          layout. The border lives on the card (not the textarea) so the toolbar
+          reads as part of the same field. */}
+      <div className="rounded-xl border bg-background focus-within:ring-1 focus-within:ring-ring">
         <textarea
           ref={areaRef}
           value={text}
@@ -180,10 +213,10 @@ export function ChatComposer({
               void upload(files);
             }
           }}
-          rows={1}
+          rows={3}
           dir="auto"
           placeholder={t("placeholder")}
-          className="max-h-[200px] min-h-9 flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="block max-h-[360px] min-h-[76px] w-full resize-none bg-transparent px-3 py-2.5 text-sm outline-none"
         />
 
         <input
@@ -193,46 +226,103 @@ export function ChatComposer({
           hidden
           onChange={(e) => void upload(e.target.files)}
         />
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="h-9 w-9 p-0"
-          disabled={uploading}
-          onClick={() => fileRef.current?.click()}
-          aria-label={t("attach")}
-          title={t("attach")}
-        >
-          {uploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
-        </Button>
 
-        <DictationButton iconOnly onText={(v) => setText((p) => (p.trim() ? `${p.trim()} ${v}` : v))} />
+        {/* Toolbar: model + effort on the leading edge (like Claude Code's
+            "Opus / High"), the actions on the trailing edge. */}
+        <div className="flex items-center justify-between gap-1 px-1.5 pb-1.5">
+          <div className="flex min-w-0 items-center gap-0.5">
+            <Select value={model} onValueChange={onModelChange}>
+              <SelectTrigger
+                className="h-7 w-auto gap-1 border-0 bg-transparent px-2 text-xs font-medium text-muted-foreground shadow-none hover:text-foreground focus:ring-0"
+                aria-label={t("modelLabel")}
+              >
+                {/* Only the friendly name in the chip — the full id still shows in
+                    the open list, so what runs stays visible without crowding here. */}
+                <span className="truncate">
+                  {models.find((m) => m.id === model)?.name ?? model}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    <span className="flex items-center gap-2">
+                      <span>{m.name}</span>
+                      <span dir="ltr" className="font-mono text-[10px] text-muted-foreground">
+                        {m.id}
+                      </span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-        {busy ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="destructive"
-            className="h-9 w-9 p-0"
-            onClick={onStop}
-            aria-label={t("stop")}
-            title={t("stop")}
-          >
-            <Square className="size-4" />
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            className={cn("h-9 w-9 p-0")}
-            disabled={!canSend}
-            onClick={() => void send()}
-            aria-label={t("send")}
-            title={t("send")}
-          >
-            <Send className="size-4" />
-          </Button>
-        )}
+            <Select value={effort} onValueChange={onEffortChange}>
+              <SelectTrigger
+                className="h-7 w-auto gap-1 border-0 bg-transparent px-2 text-xs font-medium text-muted-foreground shadow-none hover:text-foreground focus:ring-0"
+                aria-label={t("effortLabel")}
+              >
+                <span className="truncate">
+                  {effort === effortDefaultValue ? t("effortDefault") : t(`effort.${effort}`)}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={effortDefaultValue}>{t("effortDefault")}</SelectItem>
+                {efforts.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {t(`effort.${e}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-0.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+              aria-label={t("attach")}
+              title={t("attach")}
+            >
+              {uploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
+            </Button>
+
+            <DictationButton
+              iconOnly
+              className="h-8 w-8"
+              onText={(v) => setText((p) => (p.trim() ? `${p.trim()} ${v}` : v))}
+            />
+
+            {busy ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                className="h-8 w-8 p-0"
+                onClick={onStop}
+                aria-label={t("stop")}
+                title={t("stop")}
+              >
+                <Square className="size-4" />
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                className={cn("h-8 w-8 p-0")}
+                disabled={!canSend}
+                onClick={() => void send()}
+                aria-label={t("send")}
+                title={t("send")}
+              >
+                <Send className="size-4" />
+              </Button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -51,6 +51,45 @@ function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
 }
 
+/** Cap on the rehydrated history, in characters — enough for a real conversation,
+ *  bounded so a long thread cannot blow the engine's prompt budget. */
+const MAX_HISTORY_CHARS = 12_000;
+
+/**
+ * Rebuild the conversation so far from OUR database, for the case where there is no
+ * engine session to resume into — the thread never got one (its first turn failed
+ * before the engine ran, e.g. a missing GITHUB_TOKEN) or the transcript was lost on
+ * an ephemeral host. Without this a follow-up starts a blank session that cannot see
+ * what came before, so the chat reads as disconnected one-offs; with it the DB (the
+ * source of truth) rehydrates the context and the conversation continues. Returns
+ * null when there is nothing earlier to show.
+ */
+async function buildHistoryPreamble(threadId: string, beforeTurn: number): Promise<string | null> {
+  if (beforeTurn <= 1) return null;
+  const { data, error } = await db
+    .from("claude_runs")
+    .select("turn_index, user_prompt, result_summary")
+    .eq("thread_id", threadId)
+    .lt("turn_index", beforeTurn)
+    .order("turn_index", { ascending: true })
+    .limit(60);
+  if (error) {
+    console.error("[claude/threads] history fetch failed:", error.message);
+    return null;
+  }
+  const lines: string[] = [];
+  for (const r of data ?? []) {
+    if (r.user_prompt?.trim()) lines.push(`משתמש: ${r.user_prompt.trim()}`);
+    if (r.result_summary?.trim()) lines.push(`קלוד: ${r.result_summary.trim()}`);
+  }
+  if (lines.length === 0) return null;
+  let text = lines.join("\n\n");
+  // Keep the MOST RECENT history when over budget: the tail is what the next turn
+  // most needs, and a leading "…" marks that earlier turns were dropped.
+  if (text.length > MAX_HISTORY_CHARS) text = `…\n\n${text.slice(-MAX_HISTORY_CHARS)}`;
+  return `# ההיסטוריה של השיחה עד כה\n\n${text}`;
+}
+
 /**
  * Housekeeping hook for stale thread directories.
  *
@@ -384,6 +423,16 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   const composed = isFirst
     ? await composePrompt(orgId, message || "(ראה את הקבצים המצורפים)", thread.playbook_id)
     : { prompt: message || "(ראה את הקבצים המצורפים)", playbook: null };
+
+  // No engine session to resume, yet the thread already has turns — the first turn
+  // failed before a session was created (a missing token, say), so `isFirst` is true
+  // on what is really turn N. Rehydrate the earlier exchange from the DB so this
+  // fresh session still knows what was said, instead of answering as if the chat
+  // just began. (A normal follow-up resumes its session and skips this entirely.)
+  if (isFirst && turnIndex > 1) {
+    const history = await buildHistoryPreamble(thread.id, turnIndex);
+    if (history) composed.prompt = `${history}\n\n---\n\n${composed.prompt}`;
+  }
 
   const { data: run, error } = await db
     .from("claude_runs")
