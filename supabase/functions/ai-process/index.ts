@@ -5,7 +5,7 @@ import { anthropicCostUsdFromCounts, anthropicFamily } from "../_shared/ai-prici
 import {
   isWhatsApp, isConversational, threadKey,
   bodyForAI, bodyForClassify, hasMeetingInvite,
-  splitWhatsAppByHighWater, stripLoneSurrogates,
+  splitChatByHighWater, stripLoneSurrogates,
 } from "./message-body.ts";
 import {
   buildCategoryFilter, preClassify,
@@ -1470,7 +1470,7 @@ DIRECTION GUARD: do not invert payer/payee. If the user's org is the one
 RECEIVING money (merchant / payee), never title the task as the user needing
 to pay, update billing, or fix their own card.`;
 
-async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }, modelOverride?: string, waHighWater?: string | null) {
+async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any, userId: string, projectContext?: { projectId: string; brief: string }, modelOverride?: string, chatHighWater?: string | null) {
   // modelOverride is set only on the escalation pass (see end of function), so
   // the recursion is bounded to a single re-run on the stronger model.
   const model = modelOverride ?? sys.summary_model;
@@ -1541,8 +1541,8 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
   // so the builder extracts a task ONLY from messages newer than the last
   // burst already processed — stops days-old matters from being rebuilt as
   // fresh tasks stamped today (T736/T737). Non-WhatsApp bodies are unchanged.
-  const builderBody = isWhatsApp(msg) && waHighWater
-    ? splitWhatsAppByHighWater(bodyForClassify(msg, truncate), waHighWater)
+  const builderBody = chatHighWater
+    ? splitChatByHighWater(bodyForClassify(msg, truncate), chatHighWater)
     : bodyForClassify(msg, truncate);
   const userMessage = `${context ? context + "\n\n" : ""}From: ${msg.sender_email || msg.sender}\nTo: ${msg.recipient || ""}\nSubject: ${msg.subject || ""}\n\n${builderBody}`;
   // Mandatory output-contract addendum, appended AFTER the (possibly
@@ -1603,7 +1603,7 @@ async function createTasksFromMessage(msg: any, sys: SystemParams, settings: any
     sys.task_escalation_model &&
     sys.task_escalation_model !== model
   ) {
-    const escalated = await createTasksFromMessage(msg, sys, settings, userId, projectContext, sys.task_escalation_model, waHighWater);
+    const escalated = await createTasksFromMessage(msg, sys, settings, userId, projectContext, sys.task_escalation_model, chatHighWater);
     // Escalation must REFINE, never ERASE: if the base model extracted ≥1 task
     // (just low-confidence) and the stronger model returned ZERO, that is the
     // escalation second-guessing a real task out of existence — the merkazstam
@@ -3450,15 +3450,21 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
         // newer than this, so days-old matters that linger in the rolling
         // 20-message window aren't rebuilt as fresh tasks. whatsapp_echo rows
         // are independent per-memo (no rolling window), so they get no gate.
-        let waHighWater: string | null = null;
-        if (msg.source_type === "whatsapp") {
+        let chatHighWater: string | null = null;
+        // SMS was missing from this gate until 2026-07-28 even though its webhook
+        // builds the SAME rolling [INCOMING]/[OUTGOING] window — so every SMS burst
+        // re-presented days-old lines as new material and the builder dutifully made
+        // fresh tasks from them, stamped today. That is T1735/T1736 ("why is a
+        // message from a week ago coming back today?"): the WhatsApp fix (T736) was
+        // written source-type-specific and SMS silently never got it.
+        if (msg.source_type === "whatsapp" || msg.source_type === "sms") {
           const chatId = msg.metadata?.chatId as string | undefined;
           if (chatId) {
             const { data: prevBurst } = await supabase
               .from("source_messages")
               .select("received_at")
               .eq("user_id", msg.user_id)
-              .eq("source_type", "whatsapp")
+              .eq("source_type", msg.source_type)
               .eq("processing_status", "processed")
               .neq("id", msg.id)
               .filter("metadata->>chatId", "eq", chatId)
@@ -3466,10 +3472,10 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
               .order("received_at", { ascending: false })
               .limit(1)
               .maybeSingle();
-            waHighWater = (prevBurst?.received_at as string | null) ?? null;
+            chatHighWater = (prevBurst?.received_at as string | null) ?? null;
           }
         }
-        const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext, undefined, waHighWater);
+        const taskResult = await createTasksFromMessage(msg, sys, settings, msg.user_id, projectContext, undefined, chatHighWater);
         taskConfidence = taskResult.confidence;
         taskTrail = taskResult.taskTrail;
         totalInputTokens += taskResult.inputTokens;

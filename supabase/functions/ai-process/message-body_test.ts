@@ -13,7 +13,7 @@ import {
   hasMeetingInvite,
   isConversational,
   isWhatsApp,
-  splitWhatsAppByHighWater,
+  splitChatByHighWater,
   stripLoneSurrogates,
   threadKey,
 } from "./message-body.ts";
@@ -118,7 +118,7 @@ Deno.test("no meeting link means the body is returned unchanged", () => {
   assertEquals(bodyForClassify({ source_type: "gmail", body_text: body }, 2000), body);
 });
 
-// ── WhatsApp high-water split ──────────────────────────────────────────────
+// ── Chat high-water split (WhatsApp AND SMS) ───────────────────────────────
 
 const HEADER = "Chat: Dini\nPhone: +1-555-0100\n---";
 const OLD_LINE = "[INCOMING 2026-06-09T10:00:00] here are the materials";
@@ -126,24 +126,24 @@ const NEW_LINE = "[INCOMING 2026-06-12T09:00:00] can you put money in the cantee
 
 Deno.test("no high-water mark means the whole transcript is new", () => {
   const raw = `${HEADER}\n${OLD_LINE}\n${NEW_LINE}`;
-  assertEquals(splitWhatsAppByHighWater(raw, null), raw);
+  assertEquals(splitChatByHighWater(raw, null), raw);
   // An unparseable timestamp must fail OPEN to the same behaviour, never drop
   // the transcript.
-  assertEquals(splitWhatsAppByHighWater(raw, "not-a-date"), raw);
+  assertEquals(splitChatByHighWater(raw, "not-a-date"), raw);
 });
 
 Deno.test("everything already processed yields an explicit nothing-new marker (T736)", () => {
   // The rolling 20-message window kept re-presenting a days-old matter, and the
   // builder kept rebuilding it as a brand-new task stamped today.
   const raw = `${HEADER}\n${OLD_LINE}`;
-  const out = splitWhatsAppByHighWater(raw, "2026-06-10T00:00:00");
+  const out = splitChatByHighWater(raw, "2026-06-10T00:00:00");
   assertStringIncludes(out, "No new messages");
   assertFalse(out.includes("NEW MESSAGES"));
 });
 
 Deno.test("a mixed transcript is split into context and new material", () => {
   const raw = `${HEADER}\n${OLD_LINE}\n${NEW_LINE}`;
-  const out = splitWhatsAppByHighWater(raw, "2026-06-10T00:00:00");
+  const out = splitChatByHighWater(raw, "2026-06-10T00:00:00");
   assertStringIncludes(out, "EARLIER CONTEXT");
   assertStringIncludes(out, "NEW MESSAGES");
   // The old line must be present as context but below the marker; the new line
@@ -157,7 +157,7 @@ Deno.test("continuation lines inherit the timestamp of the line above them", () 
   // OCR output and multi-line message bodies carry no [ts] marker of their own.
   // Without carrying the bucket forward they'd land in the wrong section.
   const raw = [HEADER, OLD_LINE, "  (OCR) page two of the old doc", NEW_LINE, "  second line of the new ask"].join("\n");
-  const out = splitWhatsAppByHighWater(raw, "2026-06-10T00:00:00");
+  const out = splitChatByHighWater(raw, "2026-06-10T00:00:00");
   const boundary = out.indexOf("NEW MESSAGES");
   assert(out.indexOf("page two of the old doc") < boundary, "old continuation stays in context");
   assert(out.indexOf("second line of the new ask") > boundary, "new continuation stays in the new section");
@@ -172,4 +172,22 @@ Deno.test("stripLoneSurrogates drops dangling halves and keeps whole emoji", () 
   assertEquals(stripLoneSurrogates("cut \uD83D"), "cut ");
   assertEquals(stripLoneSurrogates("\uDE00 orphan low"), " orphan low");
   assertEquals(stripLoneSurrogates("plain ascii"), "plain ascii");
+});
+
+Deno.test("the high-water split is format-based, so an SMS transcript splits identically", () => {
+  // SMS was left out of the caller's gate until 2026-07-28 even though its
+  // webhook builds the same rolling window — every burst re-presented old lines
+  // and the builder made fresh tasks from them (T1735/T1736). The splitter
+  // itself was never WhatsApp-specific; only the call site was.
+  const smsRaw = [
+    "Chat: +1-555-0100",
+    "---",
+    "[INCOMING 2026-07-16T09:00:00] your order is ready for a delivery slot",
+    "[INCOMING 2026-07-23T11:56:00] reminder: pick a slot for Shabbos",
+  ].join("\n");
+  const out = splitChatByHighWater(smsRaw, "2026-07-20T00:00:00");
+  const boundary = out.indexOf("NEW MESSAGES");
+  assert(boundary > -1, "a mixed SMS transcript must be split, not passed through");
+  assert(out.indexOf("your order is ready") < boundary, "the week-old line is context");
+  assert(out.indexOf("pick a slot for Shabbos") > boundary, "only the new line is actionable");
 });
