@@ -142,10 +142,13 @@ export function StudioModels() {
     return () => clearTimeout(id);
   }, [load, term]);
 
-  /** Runs the catalog sweep. Free — it reads fal's catalog and schema endpoints,
-   *  never an inference endpoint, so no run is billed. The schema probe is
-   *  capped per call and skips what it already read, so pressing this again
-   *  walks the remaining endpoints rather than restarting. */
+  /** Runs the catalog sweep to completion. Free — it reads fal's catalog and
+   *  schema endpoints, never an inference endpoint, so no run is billed.
+   *
+   *  One press finishes it. The sweep covers ~1394 endpoints at 150 schemas a
+   *  round, so this used to mean pressing the button about seven times and
+   *  reading a countdown; the server now loops for us. It also runs itself
+   *  weekly, so this button is "refresh now", not the mechanism. */
   const runIndex = useCallback(async () => {
     setIndexing(true);
     setIndexNote(null);
@@ -155,21 +158,26 @@ export function StudioModels() {
         catalog_total: number;
         catalog_incomplete: boolean;
         models_written: number;
-        audio_probed_this_call: number;
-        audio_driving_found_this_call: number;
+        audio_probed_total_this_run: number;
+        audio_driving_found_this_run: number;
         audio_probe_remaining: number;
+        complete: boolean;
+        rounds: number;
       }>("/api/studio/models/index", { method: "POST", body: { probe_limit: 150 } });
       setIndexNote(
         [
           t("indexDone", {
             total: r.catalog_total,
             written: r.models_written,
-            probed: r.audio_probed_this_call,
-            driving: r.audio_driving_found_this_call,
+            probed: r.audio_probed_total_this_run,
+            driving: r.audio_driving_found_this_run,
             remaining: r.audio_probe_remaining,
           }),
-          // Never let a partial sweep read as a finished one — the previous
-          // indexer covered 76% of fal and reported success.
+          // A run that hit the deadline or the round cap is NOT a finished one,
+          // and must not read like one.
+          r.complete ? "" : t("indexPartial", { remaining: r.audio_probe_remaining }),
+          // Nor is a catalog pass that never reached fal's own reported total —
+          // the previous indexer covered 76% of fal and reported success.
           r.catalog_incomplete ? t("indexIncomplete") : "",
         ]
           .filter(Boolean)

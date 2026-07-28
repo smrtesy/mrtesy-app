@@ -4224,7 +4224,8 @@
     "priceUnpublished": "לא פורסם",
     "modelsAudioVideo": "וידאו שמקבל את האודיו שלנו",
     "indexIncomplete": "⚠️ הסריקה לא הגיעה לסך שfal מדווחת — הקטלוג חלקי, הרץ שוב.",
-    "modelsProbeIncomplete": "הסריקה עוד לא הושלמה — נקראה סכמה ל-{probed} מתוך {total} נקודות-קצה. לחץ \"הרץ סריקה\" כדי להמשיך."
+    "modelsProbeIncomplete": "הסריקה עוד לא הושלמה — נקראה סכמה ל-{probed} מתוך {total} נקודות-קצה. לחץ \"הרץ סריקה\" כדי להמשיך.",
+    "indexPartial": "נותרו {remaining} — נעצר לפני הסוף (מגבלת זמן). לחץ שוב כדי להמשיך."
   },
   "claudeRuns": {
     "title": "עבודות קלוד",

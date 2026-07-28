@@ -4225,7 +4225,8 @@
     "priceUnpublished": "Not published",
     "modelsAudioVideo": "Video taking our audio",
     "indexIncomplete": "⚠️ The sweep did not reach the total fal reports — the catalog is partial, run it again.",
-    "modelsProbeIncomplete": "The sweep is not finished — schemas read for {probed} of {total} endpoints. Press \"Run sweep\" to continue."
+    "modelsProbeIncomplete": "The sweep is not finished — schemas read for {probed} of {total} endpoints. Press \"Run sweep\" to continue.",
+    "indexPartial": "{remaining} left — stopped before finishing (time limit). Press again to continue."
   },
   "claudeRuns": {
     "title": "Claude runs",
