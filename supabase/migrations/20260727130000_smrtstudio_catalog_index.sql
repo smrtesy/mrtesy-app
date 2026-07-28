@@ -98,3 +98,33 @@ update public.studio_models
    and not exists (select 1 from public.studio_models x
                     where x.org_id = studio_models.org_id
                       and x.endpoint_id = 'resemble-ai/chatterboxhd/speech-to-speech');
+
+-- The first sweep re-filed curated rows: the audio probe set kind='video_audio'
+-- on anything audio-driven, including the six models a human had curated as
+-- 'lipsync'. That emptied the lip-sync category and lost the stage they belong
+-- to. Being audio-driven is a FACT (audio_input); the category is a JUDGEMENT
+-- and stays human. The probe no longer touches curated rows; this repairs the
+-- rows the earlier run changed.
+update public.studio_models
+   set kind = 'lipsync', stage_slug = 'lipsync', stage_order = 8
+ where verified_schema = true
+   and endpoint_id in (
+     'fal-ai/kling-video/ai-avatar/v2/standard',
+     'fal-ai/latentsync',
+     'fal-ai/musetalk',
+     'fal-ai/sync-lipsync/v2',
+     'fal-ai/bytedance/omnihuman/v1.5',
+     'veed/lipsync/v2'
+   );
+
+-- Pass 1 of the sweep rebuilds `kind` from fal's category, which reverted what
+-- the audio probe had decided on an earlier sweep: an endpoint fal files as
+-- image-to-video but which we probed as audio-driven went back to plain `video`,
+-- and pass 2 skipped it because it was already probed. So the video+audio count
+-- shrank on every re-run. The route now re-asserts the probe's verdict before
+-- pass 2; this repairs the rows the earlier runs reverted.
+update public.studio_models
+   set kind = 'video_audio', stage_slug = 'motion', stage_order = 7
+ where verified_schema = false
+   and audio_input = 'driving'
+   and kind <> 'video_audio';
