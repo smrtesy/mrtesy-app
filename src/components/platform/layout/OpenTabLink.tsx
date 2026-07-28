@@ -1,9 +1,35 @@
 "use client";
 
+import { useCallback } from "react";
 import Link from "next/link";
 import { isEmbeddedPane, requestOpenTab } from "@/lib/navigate";
 import { useOptionalTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
+
+/**
+ * Imperative twin of OpenTabLink — for when the target is only known after an
+ * async step (e.g. create a Claude thread, THEN open it). Same three cases:
+ * component pane → open a sibling tab; legacy iframe pane → bridge to the top
+ * window; outside a pane → navigate. Never opens a new BROWSER window.
+ */
+export function useOpenTab(): (href: string, label: string) => void {
+  const tabs = useOptionalTabsWorkspace();
+  const paneNav = useOptionalPaneNav();
+  return useCallback(
+    (href: string, label: string) => {
+      if (paneNav && tabs) {
+        tabs.openTab(href, label);
+        return;
+      }
+      if (isEmbeddedPane()) {
+        requestOpenTab(href, label);
+        return;
+      }
+      window.location.href = href;
+    },
+    [tabs, paneNav],
+  );
+}
 
 /**
  * A link that opens its target as a NEW tabs-workspace pane when clicked from

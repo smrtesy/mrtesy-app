@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
+import { useOpenTab } from "@/components/platform/layout/OpenTabLink";
 import { createClient } from "@/lib/supabase/client";
 import { api, getActiveOrgId } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,8 @@ const TYPE_CONFIG = {
 
 export function NotificationsList() {
   const t = useTranslations("inbox");
+  const locale = useLocale();
+  const openTab = useOpenTab();
   const supabase = createClient();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,7 +95,11 @@ export function NotificationsList() {
         `/api/corrections/${correctionId}/claude-thread`,
         { method: "POST", body: {} },
       );
-      window.open(thread_id ? `/claude?thread=${thread_id}` : "/claude", "_blank");
+      // Open as an in-app tab in the tabs-workspace, not a new browser window.
+      openTab(
+        thread_id ? `/${locale}/claude?thread=${thread_id}` : `/${locale}/claude`,
+        t("continueClaude"),
+      );
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
