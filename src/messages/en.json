@@ -1633,7 +1633,8 @@
     "exportNewPersonal": "Export new — just me ({count})",
     "exportAll": "Export everything (including already exported)",
     "exported": "Exported {count} corrections",
-    "nothingToExport": "Nothing new to export"
+    "nothingToExport": "Nothing new to export",
+    "noteHowTo": "Write a rule, not a question. \"A contract with no signature request is not a signing task\" is a rule the classifier can act on; \"why did this show up?\" is a bug report — it will be recorded and handled, but it won't change classification. Phrase it generally rather than about one message, and if an address or link matters, write it in full."
   },
   "calendarPage": {
     "noTitle": "(No title)",

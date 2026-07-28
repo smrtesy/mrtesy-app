@@ -444,6 +444,10 @@ async function getAppSecret(
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody): Promise<void> {
+  // One deadline for the whole delivery's media analysis, taken at the start so
+  // several voice notes in one POST share it instead of each getting a full
+  // ceiling of its own. See WHATSAPP_MEDIA_BUDGET_MS.
+  const mediaDeadline = Date.now() + WHATSAPP_MEDIA_BUDGET_MS;
   if (!payload.entry || payload.entry.length === 0) return;
 
   const perUser = new Map<string, NormalizedMessage[]>();
@@ -532,7 +536,7 @@ async function processWebhookPayload(db: SupabaseAdmin, payload: MetaWebhookBody
   for (const [userId, messages] of perUser.entries()) {
     if (messages.length === 0) continue;
     const accessToken = tokenByUser.get(userId) ?? null;
-    await processUserBatch(db, userId, messages, accessToken);
+    await processUserBatch(db, userId, messages, accessToken, mediaDeadline);
   }
 }
 
@@ -687,6 +691,7 @@ async function processUserBatch(
   userId: string,
   messages: NormalizedMessage[],
   accessToken: string | null,
+  mediaDeadline: number,
 ): Promise<void> {
   const isHistoryBatch = messages.some((m) => m.isHistory);
   const sessionId = await createRunSession(db, userId, "part2", "whatsapp").catch(() => null);
@@ -761,7 +766,7 @@ async function processUserBatch(
     }
 
     try {
-      const built = await buildMessageRow(db, userId, nm, accessToken);
+      const built = await buildMessageRow(db, userId, nm, accessToken, mediaDeadline);
       const { error } = await db
         .from("whatsapp_messages")
         .upsert(built, { onConflict: "user_id,wamid" });
@@ -909,6 +914,21 @@ async function closeRunSession(
 // AUDIO_TRANSCRIBE_MAX_BYTES, transcribeAudio and performImageOcr now live in
 // @/lib/media/gemini so the SMS/MMS webhook runs the SAME code, not a copy.
 
+/**
+ * Wall-clock budget for ALL Gemini analysis in one webhook delivery, and the
+ * floor below which a part is stored but not analysed.
+ *
+ * A per-CALL timeout is not enough here. Meta can deliver several messages in
+ * one POST, processUserBatch loops over them, and each voice note was free to
+ * take the full no-budget ceiling — so two long notes in one delivery could run
+ * ~90s against maxDuration = 60. The function then dies having written nothing
+ * and Meta redelivers the whole payload, which is how one voice note once became
+ * five paid Gemini calls. A delivery-wide deadline bounds the batch, not just its
+ * individual calls; the SMS webhook has had one since it was written.
+ */
+const WHATSAPP_MEDIA_BUDGET_MS = 40_000;
+const WHATSAPP_MIN_ANALYSIS_SLICE_MS = 6_000;
+
 // Has this exact wamid already been stored with a REAL transcript (not a
 // placeholder)? Used to skip re-transcribing on Meta webhook redelivery.
 // Returns the stored media fields too — the caller's upsert overwrites the
@@ -994,6 +1014,7 @@ async function buildMessageRow(
   userId: string,
   nm: NormalizedMessage,
   accessToken: string | null,
+  mediaDeadline: number,
 ): Promise<WhatsappMessageRow> {
   const m = nm.meta;
   const type = (m.type ?? "unknown").toLowerCase();
@@ -1072,11 +1093,19 @@ async function buildMessageRow(
             break;
           }
 
+          // Delivery budget: the audio is already stored above, so running out
+          // of time costs the transcript, never the recording.
+          const budgetMs = mediaDeadline - Date.now();
+          if (budgetMs < WHATSAPP_MIN_ANALYSIS_SLICE_MS) {
+            body = "[אודיו — נגמר הזמן לתמלול בקליטה, נשמר בלבד]";
+            break;
+          }
           const transcript = await transcribeAudio(
             db,
             blob.base64,
             blob.mimeType,
             "gemini.whatsapp",
+            budgetMs,
           );
           body = transcript;
         } catch (e) {
@@ -1132,11 +1161,18 @@ async function buildMessageRow(
           }
 
           try {
+            const budgetMs = mediaDeadline - Date.now();
+            if (budgetMs < WHATSAPP_MIN_ANALYSIS_SLICE_MS) {
+              // Stored above; only the OCR is skipped, and the caption survives.
+              body = caption || "[תמונה — נגמר הזמן ל-OCR בקליטה, נשמרה בלבד]";
+              break;
+            }
             const ocr = await performImageOcr(
               db,
               blob.base64,
               blob.mimeType,
               "gemini.whatsapp",
+              budgetMs,
             );
             body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
           } catch (e) {
