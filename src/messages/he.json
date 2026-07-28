@@ -222,7 +222,6 @@
     "studio": "smrtStudio",
     "studioModels": "קטלוג מודלים",
     "studioResearch": "מרכז מחקרים",
-    "studioInvestor": "דף משקיע",
     "claude": "קלוד"
   },
   "account": {
@@ -4056,7 +4055,6 @@
     "close": "סגור",
     "navModels": "קטלוג המודלים",
     "navResearch": "מרכז המחקרים",
-    "navInvestor": "דף המשקיע",
     "waitingTitle": "מה מחכה לך",
     "waitScore": "תוצרים לניקוד",
     "waitScoreSub": "הרצות שעדיין אין להן ציון",

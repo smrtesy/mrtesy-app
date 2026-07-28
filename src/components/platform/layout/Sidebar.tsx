@@ -16,7 +16,6 @@ import {
   FlaskConical,
   Clapperboard,
   Layers,
-  Presentation,
   PanelRightClose,
   PanelRightOpen,
   Mic,
@@ -100,7 +99,6 @@ const smrtStudioItems = [
   { key: "studio",         href: "/studio",          icon: Clapperboard },
   { key: "studioModels",   href: "/studio/models",   icon: Layers       },
   { key: "studioResearch", href: "/studio/research", icon: FlaskConical },
-  { key: "studioInvestor", href: "/studio/investor", icon: Presentation },
 ] as const;
 
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
