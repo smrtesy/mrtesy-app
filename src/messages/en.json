@@ -4255,7 +4255,11 @@
         "review": "Review",
         "content": "Content",
         "other": "Other"
-      }
+      },
+      "instructionsLabel": "Instruction body",
+      "codeView": "Code view",
+      "richView": "Rich editing",
+      "confirmDiscard": "Discard this edit? Unsaved changes will be lost."
     },
     "instructions": {
       "title": "Standing instructions",

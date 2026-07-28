@@ -4254,7 +4254,11 @@
         "review": "סקירה",
         "content": "תוכן",
         "other": "אחר"
-      }
+      },
+      "instructionsLabel": "גוף ההוראות",
+      "codeView": "תצוגת קוד",
+      "richView": "עריכה מעוצבת",
+      "confirmDiscard": "לבטל את העריכה? השינויים שלא נשמרו יאבדו."
     },
     "instructions": {
       "title": "הוראות קבועות",
