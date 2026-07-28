@@ -144,10 +144,28 @@ the message body.
   app. The app side already namespaces `mms:downloaded` ids as `mmsdl:<id>` to
   keep them from colliding with `content://sms` ids.
 
-## The fork patch — DONE on `claude/mms-attachments-on-sent-observed`
+## The fork patch — MERGED to `master` (`4d8ac63`, 2026-07-28)
 
 Kept below as the record of what was changed and why. The incoming reader and
 payload already existed; only the outgoing emit and the size budget were added.
+
+Merged from `claude/mms-attachments-on-sent-observed` after CI compiled it —
+`Build Debug APK (fork)` run
+[30336827007](https://github.com/smrtesy/android-sms-gateway/actions/runs/30336827007)
+ran `./gradlew assembleDebug` green and uploaded an APK, which is the only
+compile this change gets (no Android SDK in the Claude Code sandbox, by design).
+
+**Installable APK** (artifact expires 2026-10-26):
+https://github.com/smrtesy/android-sms-gateway/actions/runs/30336827007/artifacts/8679512605
+
+Note that the workflow triggers on `claude/**` branches only, so the push to
+`master` does not rebuild — the artifact above is built from the identical tree
+(`4d8ac63`).
+
+**Still required on the phone before ANY of this carries media:** register the
+`mms:downloaded` webhook — see "Device setup after the APK is installed" below.
+Without it the incoming direction never fires at all; the outgoing direction this
+patch fixes works off `mms:sent-observed`, which is already registered.
 
 ### Original plan (superseded — the reader already did most of this)
 
