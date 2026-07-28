@@ -367,6 +367,57 @@ The goal is to catch bugs in the same session that introduced them, so the
 user never sees a stream of "push → bot finds bug → push again" round trips.
 The standard is **zero findings from Claude Code Review on the first push.**
 
+### Step 0 — A justification is a trigger to read, never a substitute for reading
+
+This step runs **while you author the change**, not before the push. It is
+first because the failure it prevents happens at write time, and every
+end-of-line check below is too late to catch it cheaply.
+
+**The rule:** the moment you write a sentence explaining why a change is
+complete / sufficient / safe / covers every case — in a code comment, a commit
+message, or a reply to the user — **stop and read the code path end to end.**
+That sentence is a claim, not a check. Then either:
+
+- **Keep it, with the evidence**: a claim of completeness must cite the
+  `file:line` it was verified against. "Handles every state" is worthless;
+  "all seven states in the task `status` union (`src/types/task.ts:34`) are
+  handled" is checkable by the next reader — including a reviewer who wants to
+  prove you wrong. (That union is the real example: `pending_completion` is the
+  state the delayed-silent-close bug below hid in.)
+- **Or delete it.** An uncited completeness claim in a comment is worse than no
+  comment: it tells the next session the path was verified when it wasn't, so
+  the bug gets read past instead of found.
+
+**Longer reasoning makes this failure worse, not better.** More thinking
+produces a more airtight-sounding justification for the same unverified claim —
+it raises your confidence without touching the facts. Depth of reasoning is
+never a substitute for a lookup. If the answer is checkable, check it.
+
+**The three classes that actually bit us** — each with the question to answer
+by reading, not by reasoning:
+
+| Class | The question, answered from the code |
+|---|---|
+| State machines / enums | Did I enumerate the states from the type definition, or from memory? Read the enum. A state I forgot is a silent no-op or a delayed write. |
+| Sweeps, deletes, resets, "recovery" paths | What is the actual blast radius of this `WHERE` clause / this loop? Run the SELECT before writing the DELETE. |
+| Cross-references | Does the target exist — the section heading, the anchor, the function, the column, the i18n key? Grep for it. |
+
+**Evidence this is real, not hygiene theatre** (2026-07-28): four review rounds
+in one session found **seven** of my own fixes incomplete. Two were dangerous —
+a "user confirms" state that was a delayed silent close (the exact bug the
+change existed to prevent), and a recovery sweep that would have deleted the
+five live classifier rules it was built to protect. In **three** of the seven,
+the fix was incomplete *precisely where I had written out why it was
+sufficient* — confidence was inversely correlated with correctness. That
+inversion is the signature of this failure, and the justification-sentence is
+its earliest visible symptom.
+
+Note this is the same lesson as "A model may propose; only code may confirm a
+checkable fact" further down this file, turned on the agent's own workflow
+rather than on the product's AI calls. That section was written, and the code
+checks it demands were built, *during the same session that produced the seven
+partial fixes*. Shipping the rule is not following it.
+
 ### Step 1 — Real build (not just tsc)
 
 ```
