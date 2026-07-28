@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
+import { useScreenSearchParams } from "@/lib/panes/nav";
 import {
   ChevronDown,
   ChevronRight,
@@ -134,6 +135,21 @@ export function ClaudeChat() {
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+
+  // Deep-link: /claude?thread=<id> opens straight onto that conversation (e.g.
+  // the "continue with Claude" button on a correction). Applied ONCE, so the
+  // user can freely switch threads afterwards without the URL yanking them back.
+  const screenSearch = useScreenSearchParams();
+  const deepLinkedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkedRef.current) return;
+    const tid = screenSearch.get("thread");
+    if (tid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tid)) {
+      deepLinkedRef.current = true;
+      setActiveId(tid);
+      activeIdRef.current = tid;
+    }
+  }, [screenSearch]);
 
   const loadThreads = useCallback(async () => {
     try {

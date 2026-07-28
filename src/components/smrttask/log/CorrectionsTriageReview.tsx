@@ -125,8 +125,12 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
         // A code/ui approval may have spawned a fix thread (autofix on). Point the
         // user at the live conversation to watch it implement + open the PR.
         if (decision === "approve" && resp?.fix_thread_id) {
+          const fixId = resp.fix_thread_id;
           toast.success(t("triageFixStarted"), {
-            action: { label: t("triageFixOpen"), onClick: () => window.open("/claude", "_blank") },
+            action: {
+              label: t("triageFixOpen"),
+              onClick: () => window.open(`/claude?thread=${fixId}`, "_blank"),
+            },
           });
         } else {
           toast.success(decision === "approve" ? t("triageApproved") : t("triageRejected"));
@@ -148,9 +152,13 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
     async (c: Correction) => {
       setClaudeBusyId(c.id);
       try {
-        await api(`/api/corrections/${c.id}/claude-thread`, { method: "POST", body: {} });
+        const { thread_id } = await api<{ thread_id: string }>(
+          `/api/corrections/${c.id}/claude-thread`,
+          { method: "POST", body: {} },
+        );
         toast.success(t("triageFixStarted"));
-        window.open("/claude", "_blank");
+        // Deep-link straight onto the new conversation (ClaudeChat reads ?thread=).
+        window.open(thread_id ? `/claude?thread=${thread_id}` : "/claude", "_blank");
       } catch (e) {
         toast.error(e instanceof Error ? e.message : String(e));
       } finally {
