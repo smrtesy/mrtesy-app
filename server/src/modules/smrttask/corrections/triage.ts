@@ -318,6 +318,23 @@ async function runTriage(correctionId: string): Promise<void> {
     // rule — the exact wording awaiting approval, so the user decides from the
     // inbox without opening anything.
     const label = CLASS_LABEL_HE[effective.prompt_class];
+
+    // Lead the title with the task's serial (e.g. "T1740"), the way the
+    // cross-party detector's title already does. Without it the inbox showed a
+    // bare "תיקון מיון: …" with no hint of WHICH task the correction came from.
+    // A correction with no task (scope-general feedback) gets no prefix rather
+    // than a fake serial.
+    let serialPrefix = "";
+    if (correction.task_id) {
+      const { data: task } = await db
+        .from("tasks")
+        .select("serial_display")
+        .eq("id", correction.task_id as string)
+        .maybeSingle();
+      const serial = (task?.serial_display as string | null) ?? null;
+      if (serial) serialPrefix = `${serial} · `;
+    }
+
     const bodyLines = [
       `התיקון: ${note.slice(0, 200)}`,
       `מיון: ${label} — ${effective.reason_he}`,
@@ -334,7 +351,7 @@ async function runTriage(correctionId: string): Promise<void> {
     await notify(orgId, userId, {
       app_slug: "smrttask",
       type: effective.prompt_class === "prompt" ? "action_required" : "info",
-      title: `תיקון מוין: ${label}`,
+      title: `${serialPrefix}תיקון מיון: ${label}`,
       body: bodyLines.join("\n"),
       link: "/log",
       entity_type: "task_correction",
