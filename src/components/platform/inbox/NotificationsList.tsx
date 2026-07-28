@@ -179,9 +179,26 @@ export function NotificationsList() {
                     )}
                   </div>
                   {n.body && (
-                    <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-line" dir="auto">
-                      {n.body}
-                    </p>
+                    <div className="mt-1 space-y-0.5" dir="auto">
+                      {n.body.split("\n").map((line, i) => {
+                        const done = line.trimStart().startsWith("✓");
+                        const ask = line.trimStart().startsWith("❓");
+                        return (
+                          <p
+                            key={i}
+                            className={
+                              done
+                                ? "text-xs text-foreground"
+                                : ask
+                                  ? "text-xs font-medium text-foreground"
+                                  : "text-xs text-muted-foreground"
+                            }
+                          >
+                            {line}
+                          </p>
+                        );
+                      })}
+                    </div>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-1">
                     {(() => {
