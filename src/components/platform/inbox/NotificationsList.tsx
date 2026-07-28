@@ -158,7 +158,9 @@ export function NotificationsList() {
                     )}
                   </div>
                   {n.body && (
-                    <p className="text-xs text-muted-foreground mt-0.5">{n.body}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-line" dir="auto">
+                      {n.body}
+                    </p>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-1">
                     {(() => {

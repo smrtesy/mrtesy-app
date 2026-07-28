@@ -82,8 +82,12 @@ export async function createFixThread(
   orgId: string,
   userId: string,
   fixCtx: FixContext,
+  opts: { force?: boolean } = {},
 ): Promise<string | null> {
-  if (!autofixEnabled()) return null;
+  // The auto-on-approval path is gated by the flag; a user who explicitly taps
+  // "continue with Claude" is initiating it themselves (like opening Claude on a
+  // task), so `force` bypasses the flag for that human-driven case only.
+  if (!opts.force && !autofixEnabled()) return null;
   try {
     const title = `תיקון אוטומטי: ${fixCtx.serial ?? ""} ${fixCtx.note}`.trim().slice(0, 120);
 

@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Gavel, Check, X } from "lucide-react";
+import { Gavel, Check, X, Bot } from "lucide-react";
 
 /** Mirrors the server's PromptClass. Only "prompt" can reach the classifier. */
 type PromptClass =
@@ -73,6 +73,7 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
   const [rows, setRows] = useState<Correction[]>([]);
   const [edited, setEdited] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [claudeBusyId, setClaudeBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -138,6 +139,25 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
       }
     },
     [edited, load, t],
+  );
+
+  // "Continue with Claude" — open a Claude conversation seeded with this
+  // correction so the user can drive the fix to completion. Human-initiated, so
+  // it works regardless of the auto-fix flag.
+  const continueWithClaude = useCallback(
+    async (c: Correction) => {
+      setClaudeBusyId(c.id);
+      try {
+        await api(`/api/corrections/${c.id}/claude-thread`, { method: "POST", body: {} });
+        toast.success(t("triageFixStarted"));
+        window.open("/claude", "_blank");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+      } finally {
+        setClaudeBusyId(null);
+      }
+    },
+    [t],
   );
 
   // Quiet when there is nothing to decide — no permanent chrome.
@@ -208,7 +228,18 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                       )}
                     </div>
                   )}
-                  <div className="flex items-center justify-end gap-2">
+                  <div className="flex items-center justify-end gap-2 flex-wrap">
+                    {(cls === "code" || cls === "ui") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={claudeBusyId === c.id}
+                        onClick={() => continueWithClaude(c)}
+                      >
+                        <Bot className="me-1 h-3.5 w-3.5" />
+                        {t("triageContinueClaude")}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"

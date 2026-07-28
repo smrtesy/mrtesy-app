@@ -356,6 +356,82 @@ router.post("/corrections/export", async (req: Request, res: Response) => {
   res.json({ export: payload, batch });
 });
 
+/**
+ * POST /corrections/:id/claude-thread — "continue with Claude".
+ *
+ * Human-initiated (a tap), so it is NOT gated by SMRTTASK_CORRECTIONS_AUTOFIX:
+ * opening a Claude conversation on your own correction is exactly what the task
+ * ClaudeLauncher already does. Creates a fix thread seeded with the correction's
+ * context and starts it, then returns the thread id so the client can open it.
+ */
+router.post("/corrections/:id/claude-thread", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  const { data: c, error: findErr } = await db
+    .from("task_corrections")
+    .select("id, context, note, task_id, source_message_id, organization_id")
+    .eq("id", id)
+    .eq("user_id", req.user!.id)
+    .eq("app_slug", "smrttask")
+    .maybeSingle();
+  if (findErr) return res.status(500).json({ error: findErr.message });
+  if (!c) return res.status(404).json({ error: "not_found" });
+
+  const ctx = (c.context ?? {}) as Record<string, unknown>;
+  const tri = (ctx.triage ?? {}) as Record<string, unknown>;
+  const cls: "code" | "ui" = ctx.prompt_class === "ui" ? "ui" : "code";
+
+  let serial: string | null = null;
+  let taskTitle: string | null = null;
+  if (c.task_id) {
+    const { data: task } = await db
+      .from("tasks")
+      .select("serial_display, title_he")
+      .eq("id", c.task_id as string)
+      .maybeSingle();
+    serial = (task?.serial_display as string | null) ?? null;
+    taskTitle = (task?.title_he as string | null) ?? null;
+  }
+  let msgSubject: string | null = null;
+  let msgSender: string | null = null;
+  if (c.source_message_id) {
+    const { data: sm } = await db
+      .from("source_messages")
+      .select("subject, sender, sender_email")
+      .eq("id", c.source_message_id as string)
+      .maybeSingle();
+    msgSubject = (sm?.subject as string | null) ?? null;
+    msgSender = ((sm?.sender ?? sm?.sender_email) as string | null) ?? null;
+  }
+
+  const threadId = await createFixThread(
+    id,
+    cls,
+    (c.organization_id as string) ?? req.org!.id,
+    req.user!.id,
+    {
+      note: String(c.note ?? ""),
+      understood_he: (tri.understood_he as string | null) ?? null,
+      reason_he: (tri.reason_he as string | null) ?? null,
+      serial,
+      task_title: taskTitle,
+      msg_subject: msgSubject,
+      msg_sender: msgSender,
+    },
+    { force: true },
+  );
+  if (!threadId) return res.status(500).json({ error: "could not open thread" });
+
+  // Record the link so the correction and its Claude conversation stay tied.
+  const nextContext = { ...ctx, execution: { thread_id: threadId, at: new Date().toISOString() } };
+  await db
+    .from("task_corrections")
+    .update({ context: nextContext, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("user_id", req.user!.id);
+
+  res.status(201).json({ thread_id: threadId });
+});
+
 /** GET /corrections/exports — history of export batches. */
 router.get("/corrections/exports", async (req: Request, res: Response) => {
   const { data, error } = await db

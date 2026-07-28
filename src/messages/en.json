@@ -1654,7 +1654,8 @@
     "triageClass_unclear": "Unclear",
     "triageUnderstood": "Understood: {text}",
     "triageFixStarted": "Fix started — Claude is implementing it and opening a PR",
-    "triageFixOpen": "View the conversation"
+    "triageFixOpen": "View the conversation",
+    "triageContinueClaude": "Continue with Claude"
   },
   "calendarPage": {
     "noTitle": "(No title)",

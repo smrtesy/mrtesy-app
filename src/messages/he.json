@@ -1654,7 +1654,8 @@
     "triageClass_unclear": "לא ברור",
     "triageUnderstood": "הבנתי: {text}",
     "triageFixStarted": "התיקון התחיל לרוץ — Claude מיישם ופותח PR",
-    "triageFixOpen": "צפה בשיחה"
+    "triageFixOpen": "צפה בשיחה",
+    "triageContinueClaude": "המשך עם Claude"
   },
   "calendarPage": {
     "noTitle": "(ללא כותרת)",
