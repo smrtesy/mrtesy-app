@@ -17,8 +17,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
+import { useLocale } from "next-intl";
+
 import { api } from "@/lib/api/client";
 import { Skeleton } from "@/components/ui/skeleton";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 
 import type {
   StudioItem,
@@ -94,6 +97,59 @@ function vars(o: Record<string, string | number>): CSSProperties {
   return o as unknown as CSSProperties;
 }
 
+/** An in-app target returns its path (so it can open as a workspace tab); an
+ *  external target (github, google docs, …) returns null and stays a normal
+ *  new-browser-tab link. In-app = a relative path, this app's own origin, or the
+ *  production host app.smrtesy.com (the host check is SSR-safe; same-origin is a
+ *  fallback for preview domains, evaluated only on the client). */
+function toInAppPath(url: string): string | null {
+  if (!url) return null;
+  if (url.startsWith("/")) return url;
+  try {
+    const u = new URL(url);
+    const sameOrigin = typeof window !== "undefined" && u.origin === window.location.origin;
+    if (u.host === "app.smrtesy.com" || sameOrigin) return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    /* not an absolute URL — treat as external */
+  }
+  return null;
+}
+
+/** Renders a studio deep link. In-app targets open as a NEW workspace tab
+ *  (never a new browser window) via OpenTabLink; external targets open in a new
+ *  browser tab. `label` is the header of the tab an in-app link opens. */
+function StudioLink({
+  url,
+  label,
+  className,
+  style,
+  children,
+}: {
+  url: string;
+  label: string;
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
+  const locale = useLocale();
+  const inApp = toInAppPath(url);
+  if (inApp) {
+    // OpenTabLink wants a locale-prefixed href; add it unless the path already
+    // carries a locale segment.
+    const href = /^\/(he|en)(\/|$)/.test(inApp) ? inApp : `/${locale}${inApp}`;
+    return (
+      <OpenTabLink href={href} label={label} className={className}>
+        {children}
+      </OpenTabLink>
+    );
+  }
+  return (
+    <a className={className} style={style} href={url} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  );
+}
+
 /* ── scoped stylesheet (ported from the approved mockup) ─────────────────── */
 
 const CSS = `
@@ -153,7 +209,7 @@ const CSS = `
 .ss-ring{--p:0;width:34px;height:34px;border-radius:50%;flex:none;background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-2) 0);display:grid;place-items:center}
 .ss-ring span{width:24px;height:24px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:9.5px;font-weight:800;font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-.ss-shell{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:18px;align-items:start;direction:ltr}
+.ss-shell{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:36px;align-items:start;direction:ltr}
 .ss-nav{display:flex;flex-direction:column;gap:8px;position:sticky;top:14px}
 .ss-nav-head{display:flex;align-items:baseline;justify-content:space-between;padding:2px 4px 4px}
 .ss-nav-head b{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
@@ -338,10 +394,10 @@ function TaskRow({ item }: { item: StudioItem }) {
         </span>
         <span className="desc">{item.desc}</span>
         {item.link_url ? (
-          <a className="lnk" href={item.link_url} target="_blank" rel="noopener noreferrer">
+          <StudioLink className="lnk" url={item.link_url} label={item.link_label || item.title}>
             <Svg paths={ICON.doc} />
             {item.link_label || "link"} ↗
-          </a>
+          </StudioLink>
         ) : null}
       </span>
     </div>
@@ -424,9 +480,9 @@ function PlanCard({ stage }: { stage: StudioStage }) {
           </div>
           <div className="pl-desc">{p.desc}</div>
           {p.smrtplan_url ? (
-            <a className="pl-link" href={p.smrtplan_url} target="_blank" rel="noopener noreferrer">
+            <StudioLink className="pl-link" url={p.smrtplan_url} label="smrtPlan">
               Open plan in smrtPlan ↗
-            </a>
+            </StudioLink>
           ) : null}
         </div>
       </div>
@@ -547,16 +603,15 @@ function FocusView({
                   </>
                 );
                 return o.link_url ? (
-                  <a
+                  <StudioLink
                     className="ss-out"
-                    href={o.link_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    url={o.link_url}
+                    label={o.label}
                     style={{ textDecoration: "none", color: "inherit" }}
                     key={`${o.label}-${i}`}
                   >
                     {inner}
-                  </a>
+                  </StudioLink>
                 ) : (
                   <div className="ss-out" key={`${o.label}-${i}`}>
                     {inner}
