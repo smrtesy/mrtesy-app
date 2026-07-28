@@ -37,6 +37,13 @@ export interface AppDef {
   guideHref: string;
   /** Path to the app's settings tab inside /settings. */
   settingsHref: string;
+  /**
+   * Per-app accent color (hex). Rendered as the thin category bar beside the
+   * app name in the sidebar section header. Applied via inline style so the
+   * arbitrary hex survives Tailwind's purge. Chosen to read on both the light
+   * and dark sidebar backgrounds (mid-tone, not too pale / not too dark).
+   */
+  color: string;
 }
 
 export const APPS: Record<string, AppDef> = {
@@ -46,6 +53,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtTaskIcon,
     guideHref: "/tasks/guide",
     settingsHref: "/settings/apps/smrttask",
+    color: "#3b82f6",
   },
   smrtvoice: {
     slug: "smrtvoice",
@@ -53,6 +61,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtVoiceIcon,
     guideHref: "/voice/guide",
     settingsHref: "/settings/apps/smrtvoice",
+    color: "#8b5cf6",
   },
   smrtcrm: {
     slug: "smrtcrm",
@@ -60,6 +69,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtCRMIcon,
     guideHref: "/crm/guide",
     settingsHref: "/settings/apps/smrtcrm",
+    color: "#10b981",
   },
   smrtreach: {
     slug: "smrtreach",
@@ -67,6 +77,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtReachIcon,
     guideHref: "/reach/guide",
     settingsHref: "/settings/apps/smrtreach",
+    color: "#f59e0b",
   },
   smrtbot: {
     slug: "smrtbot",
@@ -74,6 +85,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtBotIcon,
     guideHref: "/bots/guide",
     settingsHref: "/settings/apps/smrtbot",
+    color: "#06b6d4",
   },
   smrtplan: {
     slug: "smrtplan",
@@ -81,6 +93,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtPlanIcon,
     guideHref: "/plan/guide",
     settingsHref: "/settings/apps/smrtplan",
+    color: "#ec4899",
   },
   smrtvault: {
     slug: "smrtvault",
@@ -88,6 +101,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtVaultIcon,
     guideHref: "/vault/guide",
     settingsHref: "/settings/apps/smrtvault",
+    color: "#64748b",
   },
   smrtinfo: {
     slug: "smrtinfo",
@@ -95,6 +109,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtInfoIcon,
     guideHref: "/info/guide",
     settingsHref: "/settings/apps/smrtinfo",
+    color: "#14b8a6",
   },
   smrtstudio: {
     slug: "smrtstudio",
@@ -102,6 +117,7 @@ export const APPS: Record<string, AppDef> = {
     Icon: SmrtStudioIcon,
     guideHref: "/studio",
     settingsHref: "/settings/apps/smrtstudio",
+    color: "#a855f7",
   },
 };
 
