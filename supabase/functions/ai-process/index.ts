@@ -1142,7 +1142,14 @@ async function appendUpdateToTask(
       .select("due_date")
       .eq("user_id", msg.user_id)
       .or(`id.eq.${seriesKey},recurrence_parent_id.eq.${seriesKey}`)
-      .in("status", ["archived", "completed"]);
+      // "dismissed" belongs here and was missing. It is the status the followup
+      // auto-close writes (both the branch below and reminders-check), so a
+      // series whose previous occurrence was auto-resolved looked to this guard
+      // like it had no closed sibling at all — and the completion confirming
+      // that closed cycle landed on the next, snoozed occurrence instead. That
+      // is the exact June-salary bug this guard was written for, reachable again
+      // through the cross-source link route.
+      .in("status", ["archived", "completed", "dismissed"]);
     staleCompletionForFuture = futureGap !== null && (closedSibs ?? []).some((s) => {
       const gap = dayDiff(signalDate, s.due_date as string | null);
       return gap !== null && gap < futureGap;
@@ -1232,6 +1239,17 @@ async function appendUpdateToTask(
       updateFields.status = "pending_completion";
       updateFields.completion_signal_detected = true;
       updateFields.completion_signal_reason = analysis.completionReason;
+      // Clearing the snooze is what makes "the user confirms" actually true, and
+      // it is NOT cosmetic. reminders-check wakes every task whose snoozed_until
+      // has passed and which isn't archived/completed/dismissed —
+      // pending_completion passes that filter — and then auto-dismisses any
+      // task_type="followup" carrying completion_signal_detected. So leaving a
+      // tracker's future snoozed_until in place turned this confirm state into a
+      // DELAYED silent close: 40 hours after the link, the task the user was
+      // supposed to confirm dismissed itself. That is T1256 again, just late.
+      // The wake query requires a non-null snoozed_until, so nulling it closes
+      // the path outright rather than racing it.
+      updateFields.snoozed_until = null;
     }
   } else if (classification === "actionable" && existing?.status === "snoozed") {
     // An actionable follow-up landed on a snoozed matter. Snooze means "remind
@@ -2612,13 +2630,25 @@ async function linkAndEnrichDuplicate(
     // dropped because a linked message is EVIDENCE, never a re-definition of the
     // matter; a completion verdict IS evidence, so it belongs.
     //
-    // What makes it safe to honour: this function is only reached at confidence
-    // "high", which by construction means findDuplicateOpenTask's code-level
-    // party veto did not fire (a conflict downgrades to "medium", and medium
-    // only ever raises the merge-suggestion banner). And opts.confirmOnly below
-    // keeps the outcome at pending_completion — the user still confirms — so
-    // honouring the verdict cannot become a new silent-close path (T1256,
-    // "the task closes by itself", is the complaint on the other side of this).
+    // What makes it safe to honour is the OUTCOME, not the identity check. Be
+    // precise about the latter, because an earlier version of this comment
+    // overstated it and a wrong reason invites the next reader to lean on it:
+    // all three call sites do gate on confidence "high", but "high" does NOT
+    // mean the party veto proved the parties are the same. It means no conflict
+    // was PROVABLE. Two ways high survives a fired veto or a silent one:
+    //   - taskTextNamesParty rescues a fired conflict when the task's own text
+    //     names the incoming number/email (the T1086 rescue), and
+    //   - partiesConflict needs comparable identities on both sides, so a task
+    //     with no contact fields at all (a calendar event, a Drive scan, a
+    //     hand-typed task) yields an empty party and the veto simply no-ops.
+    // For that class the match rests on the model alone.
+    //
+    // So the real guard is that the verdict can only ever produce a state the
+    // user SEES and reverses: opts.confirmOnly below forces pending_completion
+    // even for a tracker the auto-close path would have dismissed, and that
+    // branch also clears snoozed_until so reminders-check cannot finish the job
+    // unattended. T1256 — "the task closes by itself" — is the complaint on the
+    // other side of this one, and it stays closed.
     reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
   };
   await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable", { ...opts, confirmOnly: true });
@@ -3614,6 +3644,22 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             const hit = waAnchorRows.find((r) => r.body_text && normAnchor(r.body_text).includes(q));
             return hit ? hit.id : msg.id;
           };
+          // A completion verdict is MESSAGE-level, but this loop can link one
+          // message into several existing tasks (recall is contact-based, so a
+          // burst producing two asks can match two open tasks with the same
+          // contact). Letting each link carry the same "done" would flip both to
+          // pending_completion off one sentence. Only the first link claims it;
+          // later links record the message as an ordinary update.
+          let completionClaimed = false;
+          const analysisForLink = (): ThreadAnalysis => {
+            if (!analysis.completionSignal) return analysis;
+            if (completionClaimed) {
+              return { ...analysis, completionSignal: false, completionReason: "" };
+            }
+            completionClaimed = true;
+            return analysis;
+          };
+
           for (const task of taskResult.tasks) {
             // Per-task re-extraction guard: dedup each produced task by its OWN
             // content (buildProbeFromTask) against recent open+closed tasks. The
@@ -3642,7 +3688,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                     // weak re-mentions: HIGH confidence (already) + non-conversational
                     // (already, via `escalation`) + a real date on the new document.
                     if (task.due_date) {
-                      await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason, sys, { reopen: true });
+                      await linkAndEnrichDuplicate(tDup.taskId, msg, analysisForLink(), tDup.reason, sys, { reopen: true });
                       if (!firstTaskId) firstTaskId = tDup.taskId;
                       classification = "actionable_followup";
                       classificationReason = `reopened ${tDup.status} ${tDup.serial || tDup.taskId} — strong continuation (has date) — ${tDup.reason}`;
@@ -3674,7 +3720,7 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
                   // createdTaskIds — the deferred-follow-up snooze below must only
                   // touch tasks this burst actually created, never a pre-existing
                   // open task.
-                  await linkAndEnrichDuplicate(tDup.taskId, msg, analysis, tDup.reason, sys);
+                  await linkAndEnrichDuplicate(tDup.taskId, msg, analysisForLink(), tDup.reason, sys);
                   if (!firstTaskId) firstTaskId = tDup.taskId;
                   continue;
                 }
