@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
+import { useOpenTab } from "@/components/platform/layout/OpenTabLink";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,8 @@ interface Correction {
  */
 export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) {
   const t = useTranslations("corrections");
+  const locale = useLocale();
+  const openTab = useOpenTab();
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Correction[]>([]);
   const [edited, setEdited] = useState<Record<string, string>>({});
@@ -129,7 +132,7 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
           toast.success(t("triageFixStarted"), {
             action: {
               label: t("triageFixOpen"),
-              onClick: () => window.open(`/claude?thread=${fixId}`, "_blank"),
+              onClick: () => openTab(`/${locale}/claude?thread=${fixId}`, t("triageContinueClaude")),
             },
           });
         } else {
@@ -157,8 +160,12 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
           { method: "POST", body: {} },
         );
         toast.success(t("triageFixStarted"));
-        // Deep-link straight onto the new conversation (ClaudeChat reads ?thread=).
-        window.open(thread_id ? `/claude?thread=${thread_id}` : "/claude", "_blank");
+        // In-app tab in the tabs-workspace (not a browser window), deep-linked
+        // onto the new conversation (ClaudeChat reads ?thread=).
+        openTab(
+          thread_id ? `/${locale}/claude?thread=${thread_id}` : `/${locale}/claude`,
+          t("triageContinueClaude"),
+        );
       } catch (e) {
         toast.error(e instanceof Error ? e.message : String(e));
       } finally {
