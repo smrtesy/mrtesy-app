@@ -36,6 +36,12 @@ export const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
 /** Hard ceiling on a single Gemini request — see the comment at its fetch. */
 const GEMINI_CALL_TIMEOUT_MS = 25_000;
 
+/** Never abort a request before this — below it, nothing useful can complete. */
+const GEMINI_MIN_TIMEOUT_MS = 2_000;
+
+/** Backoff before the single 5xx retry. */
+const GEMINI_RETRY_DELAY_MS = 3_000;
+
 interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
   finishReason?: string;
@@ -125,6 +131,7 @@ async function callGemini(
   base64Data: string,
   mimeType: string,
   component: string,
+  budgetMs?: number,
 ): Promise<string> {
   const apiKey = await getAppSecret(db, "smrttask", "GEMINI_API_KEY", "GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
@@ -156,19 +163,34 @@ async function callGemini(
   // Per-call timeout. Without one a hung Gemini connection runs the whole
   // serverless function past its maxDuration, so it dies before writing
   // anything — and the webhook's caller (Meta, or the SMS gateway) redelivers
-  // and pays for the same analysis again, potentially forever. 25s leaves room
-  // for the 5xx retry below inside a 60s budget.
+  // and pays for the same analysis again, potentially forever.
+  //
+  // `budgetMs` makes a caller's own deadline AUTHORITATIVE rather than advisory.
+  // Checking a deadline only BEFORE starting a call is not enough: with a 25s
+  // ceiling plus a 3s backoff plus a 25s retry, one call can take 53s, so a part
+  // that starts just inside a 40s budget can finish past 90s and take the
+  // function down with it. Bounding every attempt (and the retry decision) by
+  // the time actually left means the pass can never outrun the budget.
+  const deadline = budgetMs === undefined ? null : Date.now() + budgetMs;
+  const timeLeft = () => (deadline === null ? GEMINI_CALL_TIMEOUT_MS : deadline - Date.now());
+  const attemptTimeout = () =>
+    Math.max(GEMINI_MIN_TIMEOUT_MS, Math.min(GEMINI_CALL_TIMEOUT_MS, timeLeft()));
+
   const fetchOnce = async () =>
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(attemptTimeout()),
     });
 
   let res = await fetchOnce();
-  if (!res.ok && res.status >= 500 && res.status < 600) {
-    await new Promise((r) => setTimeout(r, 3000));
+  // Retry a 5xx only if the backoff AND a meaningful second attempt still fit.
+  if (
+    !res.ok && res.status >= 500 && res.status < 600 &&
+    timeLeft() > GEMINI_RETRY_DELAY_MS + GEMINI_MIN_TIMEOUT_MS
+  ) {
+    await new Promise((r) => setTimeout(r, GEMINI_RETRY_DELAY_MS));
     res = await fetchOnce();
   }
 
@@ -264,6 +286,7 @@ export async function transcribeAudio(
   base64Data: string,
   mimeType: string,
   component: string,
+  budgetMs?: number,
 ): Promise<string> {
   const raw = await callGemini(
     db,
@@ -271,6 +294,7 @@ export async function transcribeAudio(
     base64Data,
     mimeType || "audio/ogg",
     component,
+    budgetMs,
   );
   return sanitizeTranscript(raw);
 }
@@ -280,6 +304,7 @@ export async function performImageOcr(
   base64Data: string,
   mimeType: string,
   component: string,
+  budgetMs?: number,
 ): Promise<string> {
   const prompt =
     "נתח את התמונה:\n" +
@@ -288,5 +313,5 @@ export async function performImageOcr(
     "3. אם אין טקסט או שהוא מינימלי - תן תיאור תמציתי (1-2 משפטים) של התמונה\n" +
     "4. אם זה צילום מסך של שיחה/מסמך - שמור על פורמט מובן\n" +
     "5. החזר רק את התוצאה, ללא הקדמות";
-  return callGemini(db, prompt, base64Data, mimeType || "image/jpeg", component);
+  return callGemini(db, prompt, base64Data, mimeType || "image/jpeg", component, budgetMs);
 }

@@ -505,10 +505,22 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
   // "<myUuid>/../<victimUuid>/<wamid>.jpg" starts with the caller's prefix,
   // storage-js forwards the literal, and the URL parser then collapses the
   // dot-segment so the signed URL resolves inside the other tenant's folder.
-  // Rejecting a ".." SEGMENT (rather than demanding a strict shape) closes it
-  // without invalidating legacy object names, which can contain arbitrary
-  // characters from the sender's original filename.
-  if (!path.startsWith(`${req.user!.id}/`) || path.split("/").includes("..")) {
+  //
+  // Testing for a literal ".." segment is also not enough. The URL spec treats
+  // PERCENT-ENCODED dots as dot-segments too, so "%2e%2e", ".%2e" and "%2e."
+  // are collapsed identically — and a double-encoded value decodes into one of
+  // those on the way in. Hence the pattern below rather than a string compare.
+  // Backslash is included because it is a path separator for special schemes.
+  //
+  // Only dot-segments are rejected, not a strict path shape: legacy objects in
+  // this bucket were keyed "<user_id>/<wamid>-<filename>" with the sender's own
+  // filename, so arbitrary characters (Hebrew, spaces, '%') must stay valid.
+  // /sms/media can afford the strict form because it wrote every key itself.
+  const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+  if (
+    !path.startsWith(`${req.user!.id}/`) ||
+    path.split(/[/\\]/).some((seg) => DOT_SEGMENT.test(seg))
+  ) {
     return res.status(403).json({ error: "forbidden" });
   }
 

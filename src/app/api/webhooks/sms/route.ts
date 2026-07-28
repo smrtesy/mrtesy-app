@@ -538,11 +538,23 @@ const MAX_MEDIA_STORED_PARTS = 10;
  * guard reads a row that is only written AFTER analysis, so if analysis ran past
  * the function's `maxDuration` the process would die having written nothing, the
  * gateway would redeliver, and the whole paid batch would run again — with
- * nothing to stop it repeating. Together with the per-call timeout inside
- * @/lib/media/gemini, this keeps the pass inside the 60s budget so the row is
- * always written and a redelivery is always a no-op.
+ * nothing to stop it repeating.
+ *
+ * The budget is ENFORCED, not merely consulted: the time remaining is passed
+ * into each Gemini call, which bounds its own request timeout and its 5xx retry
+ * by it. Checking the deadline only before starting a part is not enough — a
+ * call can take 25s + 3s backoff + 25s retry = 53s, so a part beginning at
+ * t=34.9s would return at t≈88s. With the budget threaded through, the pass ends
+ * by t=35s, leaving ~25s of the 60s ceiling for the body parse, the uploads, the
+ * upsert and the thread refresh.
  */
-const MEDIA_ANALYSIS_BUDGET_MS = 40_000;
+const MEDIA_ANALYSIS_BUDGET_MS = 35_000;
+
+/**
+ * Don't start analysing a part with less than this left — a Gemini call given
+ * two seconds just burns a request and returns nothing usable.
+ */
+const MIN_ANALYSIS_SLICE_MS = 6_000;
 
 /**
  * Thrown when sms_messages.media_parts doesn't exist yet — i.e. this code
@@ -749,7 +761,8 @@ async function processSmsAttachments(
       blocks.push(`[קובץ מצורף ${i + 1} (${att.mime}) — ${kept}, לא נותח]`);
       continue;
     }
-    if (Date.now() > deadline) {
+    const budgetMs = deadline - Date.now();
+    if (budgetMs < MIN_ANALYSIS_SLICE_MS) {
       blocks.push(`[קובץ מצורף ${i + 1} (${att.mime}) — ${kept}, נגמר הזמן לניתוח]`);
       continue;
     }
@@ -766,11 +779,11 @@ async function processSmsAttachments(
     const b64 = att.buf.toString("base64");
     try {
       if (att.kind === "image") {
-        const ocr = await performImageOcr(db, b64, att.mime, "gemini.sms");
+        const ocr = await performImageOcr(db, b64, att.mime, "gemini.sms", budgetMs);
         blocks.push(`[OCR]\n${ocr}`);
         derived = true;
       } else if (att.kind === "audio") {
-        blocks.push(await transcribeAudio(db, b64, att.mime, "gemini.sms"));
+        blocks.push(await transcribeAudio(db, b64, att.mime, "gemini.sms", budgetMs));
         derived = true;
       } else if (att.kind === "video") {
         blocks.push(`[וידאו — ${kept}]`);
@@ -1139,13 +1152,26 @@ async function ingestSms(
       }
     } catch (e) {
       if (!(e instanceof MediaColumnMissingError)) throw e;
-      // The migration hasn't run. Ingest the message as plain text rather than
-      // failing the webhook — a 500 here would have the gateway redeliver on a
-      // loop, and this path costs nothing to defer.
-      console.warn(`[sms-webhook] ${e.message} — ingesting text only`);
-      finalBody = body;
+      // The migration hasn't run, so the media_parts POINTER cannot be written.
+      // Everything else still happens: the bytes go to Storage under the same
+      // "<user_id>/<messageId>-<i>.<ext>" key, and the OCR/transcript still
+      // becomes body_text — which is the half the classifier actually reads. So
+      // the content is deferred, not lost, and a later backfill can rebuild
+      // media_parts from the bucket by that key convention. Failing the webhook
+      // instead would just make the gateway redeliver in a loop.
+      //
+      // The one real cost: with no readable column there is no redelivery guard,
+      // so a redelivery in this window re-pays for the analysis. Bounded by the
+      // analysis budget above, and the window only exists if this code ships
+      // both ahead of its migration AND after the gateway fork starts sending
+      // attachments — an order the handoff doc explicitly rules out.
+      console.warn(`[sms-webhook] ${e.message} — storing media, deferring the pointer`);
+      const processed = await processSmsAttachments(
+        db, userId, messageId, body, attachments, !isOtp,
+      );
+      finalBody = processed.body || body;
       mediaParts = null;
-      mediaDerivedText = false;
+      mediaDerivedText = processed.derived;
     }
   }
 
