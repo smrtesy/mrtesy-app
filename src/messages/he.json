@@ -4127,7 +4127,7 @@
     "audioUnprobed": "טרם נבדק",
     "indexRun": "סרוק את הקטלוג",
     "indexRunning": "סורק…",
-    "indexDone": "הקטלוג נסרק: {total} מודלים ב-fal, {written} נכתבו. נבדקו {probed} נקודות-קצה וידאו — {driving} מקבלות את האודיו שלנו כמניע. נשארו {remaining} לבדיקה — לחץ שוב כדי להמשיך.",
+    "indexDone": "הקטלוג נסרק: {total} מודלים ב-fal, {written} נכתבו. נסרקו {probed} נקודות-קצה, מהן {driving} מקבלות אודיו מניע. נותרו {remaining}.",
     "audioRole": {
       "driving": "מניע",
       "reference": "רפרנס",
@@ -4166,7 +4166,99 @@
       "assembly": "הרכבה",
       "market": "שיווק"
     },
-    "shelfMeaningTitle": "מדף מול מאומת"
+    "shelfMeaningTitle": "מדף מול מאומת",
+    "modelGroup": {
+      "image": "תמונה",
+      "video": "וידאו",
+      "audio": "אודיו וקול",
+      "understanding": "הבנה וניתוח",
+      "3d": "תלת-ממד",
+      "training": "אימון",
+      "tools": "טקסט וכלים",
+      "audio_video": "🔊 אודיו + וידאו",
+      "tools_pipeline": "🔧 כלי צינור"
+    },
+    "modelGroupHint": {
+      "audio_video": "נקודות-קצה וידאו שמקבלות קובץ אודיו שאנחנו מעלים. לא קטגוריה של fal — התגית שלה מוצאת רק 19 מתוכן.",
+      "tools_pipeline": "כלי ffmpeg: הדבקת פס-קול, איחוד סרטונים, חיתוך, כתוביות, איזון שמע. fal מפזרת אותם בין ארבע קטגוריות."
+    },
+    "falCategory": {
+      "text-to-image": "טקסט ← תמונה",
+      "image-to-image": "תמונה ← תמונה",
+      "text-to-video": "טקסט ← וידאו",
+      "image-to-video": "תמונה ← וידאו",
+      "video-to-video": "וידאו ← וידאו",
+      "audio-to-video": "אודיו ← וידאו",
+      "text-to-speech": "טקסט ← דיבור",
+      "text-to-audio": "טקסט ← אודיו",
+      "audio-to-audio": "אודיו ← אודיו",
+      "speech-to-speech": "דיבור ← דיבור",
+      "video-to-audio": "וידאו ← אודיו",
+      "vision": "ראייה ממוחשבת",
+      "speech-to-text": "תמלול",
+      "image-to-text": "תמונה ← טקסט",
+      "video-to-text": "וידאו ← טקסט",
+      "audio-to-text": "אודיו ← טקסט",
+      "image-to-json": "תמונה ← נתונים",
+      "image-to-3d": "תמונה ← תלת-ממד",
+      "text-to-3d": "טקסט ← תלת-ממד",
+      "3d-to-3d": "תלת-ממד ← תלת-ממד",
+      "training": "אימון",
+      "llm": "מודל שפה",
+      "json": "כלי נתונים",
+      "text-to-json": "טקסט ← נתונים",
+      "workflow": "פעולת עזר",
+      "unknown": "אחר"
+    },
+    "build": {
+      "full_scene": "שוט שלם",
+      "full_body": "דמות מלאה",
+      "avatar": "אווטאר",
+      "mouth_fix": "תיקון-פה"
+    },
+    "buildHint": {
+      "full_scene": "בונה רקע, מצלמה ופעולה — סצנה שלמה מהאודיו והפרומפט",
+      "full_body": "מזיז את הדמות כולה; הסצנה היא התמונה שנתת",
+      "avatar": "ראש או גוף מדבר מתמונה. הרקע קפוא",
+      "mouth_fix": "סרטון קיים נכנס — רק הפה משתנה"
+    },
+    "audioRoleHint": {
+      "driving": "האודיו שלנו מזיז את הפה — רק כאן יש ליפסינק",
+      "reference": "מנחה את הגנרציה, בלי הבטחה לסנכרון שפתיים",
+      "mux": "מדביק פס-קול לפלט. השפתיים לא זזות"
+    },
+    "cap": {
+      "si": "תמונת פתיחה",
+      "ei": "תמונת סיום",
+      "pr": "פרומפט",
+      "lo": "LoRA",
+      "ma": "2+ דוברים"
+    },
+    "capShort": {
+      "si": "תמונה",
+      "ei": "סיום",
+      "pr": "פרומפט",
+      "lo": "LoRA",
+      "ma": "2 דוברים"
+    },
+    "filterCategory": "תת-קטגוריה",
+    "filterAudioAxis": "ציר 1 · האודיו",
+    "filterBuildAxis": "ציר 2 · מה נבנה",
+    "filterCaps": "מה אפשר להזין לו",
+    "axesNote": "שני צירים בלתי-תלויים: מה האודיו עושה, ומה המודל בונה. ציר 2 חל רק על מודלים מניעים — במודל שרק מדביק פס-קול אין מה לבנות.",
+    "audioFromPurpose": "הסיווג נגזר מייעוד המודל — fal לא תיארה את השדה",
+    "colClass": "סיווג",
+    "colCaps": "יכולות",
+    "colPublished": "פורסם",
+    "priceShot": "לשוט 8ש׳ 720p",
+    "priceFlat": "מחיר קבוע להרצה",
+    "pricePer": "ל",
+    "priceTiered": "מדורג — ראה פירוט",
+    "priceUnpublished": "לא פורסם",
+    "modelsAudioVideo": "וידאו שמקבל את האודיו שלנו",
+    "indexIncomplete": "⚠️ הסריקה לא הגיעה לסך שfal מדווחת — הקטלוג חלקי, הרץ שוב.",
+    "modelsProbeIncomplete": "הסריקה עוד לא הושלמה — נקראה סכמה ל-{probed} מתוך {total} נקודות-קצה. לחץ \"הרץ סריקה\" כדי להמשיך.",
+    "indexPartial": "נותרו {remaining} — נעצר לפני הסוף (מגבלת זמן). לחץ שוב כדי להמשיך."
   },
   "claudeRuns": {
     "title": "עבודות קלוד",
@@ -4257,7 +4349,11 @@
         "review": "סקירה",
         "content": "תוכן",
         "other": "אחר"
-      }
+      },
+      "instructionsLabel": "גוף ההוראות",
+      "codeView": "תצוגת קוד",
+      "richView": "עריכה מעוצבת",
+      "confirmDiscard": "לבטל את העריכה? השינויים שלא נשמרו יאבדו."
     },
     "instructions": {
       "title": "הוראות קבועות",

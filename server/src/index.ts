@@ -30,7 +30,7 @@ import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/sm
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
-import smrtstudioRouter from "./modules/smrtstudio";
+import smrtstudioRouter, { jobsRouter as smrtstudioJobsRouter } from "./modules/smrtstudio";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 import claudeRouter from "./modules/claude";
@@ -160,6 +160,7 @@ app.use(smrtbotJobsRouter);
 // smrtPlan engine refresh — shared-secret guarded (pg_cron calls it), so it
 // comes BEFORE the auth-guarded routers (same reasoning as smrtBot jobs).
 app.use(smrtplanJobsRouter);
+app.use(smrtstudioJobsRouter);
 
 // smrtTask Claude Code session proposals — x-cron-secret guarded (the Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
