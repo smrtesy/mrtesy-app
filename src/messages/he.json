@@ -1763,6 +1763,8 @@
     "appServicesDesc": "סטטוס סנכרון Gmail, Drive, Calendar ו-WhatsApp לכל משתמש",
     "appPromptsTitle": "פרומפטים AI",
     "appPromptsDesc": "צפייה וניהול פרומפטים של AI עבור אפליקציה זו",
+    "appQualityTitle": "איכות הסיווג",
+    "appQualityDesc": "מדדים שבועיים: שיעור תיקונים, עלות להודעה, כשלים שקטים",
     "appSecretsTitle": "מפתחות וסודות",
     "appSecretsDesc": "ניהול מפתחות API וסודות של האפליקציה",
     "appDocumentsTitle": "מסמכים",

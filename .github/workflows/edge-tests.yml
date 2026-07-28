@@ -1,0 +1,30 @@
+name: Edge function tests
+
+# The classifier's pure helpers (preClassify, body truncation, party identity)
+# encode years of production bug fixes. Until now nothing stopped a change from
+# quietly undoing one — the first signal was the user seeing a wrong task.
+#
+# Runs on every push and PR, before "Deploy to Supabase" ships anything: no
+# secrets, no network, a couple of seconds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: deno test (ai-process)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run tests
+        run: deno test supabase/functions/ai-process/

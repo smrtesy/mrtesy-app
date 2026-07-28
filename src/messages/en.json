@@ -1795,6 +1795,8 @@
     "appServicesDesc": "Connected user services (Gmail, Drive, Calendar, WhatsApp) and their sync state.",
     "appPromptsTitle": "Prompts",
     "appPromptsDesc": "AI prompt configuration for this app (classifier, project briefs, etc.).",
+    "appQualityTitle": "Quality",
+    "appQualityDesc": "Weekly classifier metrics: correction rate, cost per message, silent failures.",
     "appSecretsTitle": "Keys & Secrets",
     "appSecretsDesc": "Manage this app's API keys and secrets.",
     "appDocumentsTitle": "Documents",

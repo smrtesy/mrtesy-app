@@ -23,6 +23,7 @@ import { SmrtStudioIcon } from "@/components/icons/SmrtStudioIcon";
 export type AdminSectionKey =
   | "services"
   | "prompts"
+  | "quality"
   | "secrets"
   | "parameters"
   | "documents";
@@ -121,7 +122,10 @@ export function getApp(slug: string): AppDef | undefined {
  * documents (app_plans), so `documents` is the universal fallback.
  */
 const ADMIN_SECTIONS: Record<string, AdminSectionKey[]> = {
-  smrttask: ["services", "prompts", "secrets", "parameters", "documents"],
+  // `quality` sits next to `prompts` on purpose: it is the feedback loop for
+  // the prompts above it (correction rate, silent parse failures, cost per
+  // message). smrtTask-only, because it reads the classifier's own tables.
+  smrttask: ["services", "prompts", "quality", "secrets", "parameters", "documents"],
   smrtvoice: ["secrets", "documents"],
   smrtcrm: ["documents"],
   smrtreach: ["secrets", "documents"],
