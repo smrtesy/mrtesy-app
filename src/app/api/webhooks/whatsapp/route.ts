@@ -1063,7 +1063,7 @@ async function buildMessageRow(
           // before writing anything — which makes Meta redeliver the batch. Past
           // the deadline the message is recorded with an honest placeholder and
           // the redelivery guards let a retry pick up just the tail.
-          if (mediaDeadline - Date.now() < META_FETCH_TIMEOUT_MS) {
+          if (mediaDeadline - Date.now() < 2 * META_FETCH_TIMEOUT_MS) {
             body = "[אודיו — נגמר הזמן להורדה בקליטה]";
             break;
           }
@@ -1148,9 +1148,11 @@ async function buildMessageRow(
           break;
         }
         let blob: MetaMediaBlob | null = null;
-        if (mediaDeadline - Date.now() < META_FETCH_TIMEOUT_MS) {
+        let skippedForBudget = false;
+        if (mediaDeadline - Date.now() < 2 * META_FETCH_TIMEOUT_MS) {
           // Same reasoning as the audio gate above: the download is what can run
           // away, so it is bounded before it starts rather than after.
+          skippedForBudget = true;
           console.warn("[whatsapp-webhook] image download skipped — delivery budget spent");
         } else {
           try {
@@ -1196,7 +1198,12 @@ async function buildMessageRow(
             body = caption || "[תמונה]";
           }
         } else {
-          body = caption || "[תמונה - שגיאת הורדה]";
+          // Say which it was. Reporting a download ERROR for an image whose
+          // download was never attempted sends the reader looking for a fault
+          // that does not exist.
+          body = caption || (skippedForBudget
+            ? "[תמונה — נגמר הזמן להורדה בקליטה]"
+            : "[תמונה - שגיאת הורדה]");
         }
       } else {
         body = caption || "[תמונה - אין מפתחות ל-OCR]";
@@ -1359,6 +1366,9 @@ async function buildMessageRow(
  * the headroom the 40s analysis budget was sized against.
  */
 const META_FETCH_TIMEOUT_MS = 15_000;
+// A download is TWO of those fetches (metadata, then the file), so a caller
+// gating on the deadline must reserve 2x — reserving one let a download that
+// started just inside the budget finish ~15s past it.
 
 async function downloadMetaMedia(
   db: SupabaseAdmin,

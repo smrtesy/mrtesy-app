@@ -80,16 +80,21 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
     async (c: Correction, decision: "approve" | "reject") => {
       setBusyId(c.id);
       try {
+        // A PLAIN OBJECT, not JSON.stringify: api() stringifies opts.body itself
+        // (lib/api/client.ts). Passing a pre-encoded string double-encodes it to
+        // a top-level JSON string, which express.json() rejects with
+        // entity.parse.failed — so every approve and reject 400'd. Both sibling
+        // components here pass an object; reading one of them would have caught it.
         await api(`/api/corrections/${c.id}/decision`, {
           method: "POST",
-          body: JSON.stringify({
+          body: {
             decision,
             // Only send a rule when approving one — the server keeps the
             // suggestion otherwise.
             ...(decision === "approve" && edited[c.id]?.trim()
               ? { rule: edited[c.id].trim() }
               : {}),
-          }),
+          },
         });
         toast.success(decision === "approve" ? t("triageApproved") : t("triageRejected"));
         await load();

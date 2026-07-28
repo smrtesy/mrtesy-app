@@ -360,6 +360,15 @@ export async function sweepUntriagedCorrections(limit = 5): Promise<number> {
     .select("id")
     .eq("app_slug", "smrttask")
     .is("context->triage", null)
+    // AND no class either. "No triage block" alone is not "untriaged": 68 rows
+    // carry a prompt_class from the one-off manual triage and have no triage
+    // block, and ai-process deliberately reads a MISSING block as approved so
+    // those hand-classified rules keep working. Sweeping on the block alone
+    // would re-triage all 68 — overwriting their class, stamping
+    // approved:false, and so REMOVING the five rules currently live in the
+    // classifier prompt, plus a notification per ancient correction on every
+    // run. Requiring both leaves exactly the genuinely-unjudged rows.
+    .is("context->prompt_class", null)
     .order("created_at", { ascending: true })
     .limit(Math.max(1, Math.min(limit, 25)));
   if (error) {
