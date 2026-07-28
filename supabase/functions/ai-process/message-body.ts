@@ -108,7 +108,8 @@ export function bodyForClassify(msg: any, limit: number): string {
   return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${clipped}`;
 }
 
-// WhatsApp burst transcripts are a ROLLING 20-message window: every new
+// Chat burst transcripts (WhatsApp AND SMS — both webhooks build the same
+// rolling [INCOMING]/[OUTGOING] window) are a ROLLING 20-message window: every new
 // message rebuilds raw_content as "last 20 messages" and stamps the burst's
 // received_at = now. So a matter from days ago keeps re-appearing in the
 // window, and the task builder re-extracts it as a brand-new task stamped
@@ -121,7 +122,7 @@ export function bodyForClassify(msg: any, limit: number): string {
 // honor a "ignore old lines" instruction (it doesn't, reliably). When there is
 // no high-water (first burst ever for the chat), the whole transcript is new.
 export const WA_LINE_RE = /^\[(INCOMING|OUTGOING)\s+([0-9T:.\-]+)\]/;
-export function splitWhatsAppByHighWater(rawBody: string, highWaterIso: string | null): string {
+export function splitChatByHighWater(rawBody: string, highWaterIso: string | null): string {
   if (!highWaterIso) return rawBody;
   const hw = Date.parse(highWaterIso);
   if (isNaN(hw)) return rawBody;
