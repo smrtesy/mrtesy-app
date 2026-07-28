@@ -35,6 +35,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
+import { BrandWordmark } from "@/components/platform/branding/BrandWordmark";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
 import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -357,7 +358,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             }}
             className="text-xl font-bold text-primary"
           >
-            smrtesy
+            <BrandWordmark />
           </Link>
           <div className="flex items-center gap-1">
             <UserAvatarLink />
