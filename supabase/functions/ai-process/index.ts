@@ -2,6 +2,21 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extractEmailBody } from "../_shared/email-body.ts";
 import { anthropicCostUsdFromCounts, anthropicFamily } from "../_shared/ai-pricing.ts";
+import {
+  isWhatsApp, isConversational, threadKey,
+  bodyForAI, bodyForClassify, hasMeetingInvite,
+  splitWhatsAppByHighWater, stripLoneSurrogates,
+} from "./message-body.ts";
+import {
+  buildCategoryFilter, preClassify,
+  FOLLOWUP_LEAD_HOURS, MEETING_LEAD_HOURS, addBusinessHours,
+} from "./preclassify.ts";
+import {
+  extractEmails, emailDomains, extractPhones, extractUrls,
+  msgPartyIds, taskPartyIds, mergeParties,
+  partiesConflict, partiesMatch, taskTextNamesParty, describeParty,
+} from "./party-identity.ts";
+import type { PartyIds } from "./party-identity.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -109,336 +124,9 @@ async function loadSystemParams(): Promise<SystemParams> {
 const SOURCE_PRIORITY = ["whatsapp", "whatsapp_echo", "sms", "sms_echo", "google_calendar", "google_drive", "gmail", "gmail_sent", "gmail_spam"];
 const BODY_TEXT_FILTER = "body_text.not.is.null,source_type.eq.whatsapp,source_type.eq.whatsapp_echo,source_type.eq.sms,source_type.eq.sms_echo,source_type.eq.google_calendar,source_type.eq.google_drive";
 
-const DEFAULT_FILTERED_CATEGORY_KEYS = new Set(["promotions", "social", "forums"]);
-const CATEGORY_KEY_TO_GMAIL_LABEL: Record<string, string> = {
-  promotions: "CATEGORY_PROMOTIONS",
-  social:     "CATEGORY_SOCIAL",
-  updates:    "CATEGORY_UPDATES",
-  forums:     "CATEGORY_FORUMS",
-};
-const ALL_CATEGORY_KEYS = Object.keys(CATEGORY_KEY_TO_GMAIL_LABEL);
-
-interface CategoryRuleRow { trigger: string; is_active: boolean }
-
-function buildCategoryFilter(rules: CategoryRuleRow[]): Set<string> {
-  const ruleByKey = new Map<string, boolean>();
-  for (const r of rules) {
-    const m = r.trigger.match(/^category=(.+)$/i);
-    if (!m) continue;
-    ruleByKey.set(m[1].toLowerCase(), r.is_active);
-  }
-  const labels = new Set<string>();
-  for (const key of ALL_CATEGORY_KEYS) {
-    const ruleValue = ruleByKey.get(key);
-    const shouldFilter = ruleValue !== undefined ? ruleValue : DEFAULT_FILTERED_CATEGORY_KEYS.has(key);
-    if (shouldFilter) labels.add(CATEGORY_KEY_TO_GMAIL_LABEL[key]);
-  }
-  return labels;
-}
-
-function bodyForAI(msg: any): string {
-  // Conversational channels (WhatsApp + SMS) carry the rolling transcript in
-  // raw_content; everything else (email) uses body_text.
-  if (isConversational(msg)) {
-    return String(msg.raw_content ?? msg.body_text ?? "");
-  }
-  return String(msg.body_text ?? "");
-}
-
-// Video-call / meeting join links. A meeting invite buried in a reply is the
-// single highest-value "actionable" an email can carry (a meeting to attend),
-// yet it almost always lands at the BOTTOM of the body — beneath the quoted
-// thread and past body_truncate_classify — so the classifier never sees it and
-// files the thread as "informational closure". (This is exactly the miss the
-// user flagged: a Teams meeting with a lawyer, link at char ~3500, classifier
-// truncates at 2000.) Detect the link across the FULL, untruncated body.
-// Non-global on purpose: we only ever .test()/.exec() once, so there is no
-// lastIndex state to trip over.
-const MEETING_LINK_RE = /(?:https?:\/\/)?(?:[\w.-]*teams\.microsoft\.com\/(?:l\/meetup-join|meet)\/|teams\.live\.com\/meet\/|[\w.-]*zoom\.us\/(?:j|my|w|s)\/|meet\.google\.com\/[a-z]|[\w.-]*webex\.com\/(?:meet|join|[\w.-]*\/j\.php)|[\w.-]*whereby\.com\/[\w-])/i;
-
-function hasMeetingInvite(body: string): boolean {
-  return MEETING_LINK_RE.test(String(body));
-}
-
-// Return the meeting block (header + join URL + Meeting ID + Passcode), with a
-// little context on either side, so the join URL survives verbatim. null when
-// no join link is present.
-function extractMeetingBlock(body: string): string | null {
-  const s = String(body);
-  const m = MEETING_LINK_RE.exec(s);
-  if (!m) return null;
-  // The window must span the ENTIRE join URL verbatim (deep-link rule): Teams
-  // `meetup-join` links carry an encoded `context` JSON and routinely run
-  // 500–900 chars, so a fixed forward window would slice them mid-string. Grab
-  // the full whitespace-delimited URL token, then +160 chars for the Meeting
-  // ID / Passcode lines that follow, and -220 for a preceding header.
-  const urlToken = (s.slice(m.index).match(/^\S*/)?.[0] ?? "").length;
-  const start = Math.max(0, m.index - 220);
-  const end = Math.min(s.length, Math.max(m.index + 400, m.index + urlToken + 160));
-  return s.slice(start, end).trim();
-}
-
-// Body for the classifier / task-builder, capped at `limit`. When a meeting
-// invite exists anywhere in the full body, graft the meeting block onto the
-// TOP, tagged as fresh & actionable: this rescues invites that sit past the
-// truncation window (classifier) and ones that sit below the quoted thread
-// (where the task-builder's QUOTED-TEXT rule would skip them), and keeps the
-// join URL verbatim (system-wide deep-link rule).
-function bodyForClassify(msg: any, limit: number): string {
-  const full = bodyForAI(msg);
-  // Conversational channels (WhatsApp + SMS) run oldest→newest with the
-  // decision-relevant lines at the BOTTOM, so keep the TAIL; email keeps HEAD.
-  const isConvo = isConversational(msg);
-  // WhatsApp transcripts run oldest→newest and the prompt reasons about the
-  // LAST line, so the decision-relevant messages sit at the BOTTOM. Head-
-  // truncating drops exactly them — a long thread of old OCR/audio blocks once
-  // pushed the latest "please do X" past the cap, so it got mis-filed as
-  // informational. Keep the TAIL for WhatsApp; keep the HEAD for email (the
-  // latest reply is on top, quoted history below).
-  const clipped =
-    full.length <= limit
-      ? full
-      : isConvo
-        ? "…\n" + full.slice(full.length - limit)
-        : full.substring(0, limit);
-  const meeting = extractMeetingBlock(full);
-  if (!meeting) return clipped;
-  return `[MEETING DETAILS / פרטי פגישה — fresh & actionable, NOT quoted history. Keep the join URL verbatim]\n${meeting}\n\n${clipped}`;
-}
-
-// WhatsApp burst transcripts are a ROLLING 20-message window: every new
-// message rebuilds raw_content as "last 20 messages" and stamps the burst's
-// received_at = now. So a matter from days ago keeps re-appearing in the
-// window, and the task builder re-extracts it as a brand-new task stamped
-// today (T736: a 9 ביוני "Dini materials" matter rebuilt as a 12 ביוני task;
-// T737 titled "נשלח ב-12/6" over 11 ביוני content). This splits the transcript
-// at a high-water timestamp (the latest message already processed in a PRIOR
-// burst for this chat): lines at/before it are CONTEXT-only; only lines after
-// it are NEW material the builder may turn into a task. Deterministic on
-// purpose — we partition the lines ourselves rather than trust the model to
-// honor a "ignore old lines" instruction (it doesn't, reliably). When there is
-// no high-water (first burst ever for the chat), the whole transcript is new.
-const WA_LINE_RE = /^\[(INCOMING|OUTGOING)\s+([0-9T:.\-]+)\]/;
-function splitWhatsAppByHighWater(rawBody: string, highWaterIso: string | null): string {
-  if (!highWaterIso) return rawBody;
-  const hw = Date.parse(highWaterIso);
-  if (isNaN(hw)) return rawBody;
-  const lines = String(rawBody).split("\n");
-  const header: string[] = [];
-  const oldLines: string[] = [];
-  const newLines: string[] = [];
-  // A transcript line's timestamp governs the lines that follow it (OCR /
-  // multi-line message bodies have no marker of their own), so carry the last
-  // seen bucket forward. Header lines (Chat:/Phone:/Group:/--- markers) before
-  // the first [ts] line stay in the header.
-  let bucket: "header" | "old" | "new" = "header";
-  for (const line of lines) {
-    const m = line.match(WA_LINE_RE);
-    if (m) {
-      const ts = Date.parse(m[2]);
-      bucket = !isNaN(ts) && ts > hw ? "new" : "old";
-    }
-    if (bucket === "header") header.push(line);
-    else if (bucket === "old") oldLines.push(line);
-    else newLines.push(line);
-  }
-  // No genuinely-new lines → nothing for the builder to act on. Return only the
-  // header + a marker; the builder will correctly produce [] (and the tiny-gate
-  // / empty-build paths handle it), instead of re-mining stale history.
-  const headBlock = header.join("\n").trim();
-  if (newLines.length === 0) {
-    return `${headBlock}\n\n[No new messages since the last time this chat was processed — nothing new to act on.]`;
-  }
-  const ctx = oldLines.join("\n").trim();
-  const fresh = newLines.join("\n").trim();
-  return [
-    headBlock,
-    ctx ? `\n--- EARLIER CONTEXT (already processed — for understanding only, do NOT create a task from these lines) ---\n${ctx}` : "",
-    `\n--- NEW MESSAGES (create a task ONLY from these) ---\n${fresh}`,
-  ].filter(Boolean).join("\n");
-}
-
-// ── Business-hours math ──────────────────────────────────────────────────────
-// "Business hours" here = clock hours that fall on a business DAY. A business
-// day is Mon–Fri (Sun=0 and Sat=6 are weekend) — matching the convention this
-// file already used. Nights count; only weekends are skipped. So 48 business
-// hours = "two business days later, jumping over any weekend in between".
-//
-// Used for two product rules:
-//   * follow-up suggestions surface FOLLOWUP_LEAD_HOURS after an outgoing
-//     message that's awaiting a reply (default 48h).
-//   * meeting suggestions surface MEETING_LEAD_HOURS before the event (24h).
-const FOLLOWUP_LEAD_HOURS = 48;
-const MEETING_LEAD_HOURS = 24;
-
-function isBusinessDay(d: Date): boolean {
-  const day = d.getDay();
-  return day !== 0 && day !== 6;
-}
-
-// Advance `start` forward by `hours` business hours.
-function addBusinessHours(start: Date, hours: number): Date {
-  const d = new Date(start);
-  let remaining = hours;
-  while (remaining > 0) {
-    d.setHours(d.getHours() + 1);
-    if (isBusinessDay(d)) remaining--;
-  }
-  return d;
-}
-
-// Move `start` backward by `hours` business hours (the earliest moment that is
-// still `hours` business hours ahead of it).
-function subBusinessHours(start: Date, hours: number): Date {
-  const d = new Date(start);
-  let remaining = hours;
-  while (remaining > 0) {
-    d.setHours(d.getHours() - 1);
-    if (isBusinessDay(d)) remaining--;
-  }
-  return d;
-}
-
-function preClassify(msg: any, settings: any, sys: SystemParams): { result: string; skipReason?: string } {
-  const sender = (msg.sender_email || msg.sender || "").toLowerCase();
-  // source_messages has no dedicated recipient column — Part1 stores the TO
-  // address in reply_to_context and metadata.to. Fall back through all three.
-  const recipient = (msg.recipient || msg.reply_to_context || (msg.metadata as any)?.to || "").toLowerCase();
-  // For `to=<addr>` skip rules, the `recipient` string only captures the
-  // visible To header. gmail-sync now stores every recipient-side
-  // address (To, Cc, Bcc, Delivered-To, X-Forwarded-To, X-Original-To)
-  // as metadata.recipients[], so the BCC and forwarded-to cases (T367
-  // family: mail sent from office@maor.org to a customer with BCC
-  // outbox@maor.org) finally have something to match against.
-  const recipients: string[] = Array.isArray((msg.metadata as any)?.recipients)
-    ? ((msg.metadata as any).recipients as string[]).map((s) => String(s).toLowerCase())
-    : [];
-  const sourceType = msg.source_type || "";
-  const myEmails = (settings.my_emails || []).map((e: string) => e.toLowerCase());
-  const officeAddresses = (settings.office_addresses || []).map((e: string) => e.toLowerCase());
-  const skipSenders = (settings.skip_senders || []).map((e: string) => e.toLowerCase());
-  const skipRecipients = (settings.skip_recipients || []).map((e: string) => e.toLowerCase());
-  const toSkip: Set<string> = settings.__toSkip instanceof Set ? settings.__toSkip : new Set();
-  const fromSkip: Set<string> = settings.__fromSkip instanceof Set ? settings.__fromSkip : new Set();
-  const gmailLabels: string[] = Array.isArray(msg.metadata?.labels) ? msg.metadata.labels : [];
-  const categoryFilter: Set<string> = settings.__category_filter instanceof Set ? settings.__category_filter : new Set();
-
-  // rules_memory to=/from= skip rules (UI-configured).
-  // `to=` matches the visible To header AND every other recipient-side
-  // address (Cc, Bcc, Delivered-To, X-Forwarded-To, X-Original-To) —
-  // that's what makes `to=outbox@maor.org` catch BCC traffic.
-  for (const addr of toSkip) {
-    if (recipient.includes(addr) || recipients.some((r) => r.includes(addr))) {
-      return { result: "skip", skipReason: `to_rule: ${addr}` };
-    }
-  }
-  // The user's own outgoing mail must reach the check_followup routing below —
-  // a from= rule that happens to match one of the user's own addresses (e.g. a
-  // rule created on a shared domain) must never swallow it here.
-  const senderIsSelf = myEmails.some((e: string) => e && sender.includes(e));
-  for (const addr of fromSkip) {
-    if (senderIsSelf) break;
-    if (sender.includes(addr)) return { result: "skip", skipReason: `from_rule: ${addr}` };
-  }
-
-  // Legacy user_settings skip lists
-  for (const sr of skipRecipients) {
-    if (recipient.includes(sr)) return { result: "skip", skipReason: `recipient: ${sr}` };
-  }
-
-  if (sourceType === "google_calendar" && msg.received_at) {
-    const eventDate = new Date(msg.received_at);
-    const now = new Date();
-    const pastCutoff = new Date(now.getTime() - sys.calendar_past_days * 86_400_000);
-    if (eventDate < pastCutoff) return { result: "skip", skipReason: "past_calendar_event" };
-    // All calendar events are actionable, but a meeting should only surface as a
-    // suggestion MEETING_LEAD_HOURS (24) business hours before it starts — not
-    // days in advance. Defer until that lead window opens; the cron re-evaluates
-    // every minute, so it surfaces exactly on time.
-    const processFrom = subBusinessHours(eventDate, MEETING_LEAD_HOURS);
-    if (now < processFrom) return { result: "defer", skipReason: "future_calendar_event" };
-    return { result: "calendar_actionable" };
-  }
-
-  // Drive documents are never spam — always actionable regardless of content.
-  if (sourceType === "google_drive") {
-    return { result: "drive_actionable" };
-  }
-
-  // Google Workspace storage warnings (workspace-noreply@google.com).
-  // Google sends these at ~81%, ~90%, and 100%. Only surface a task at ≥ 95%.
-  if (sender === "workspace-noreply@google.com" && (msg.subject || "").toLowerCase().includes("storage")) {
-    const bodyText = (msg.body_text || "").toLowerCase();
-    const pctMatch = bodyText.match(/currently using (\d+)%/);
-    const pct = pctMatch ? parseInt(pctMatch[1], 10) : 0;
-    if (pct < 95) {
-      return { result: "skip", skipReason: `google_workspace_storage_${pct}pct_below_threshold` };
-    }
-  }
-
-  // whatsapp_echo rows are self-chat captures (voice memos = fresh task
-  // intentions), NOT messages sent to a third party awaiting a reply — they go
-  // through normal analysis and become tasks immediately. Only sent EMAIL is
-  // routed to the deferred 48-business-hour follow-up flow.
-  // sms_echo mirrors whatsapp_echo: an SMS the user texted to their OWN number
-  // as a task-capture channel. A deliberate self-note, never a sent message
-  // awaiting a reply — go straight to Claude, skip the check_followup defer.
-  if (sourceType === "whatsapp_echo" || sourceType === "sms_echo") return { result: "needs_claude" };
-  if (sourceType === "gmail_sent") return { result: "check_followup" };
-  if (myEmails.some((e: string) => sender.includes(e))) return { result: "check_followup" };
-  if (officeAddresses.some((e: string) => sender.includes(e))) return { result: "customer_inquiry" };
-  // A sender the user asked to skip is filtered noise, not read-and-keep info —
-  // route to "skip" so it gets the "דילוג" label and reads honestly in the log
-  // (same reasoning as the Gmail-category filter below).
-  if (skipSenders.some((e: string) => sender.includes(e))) return { result: "skip", skipReason: `skip_sender: ${sender}` };
-
-  // Gmail categories the user filters out (promotions/social/forums by
-  // default) are DROPPED, not kept — so they are a skip, not "informational".
-  // Labeling them "informational" was misleading: a "You're our 3rd winner"
-  // promo is filtered noise, not read-and-keep info. Route to skip so it gets
-  // the "דילוג" label and reads honestly in the log.
-  if (categoryFilter.size > 0) {
-    const filteredLabel = gmailLabels.find((l) => categoryFilter.has(l));
-    if (filteredLabel) return { result: "skip", skipReason: `gmail_category:${filteredLabel}` };
-  }
-
-  // Deterministic content-skip layer. Phrases (rules_memory `contains=<phrase>`)
-  // were mined from history with ~100% precision on the no-task corpus — every
-  // matching phrase was a transactional close-out ("payment received", "your
-  // receipt") or a bulk marker ("newsletter"), and ZERO of the user's real
-  // tasks contained them. Restricted to FIRST-CONTACT inbound email: a bulk /
-  // transactional notice is never a reply in a live human thread, and that
-  // guard neutralizes the only collision risk found — a phrase quoted inside a
-  // "Re:" conversation (e.g. "...the package was delivered, but can you..."),
-  // which is a real ask, not a receipt.
-  const contentSkip: string[] = Array.isArray(settings.__contentSkip) ? settings.__contentSkip : [];
-  if (contentSkip.length > 0 && sourceType === "gmail") {
-    const subj = String(msg.subject || "");
-    const isReply = /^\s*(re|fwd|fw|תגובה|הועבר)\s*:/i.test(subj)
-      || !!(msg.reply_to_context && String(msg.reply_to_context).trim());
-    if (!isReply) {
-      const haystack = `${subj}\n${msg.body_text || ""}`.toLowerCase();
-      const hit = contentSkip.find((p) => p && haystack.includes(p));
-      if (hit) return { result: "skip", skipReason: `content_skip: ${hit}` };
-    }
-  }
-
-  return { result: "needs_claude" };
-}
 
 type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" } };
 
-// Strip UNPAIRED UTF-16 surrogates (a high surrogate not followed by a low one,
-// or a low surrogate not preceded by a high one). They arise when a body is
-// truncated by code-unit count (bodyForClassify slices WhatsApp text with
-// .slice/.substring, which can cut an emoji's surrogate pair in half) or when
-// the source itself is corrupt. JSON.stringify escapes a lone surrogate to
-// \udXXX, which is syntactically "valid" but the Anthropic API's JSON parser
-// rejects it with HTTP 400 "invalid high surrogate in string". A complete emoji
-// (well-formed pair) is untouched; only the dangling half is dropped.
-function stripLoneSurrogates(s: string): string {
-  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
-}
 
 // Mark a large, message-invariant instruction block for prompt caching, with a
 // 1-HOUR TTL. The 5-minute default lapsed during quiet stretches — and, since
@@ -547,37 +235,6 @@ async function callClaude(model: string, system: string | SystemBlock[], userMes
   return usage;
 }
 
-function isWhatsApp(msg: any): boolean {
-  return msg.source_type === "whatsapp" || msg.source_type === "whatsapp_echo";
-}
-
-// WhatsApp AND SMS are two-party rolling-transcript chats — both carry a
-// [INCOMING]/[OUTGOING] conversation in raw_content and get the conversation-
-// aware handling (transcript body, chat rules, thread memory, per-matter
-// routing, follow-up defer). isWhatsApp stays for the genuinely WhatsApp-only
-// spots (self-chat echo, placeholder text, delivery-status coalescing).
-function isConversational(msg: any): boolean {
-  return isWhatsApp(msg) || msg.source_type === "sms" || msg.source_type === "sms_echo";
-}
-
-function threadKey(msg: any): string | null {
-  if (msg.source_type === "gmail" || msg.source_type === "gmail_sent") {
-    const tid = msg.metadata?.threadId as string | undefined;
-    return tid ? `gmail:${tid}` : null;
-  }
-  // whatsapp_echo rows are per-message self-chat captures; each is an
-  // independent new intention and should NOT share thread memory with the
-  // parent WhatsApp chat (which would link every voice memo to the same
-  // task via related_task_id and lose 7 of 8 captures).
-  // sms_echo (self-notes) are per-message intentions like whatsapp_echo — each
-  // is independent, so no shared thread memory.
-  if (msg.source_type === "whatsapp_echo" || msg.source_type === "sms_echo") return null;
-  if (msg.source_type === "whatsapp" || msg.source_type === "sms") {
-    const cid = msg.metadata?.chatId as string | undefined;
-    return cid ? `${msg.source_type}:${cid}` : null;
-  }
-  return null;
-}
 
 interface ThreadMemoryRow {
   id: string;
@@ -2465,10 +2122,6 @@ async function checkCrossSourceLink(
 //   • high   → auto-link (append as update to the existing task)
 //   • medium → suggest to the user (stamp suggested_duplicate_of), no auto-merge
 
-const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-const URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
-const PHONE_RE = /\+?\d[\d\-().\s]{6,}\d/g;
-
 interface DupeProbe {
   title: string;
   description: string;
@@ -2482,194 +2135,6 @@ interface DupeProbe {
    * the body for RECALL. Only this field is allowed to decide identity.
    */
   party: PartyIds;
-}
-
-function extractEmails(...vals: (string | null | undefined)[]): Set<string> {
-  const out = new Set<string>();
-  for (const v of vals) {
-    if (!v) continue;
-    const m = String(v).match(EMAIL_RE);
-    if (m) for (const e of m) out.add(e.toLowerCase());
-  }
-  return out;
-}
-
-function emailDomains(emails: Set<string>): Set<string> {
-  const d = new Set<string>();
-  for (const e of emails) {
-    const i = e.indexOf("@");
-    if (i > 0) {
-      const dom = e.slice(i + 1);
-      // Skip generic/no-reply sender domains that would over-match unrelated
-      // automated mail. They carry no "same party" signal.
-      if (!/^(gmail|googlemail|outlook|hotmail|yahoo|icloud)\./.test(dom)) d.add(dom);
-    }
-  }
-  return d;
-}
-
-// Last 10 digits, so +1-212-908-6671 and (212) 908-6671 compare equal.
-function normPhone(s: string): string {
-  const digits = s.replace(/\D/g, "");
-  return digits.length > 10 ? digits.slice(-10) : digits;
-}
-
-function extractPhones(...vals: (string | null | undefined)[]): Set<string> {
-  const out = new Set<string>();
-  for (const v of vals) {
-    if (!v) continue;
-    const m = String(v).match(PHONE_RE);
-    if (m) for (const p of m) { const n = normPhone(p); if (n.length >= 9) out.add(n); }
-  }
-  return out;
-}
-
-function extractUrls(text: string): string[] {
-  const m = String(text).match(URL_RE);
-  return m ? Array.from(new Set(m)) : [];
-}
-
-// ── Party identity — verified in code, never taken on the model's word ───────
-// The AI gates below decide SAME MATTER. They must NEVER be the only authority
-// on SAME PARTY: the cheap classification_model repeatedly manufactured an
-// identity to justify a merge — "3475848008 = 347-584-8008, תואם 972584146670",
-// "מספר טלפון 972537701510 מתאים ל-7706484073 כנראה שגיאת הקלדה" — and fused two
-// unrelated people into one task. T1804 is the reference case: לאה's "she'll
-// call back" task was renamed to מענדי's AI-voices ask, keeping לאה's contact and
-// description; T276 then collected four more updates from the wrong chat because
-// the bad link also re-pointed that chat's thread memory. Replaying the last 90
-// days: of 105 two-party chat auto-merges, 81 were party-verified, 7 were
-// unverifiable — and 15 had a provably different counterparty.
-//
-// So identity is checked deterministically: the channel counterparty of the
-// incoming item vs the counterparty the candidate task records (its contact
-// fields AND the message it was born from). A verified mismatch downgrades the
-// verdict one tier instead of merging.
-interface PartyIds {
-  emails: Set<string>;
-  domains: Set<string>;
-  /** Last-9-digit phone keys — country-code / leading-zero tolerant. */
-  phones: Set<string>;
-}
-
-// Key on the last EIGHT digits, which is what survives every form the same
-// number is written in here: +1-347-584-8008 / 3475848008 / 13475848008 → 75848008,
-// +972-58-414-6670 / 058-414-6670 → 84146670, and — the reason it is 8 and not 9
-// — an Israeli 9-digit landline written locally (03-123-4567) vs internationally
-// (+972-3-123-4567), which extractPhones truncates to 7231234567: only the last
-// 8 digits agree. Two genuinely different numbers still differ (75848008 ≠
-// 84146670, the exact pair the model declared equal on T1804); a collision needs
-// the same 7-digit subscriber number AND the same final area-code digit, and it
-// would only cost a veto, never cause a wrong one.
-function phoneKeys(...vals: (string | null | undefined)[]): Set<string> {
-  const out = new Set<string>();
-  for (const p of extractPhones(...vals)) if (p.length >= 9) out.add(p.slice(-8));
-  return out;
-}
-
-function partyIdsFrom(
-  emailish: (string | null | undefined)[],
-  phonish: (string | null | undefined)[],
-): PartyIds {
-  const emails = extractEmails(...emailish);
-  return { emails, domains: emailDomains(emails), phones: phoneKeys(...phonish) };
-}
-
-// Who the INCOMING item is with: the channel counterparty ONLY — sender address,
-// chat phone. Deliberately NOT the body: a number quoted inside a message is not
-// the party, and scraping those is exactly how a "same phone" fantasy gets
-// manufactured. Self-chat rows (whatsapp_echo/sms_echo) have no counterparty, so
-// they yield no verdict and keep their existing behaviour.
-function msgPartyIds(msg: any): PartyIds {
-  if (msg?.source_type === "whatsapp_echo" || msg?.source_type === "sms_echo") {
-    return partyIdsFrom([], []);
-  }
-  const md = (msg?.metadata ?? {}) as any;
-  // On the user's OWN outbound mail the sender is the user — the counterparty is
-  // the recipient. metadata.to is used for gmail_sent ONLY: on incoming mail it
-  // holds the user's own alias, and folding that in would make every pair of
-  // emails "share a party" and disable the check entirely.
-  if (msg?.source_type === "gmail_sent") return partyIdsFrom([md?.to], []);
-  return partyIdsFrom([msg?.sender_email, msg?.sender], [md?.fromPhone, md?.peerPhone, md?.chatId]);
-}
-
-/** Who a candidate TASK is with, from the contact fields the builder filled. */
-function taskPartyIds(task: any): PartyIds {
-  return partyIdsFrom(
-    [task?.related_contact_email, task?.related_contact],
-    [task?.related_contact_phone, task?.related_contact],
-  );
-}
-
-function mergeParties(a: PartyIds, b: PartyIds): PartyIds {
-  return {
-    emails: new Set([...a.emails, ...b.emails]),
-    domains: new Set([...a.domains, ...b.domains]),
-    phones: new Set([...a.phones, ...b.phones]),
-  };
-}
-
-// mail.dep.nyc.gov and dep.nyc.gov are the same authority (the DEP dunning case
-// the matcher must keep merging); a.com and b.com are not.
-function domainsRelated(a: string, b: string): boolean {
-  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
-}
-
-/**
- * True only when the two sides carry COMPARABLE identifiers of the same kind
- * (phone↔phone or email↔email) and they are verifiably NOT the same party.
- *
- * Two deliberate non-verdicts, so this stays a mismatch detector and not a
- * blanket "different source" block:
- *  • One side anonymous (a calendar event, a Drive scan, a task with no contact)
- *    — nothing to compare, and those are the genuine cross-source links this
- *    matcher exists for.
- *  • Nothing comparable (a WhatsApp phone vs a task known only by email) — a
- *    person can own both, so this is UNVERIFIABLE, not proven different.
- * A match on ANY kind clears the whole check: a shared email is identity even if
- * some phone in the free-text contact field differs.
- */
-function partiesConflict(incoming: PartyIds, task: PartyIds): boolean {
-  const comparable =
-    (incoming.phones.size > 0 && task.phones.size > 0) ||
-    (incoming.emails.size > 0 && task.emails.size > 0);
-  return comparable && !partiesMatch(incoming, task);
-}
-
-/** A POSITIVE identity match — a shared phone, address, or related domain. */
-function partiesMatch(a: PartyIds, b: PartyIds): boolean {
-  for (const p of a.phones) if (b.phones.has(p)) return true;
-  for (const e of a.emails) if (b.emails.has(e)) return true;
-  for (const d of a.domains) for (const d2 of b.domains) if (domainsRelated(d, d2)) return true;
-  return false;
-}
-
-/**
- * The task's own TEXT already names the incoming counterparty (their number or
- * address appears in its title/description) → they really are involved in this
- * matter even though the contact fields point elsewhere. This is the evidence
- * that rescues the legitimate case: a person replying from their own number
- * about a matter opened through someone else (T1086 — Rabbi Nagel's number is
- * written in the task the model matched). Evidence in the data, not a claim in
- * the reason string.
- */
-function taskTextNamesParty(task: any, incoming: PartyIds): boolean {
-  const blob = `${task?.title_he ?? ""} ${task?.title ?? ""} ${String(task?.description ?? "")}`;
-  const ids = partyIdsFrom([blob], [blob]);
-  if (partiesMatch(incoming, ids)) return true;
-  // Domain named in the text, even without a full address: covers a vendor that
-  // rotates sending domains (billing@x.com → notices@x-mail.net) where the task
-  // itself says who it is about. Generic consumer domains are already filtered
-  // out of PartyIds.domains, so "gmail.com" can never rescue a merge.
-  const lower = blob.toLowerCase();
-  for (const d of incoming.domains) if (lower.includes(d)) return true;
-  return false;
-}
-
-/** Compact "who" for the audit trail in the log / ✨ panel. */
-function describeParty(p: PartyIds): string {
-  const ids = [...p.phones, ...p.emails];
-  return ids.length ? ids.slice(0, 3).join(", ") : "—";
 }
 
 /**
@@ -4971,7 +4436,17 @@ Deno.serve(async (req) => {
         supabase.from("rules_memory").select("trigger").eq("user_id", userId).eq("is_active", true).or("trigger.ilike.to=%,trigger.ilike.from=%,trigger.ilike.contains=%"),
         supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).in("prompt_key", ["edge_classifier", "edge_task_builder"]),
         supabase.auth.admin.getUserById(userId),
-        supabase.from("task_corrections").select("note, correction_type, old_value, new_value").eq("user_id", userId).eq("scope", "personal").eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(25),
+        // BOTH scopes, newest first. `general` used to be excluded here on the
+        // theory that those corrections would be hand-baked into the prompt by
+        // a developer — a manual step that, in practice, nobody ran: by
+        // 2026-07-28 there were 61 general corrections spanning eight weeks and
+        // NOT ONE of them reached the classifier, which is why the same
+        // complaints kept coming back ("כבר הערתי ש..."). There is no reason a
+        // real correction should depend on someone remembering to copy it.
+        // The 200 cap is a runaway guard, not a memory window — at ~30 tokens
+        // per line it bounds the block at ~6k tokens so a pathological history
+        // can never crowd out the prompt itself. Today's 68 are nowhere near it.
+        supabase.from("task_corrections").select("note, correction_type, old_value, new_value, scope").eq("user_id", userId).eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(200),
       ]);
       const settings = settingsRes.data;
       if (!settings) continue;
@@ -5012,17 +4487,26 @@ Deno.serve(async (req) => {
       // genuinely addressed to the user when user_settings.my_emails is sparse.
       settings.__authEmail = ((userAuthRes.data?.user?.email as string | undefined) || "").toLowerCase();
 
-      // Per-user correction rules (scope='personal'): items the user explicitly
-      // fixed in the smrtTask log. Distilled into short directives and injected
-      // into the classifier's PER-MESSAGE context (not the cached static prefix,
-      // so the shared prompt cache stays warm) where they override the general
-      // rules on conflict. General-scope corrections are baked into the prompt
-      // directly and are intentionally NOT loaded here. This is the runtime half
-      // of the corrections pipeline (the export/table half already existed).
+      // Correction rules the user filed in the smrtTask log, distilled into
+      // short directives and appended to the classifier's system prefix, where
+      // they outrank every general rule on conflict.
+      //
+      // DE-DUPLICATED, not truncated. The same complaint filed three times is
+      // one rule, and repeating it wastes tokens on every message without
+      // adding information; but a correction that is still unique is still
+      // live, however old, so nothing is dropped for age. Comparison is on the
+      // normalised text (case, punctuation and whitespace folded) so
+      // "למה יצרת הצעה כזאת?" and "למה יצרת הצעה כזאת" collapse to one line.
       const personalRuleLines: string[] = [];
+      const seenRules = new Set<string>();
+      const ruleKey = (s: string) =>
+        s.toLowerCase().replace(/[.,!?;:"'״׳()\[\]-]/g, "").replace(/\s+/g, " ").trim();
       for (const c of (correctionsRes.data ?? [])) {
         const note = String((c as any).note ?? "").trim();
         if (!note) continue;
+        const key = ruleKey(note);
+        if (!key || seenRules.has(key)) continue;
+        seenRules.add(key);
         if (String((c as any).correction_type) === "reclassify" && (c as any).new_value) {
           // The log UI stores reclassifications with pipeline-internal labels
           // ("user_actionable", "*_followup") that are NOT classifier

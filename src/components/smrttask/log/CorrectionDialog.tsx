@@ -36,7 +36,12 @@ interface CorrectionDialogProps {
 export function CorrectionDialog({ open, draft, onClose, onSaved }: CorrectionDialogProps) {
   const t = useTranslations("corrections");
   const [note, setNote] = useState("");
-  const [scope, setScope] = useState<CorrectionScope>("personal");
+  // Defaults to "general": a correction is almost always a real system bug the
+  // user wants fixed for good, not a private quirk. It also used to be the
+  // channel that did nothing — general corrections had no runtime path until
+  // 2026-07-28 — so the old "personal" default was quietly steering the useful
+  // corrections into the one bucket the classifier could read.
+  const [scope, setScope] = useState<CorrectionScope>("general");
   const [submitting, setSubmitting] = useState(false);
 
   // Reset the form whenever the dialog opens for a (possibly different) entry.
@@ -45,7 +50,7 @@ export function CorrectionDialog({ open, draft, onClose, onSaved }: CorrectionDi
   useEffect(() => {
     if (open) {
       setNote("");
-      setScope("personal");
+      setScope("general");
       setSubmitting(false);
     }
   }, [open, draft?.source_message_id]);
