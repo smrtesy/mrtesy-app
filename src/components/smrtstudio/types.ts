@@ -3,67 +3,61 @@
 
 export type Bilingual = { he: string; en: string };
 
-export type Gate = {
-  id: string;
-  stage_slug: string;
-  position: number;
-  label_he: string;
-  label_en: string;
-  done: boolean;
+/* ── Operator console — GET /api/studio/overview ─────────────────────────── */
+
+export type StudioStatus = "done" | "now" | "todo";
+
+/** One task row. For a research stage `group_key` is the phase it belongs to
+ *  (`Research` / `Tests` / `Decisions`); for a build stage it is the tool the
+ *  row builds, and `group_order` / `group_note` describe that tool's group. */
+export type StudioItem = {
+  group_key: string;
+  group_order: number;
+  group_note: string;
+  title: string;
+  status: StudioStatus;
+  desc: string;
+  link_url: string;
+  link_label: string;
 };
 
-export type Challenge = {
-  id: string;
-  stage_slug: string;
-  position: number;
-  kind: "expected" | "hit";
-  title_he: string;
-  title_en: string;
-  solved: boolean;
-  detail_he: string;
-  detail_en: string;
+export type StudioChallenge = { problem: string; solved: boolean; solution: string | null };
+
+export type StudioOutput = {
+  kind: "image" | "video" | "audio" | "text" | "tool";
+  label: string;
+  meta: string;
+  link_url: string;
 };
 
-export type Stage = {
-  id: string;
+/** The stage's charter — a plain description plus a three-step readiness meter
+ *  (general draft → detail → verify) and a deep link into smrtPlan. */
+export type StudioPlan = {
+  desc: string;
+  general: StudioStatus;
+  detail: StudioStatus;
+  verify: StudioStatus;
+  smrtplan_url: string;
+};
+
+export type StudioStage = {
   slug: string;
-  position: number;
-  name_he: string;
-  name_en: string;
-  blurb_he: string;
-  blurb_en: string;
+  name: string;
+  blurb: string;
   hue: number;
-  activity: "idle" | "research" | "running" | "scoring" | "blocked";
-  decision_state: "none" | "testing" | "decided" | "locked";
-  note_he: string;
-  note_en: string;
-  gates: Gate[];
-  gates_done: number;
-  gates_total: number;
-  progress_pct: number;
-  challenges_expected: Challenge[];
-  challenges_hit: Challenge[];
-  outputs: number;
-  scored: number;
-  cost_usd: number;
-  runs_missing_cost: number;
-  models_run: string[];
+  kind: "research" | "build";
+  plan: StudioPlan;
+  items: StudioItem[];
+  challenges: StudioChallenge[];
+  outputs: StudioOutput[];
+  done: number;
+  total: number;
+  pct: number;
 };
 
-export type OverviewTotals = {
-  runs: number;
-  runs_missing_cost: number;
-  voice_missing_cost: number;
-  recorded_cost_usd: number;
-  scores: number;
-  voice_takes: number;
-  voice_approved: number;
-  voice_cost_partial: boolean;
-  stages_locked: number;
-  stages_total: number;
-};
+export type StudioOverview = { stages: StudioStage[]; models_total: number };
 
-export type Overview = { stages: Stage[]; totals: OverviewTotals };
+/* ── Research centre — GET /api/studio/research ──────────────────────────── */
 
 export type ResearchItem = {
   id: string;
@@ -84,6 +78,8 @@ export type ResearchResponse = {
   counts: Record<string, number>;
   total: number;
 };
+
+/* ── Models catalog ──────────────────────────────────────────────────────── */
 
 export type StudioModel = {
   id: string;
@@ -175,25 +171,6 @@ export type ModelsResponse = {
   audio_probed_total: number;
   audio_video_total: number;
   pipeline_tool_total: number;
-};
-
-export type InvestmentRow = {
-  id: string;
-  position: number;
-  label_he: string;
-  label_en: string;
-  hours: number | null;
-  value_usd: number;
-  detail_he: string;
-  detail_en: string;
-  kind: "work" | "direct" | "ask" | "ask_total";
-};
-
-export type InvestmentResponse = {
-  items: InvestmentRow[];
-  total_hours: number;
-  total_work_usd: number;
-  total_direct_usd: number;
 };
 
 /** Pick the caller's language off a bilingual pair. Every studio row carries

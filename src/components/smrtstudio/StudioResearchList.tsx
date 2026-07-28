@@ -14,13 +14,13 @@ import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
-import type { ResearchItem, Stage } from "./types";
+import type { ResearchItem, StudioStage } from "./types";
 import { pick } from "./types";
 
 type Props = {
   items: ResearchItem[];
   counts: Record<string, number>;
-  stages: Stage[];
+  stages: StudioStage[];
   locale: string;
 };
 
@@ -30,14 +30,17 @@ export function StudioResearchList({ items, counts, stages, locale }: Props) {
   const t = useTranslations("smrtStudio");
   const [filter, setFilter] = useState<string>("all");
 
+  // The overview returns stages already ordered by position, so the array index
+  // is the stage number — the new StudioStage carries no explicit `position`,
+  // and its `name` is English-only (the console is English-first now).
   const stageName = useMemo(() => {
     const m = new Map<string, string>();
-    for (const s of stages) {
-      m.set(s.slug, `${String(s.position).padStart(2, "0")} ${pick(locale, s.name_he, s.name_en)}`);
-    }
+    stages.forEach((s, i) => {
+      m.set(s.slug, `${String(i + 1).padStart(2, "0")} ${s.name}`);
+    });
     m.set(CROSS, t("crossStage"));
     return m;
-  }, [stages, locale, t]);
+  }, [stages, t]);
 
   const chips = useMemo(() => {
     const ordered = [...stages.map((s) => s.slug), CROSS].filter((slug) => (counts[slug] ?? 0) > 0);
