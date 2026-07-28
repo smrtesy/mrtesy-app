@@ -276,6 +276,19 @@ async function runTriage(correctionId: string): Promise<void> {
           duplicate_of: null,
         };
 
+    // Distinguish "the model judged this unclear" from "the triage never ran".
+    // Only the latter deserves a retry: an infra blip is not a verdict, and
+    // without this marker such a correction was PARKED forever — it carried a
+    // real triage block so the sweep skipped it, and approving an "unclear" row
+    // cannot make it a rule (the allow-list needs class "prompt"). So the
+    // "never silent" guarantee held, but the correction could never become
+    // anything. The retry is bounded, because a correction that fails three
+    // times is failing for a reason a fourth attempt will not fix.
+    const failed = verdict === null;
+    const prevTriage = (((correction.context ?? {}) as Record<string, unknown>).triage ?? {}) as
+      Record<string, unknown>;
+    const attempts = Number(prevTriage.attempts ?? 0) + 1;
+
     const context = {
       ...((correction.context ?? {}) as Record<string, unknown>),
       prompt_class: effective.prompt_class,
@@ -285,6 +298,8 @@ async function runTriage(correctionId: string): Promise<void> {
         reason_he: effective.reason_he,
         suggested_rule_he: effective.suggested_rule_he,
         duplicate_of: effective.duplicate_of,
+        failed,
+        attempts,
         // Nothing affects classification until the user approves. The classifier
         // reads prompt_class, and its allow-list also requires approved=true for
         // the "prompt" class, so a verdict alone changes no behaviour.
@@ -354,7 +369,30 @@ export function triageCorrection(correctionId: string): Promise<void> {
  * Runs oldest-first and bounded, because it shares the one-slot queue with live
  * corrections and must never starve them.
  */
+export const MAX_TRIAGE_ATTEMPTS = 3;
+
 export async function sweepUntriagedCorrections(limit = 5): Promise<number> {
+  const bound = Math.max(1, Math.min(limit, 25));
+
+  // Two separate queries rather than one nested PostgREST or(): the conditions
+  // are structurally different (a missing verdict vs a failed one), and an
+  // and-group inside or() is exactly the kind of filter string that silently
+  // matches the wrong set. Cheap, and each half is readable on its own.
+  const { data: failedRows, error: failedErr } = await db
+    .from("task_corrections")
+    .select("id, context")
+    .eq("app_slug", "smrttask")
+    .eq("context->triage->>failed", "true")
+    .order("created_at", { ascending: true })
+    .limit(bound);
+  if (failedErr) console.error("[corrections.triage] sweep(failed) query:", failedErr.message);
+  const retryIds = (failedRows ?? [])
+    .filter((r) => {
+      const tri = (((r.context ?? {}) as Record<string, unknown>).triage ?? {}) as Record<string, unknown>;
+      return Number(tri.attempts ?? 0) < MAX_TRIAGE_ATTEMPTS;
+    })
+    .map((r) => r.id as string);
+
   const { data, error } = await db
     .from("task_corrections")
     .select("id")
@@ -375,10 +413,15 @@ export async function sweepUntriagedCorrections(limit = 5): Promise<number> {
     console.error("[corrections.triage] sweep query failed:", error.message);
     return 0;
   }
-  const ids = (data ?? []).map((r) => r.id as string);
+  // Never-triaged rows first: a correction with no verdict at all has a user
+  // waiting on a notification, while a retry already got one.
+  const ids = [...new Set([...(data ?? []).map((r) => r.id as string), ...retryIds])].slice(0, bound);
   for (const id of ids) await triageCorrection(id);
   if (ids.length > 0) {
-    console.log(`[corrections.triage] swept ${ids.length} untriaged correction(s)`);
+    console.log(
+      `[corrections.triage] swept ${ids.length} correction(s) ` +
+      `(${retryIds.length} retry of a failed run)`,
+    );
   }
   return ids.length;
 }
