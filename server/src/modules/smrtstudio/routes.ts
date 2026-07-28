@@ -1,15 +1,12 @@
 /**
- * smrtStudio — the unified production-management layer over the AI-video program.
+ * smrtStudio — the unified production-management console over the AI-video
+ * program. Read-only over the management spine (the studio_* tables): stages
+ * and, per stage, their plan, checklist items, challenges and outputs, plus the
+ * research index and the fal model catalog.
  *
- * Read-only over the management spine (studio_*) joined with the production
- * data that already exists (experiment_runs, experiment_scores, smrtvoice_*).
- * The spine holds stages, gates, challenges, the research index, the model
- * catalog and the investment ledger; the counts and costs are always computed
- * live from the production tables, never denormalized — so a number on screen
- * can never drift from the runs it claims to summarize.
- *
- * Every response carries both languages (`*_he` / `*_en`) so the operator
- * console and the investor page render from one payload.
+ * The overview response is assembled by grouping the child rows (items,
+ * challenges, outputs) under their stage in JS, so the whole 10-stage console
+ * renders from a single round trip. Fields are English-only.
  *
  * Guards: requireAuth + requireOrg + requireApp("smrtstudio") — the per-app
  * slug, same as every other tenant-scoped module.
@@ -27,165 +24,131 @@ router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
 
 type Row = Record<string, unknown>;
 
-/** Which pipeline stage a production row belongs to. `experiment_runs.stage`
- *  is written by the video-lab harness with the coarse kind ('image', 'video',
- *  …); the studio pipeline is finer, so map rather than assume. A run whose
- *  stage we do not recognize is still counted — under its own key — so nothing
- *  ever silently disappears from the totals. */
-const RUN_STAGE_TO_SLUG: Record<string, string> = {
-  image: "chars",
-  char: "chars",
-  chars: "chars",
-  sets: "sets",
-  frame: "frames",
-  frames: "frames",
-  video: "motion",
-  motion: "motion",
-  lipsync: "lipsync",
-  assembly: "assembly",
-};
-
-function slugForRun(r: Row): string {
-  const label = String(r.test_label ?? "").toLowerCase();
-  // test_label is the more specific signal when present (e.g. 'char-sheet').
-  if (label.startsWith("char")) return "chars";
-  if (label.startsWith("set")) return "sets";
-  if (label.startsWith("frame")) return "frames";
-  if (label.startsWith("lipsync")) return "lipsync";
-  const stage = String(r.stage ?? "").toLowerCase();
-  return RUN_STAGE_TO_SLUG[stage] ?? (stage || "unknown");
-}
-
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
 /**
- * GET /studio/overview — everything the main screen needs in one round trip:
- * stages with their two-axis state, gates (with a done/total progress pair),
- * challenges split expected-vs-hit, and live output counts per stage.
+ * GET /studio/overview — the whole 10-stage console in one round trip. For each
+ * stage (ordered by position): its plan block, its checklist items (ordered by
+ * group_order then position), its challenges and its outputs, plus a
+ * done/total/pct roll-up over the items — followed by the org's total model
+ * count. English-only payload; every read is org-scoped.
  */
 router.get("/studio/overview", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
 
-  const [stagesQ, gatesQ, chalQ, runsQ, scoresQ, takesQ] = await Promise.all([
-    db.from("studio_stages").select("*").eq("org_id", orgId).order("position"),
-    db.from("studio_gates").select("*").eq("org_id", orgId).order("position"),
-    db.from("studio_challenges").select("*").eq("org_id", orgId).order("position"),
+  // One round trip for the whole console. Every read is org-scoped (`db` is the
+  // service-role client, so RLS does NOT filter for us — the org predicate has
+  // to be explicit) and destructures its own `{ error }`, so a failure on any
+  // table is surfaced rather than swallowed.
+  const [
+    { data: stageRows, error: stagesErr },
+    { data: itemRows, error: itemsErr },
+    { data: chalRows, error: chalErr },
+    { data: outRows, error: outErr },
+    { count: modelsCount, error: modelsErr },
+  ] = await Promise.all([
     db
-      .from("experiment_runs")
-      .select("id,stage,test_label,model,cost_usd,qc_status,created_at")
-      .eq("org_id", orgId),
-    db.from("experiment_scores").select("id,run_id").eq("org_id", orgId),
-    // Org-scoped like every other read here — `db` is the service-role client,
-    // so RLS does NOT filter for us and the org predicate has to be explicit.
-    // `count: exact` with an explicit range means a truncated page is detected
-    // rather than silently under-reporting the take totals.
-    db
-      .from("smrtvoice_line_takes")
-      .select("id,approved,cost_usd", { count: "exact" })
+      .from("studio_stages")
+      .select(
+        "slug,position,name_en,blurb_en,hue,kind,plan_desc_en,plan_general,plan_detail,plan_verify,smrtplan_url",
+      )
       .eq("org_id", orgId)
-      .range(0, 9999),
+      .order("position"),
+    db
+      .from("studio_items")
+      .select(
+        "stage_slug,group_key,group_order,group_note_en,position,title_en,status,desc_en,link_url,link_label",
+      )
+      .eq("org_id", orgId)
+      .order("group_order")
+      .order("position"),
+    db
+      .from("studio_challenges")
+      .select("stage_slug,position,title_en,solved,detail_en")
+      .eq("org_id", orgId)
+      .order("position"),
+    db
+      .from("studio_outputs")
+      .select("stage_slug,position,out_kind,label_en,meta_en,link_url")
+      .eq("org_id", orgId)
+      .order("position"),
+    db
+      .from("studio_models")
+      .select("id", { count: "exact", head: true })
+      .eq("org_id", orgId),
   ]);
 
-  const firstError =
-    stagesQ.error ?? gatesQ.error ?? chalQ.error ?? runsQ.error ?? scoresQ.error;
-  if (firstError) return res.status(500).json({ error: firstError.message });
-  // A voice failure degrades the voice counts rather than failing the screen.
-  const takes = takesQ.error ? [] : (takesQ.data ?? []);
-  const takesTotal = takesQ.error ? 0 : (takesQ.count ?? takes.length);
-  const takesTruncated = takes.length < takesTotal;
+  const error = stagesErr ?? itemsErr ?? chalErr ?? outErr ?? modelsErr;
+  if (error) return res.status(500).json({ error: error.message });
 
-  const stages = stagesQ.data ?? [];
-  const gates = gatesQ.data ?? [];
-  const challenges = chalQ.data ?? [];
-  const runs = runsQ.data ?? [];
-  const scoredRunIds = new Set((scoresQ.data ?? []).map((s) => String(s.run_id)));
+  // Bucket each child table under its stage once. The queries already ordered
+  // the rows (items by group_order then position; challenges and outputs by
+  // position), and grouping preserves that order — so each stage's arrays come
+  // out sorted without any re-sort here.
+  const groupByStage = (rows: unknown[]) => {
+    const m = new Map<string, Row[]>();
+    for (const r of rows) {
+      const row = r as Row;
+      const k = String(row.stage_slug);
+      const arr = m.get(k);
+      if (arr) arr.push(row);
+      else m.set(k, [row]);
+    }
+    return m;
+  };
+  const itemsByStage = groupByStage(itemRows ?? []);
+  const chalByStage = groupByStage(chalRows ?? []);
+  const outByStage = groupByStage(outRows ?? []);
 
-  // Live per-stage production facts.
-  const perStage = new Map<
-    string,
-    { outputs: number; cost: number; missing_cost: number; scored: number; models: Set<string> }
-  >();
-  for (const r of runs) {
-    const slug = slugForRun(r as Row);
-    const cur =
-      perStage.get(slug) ??
-      { outputs: 0, cost: 0, missing_cost: 0, scored: 0, models: new Set<string>() };
-    cur.outputs += 1;
-    cur.cost += num((r as Row).cost_usd);
-    if ((r as Row).cost_usd == null) cur.missing_cost += 1;
-    if (scoredRunIds.has(String((r as Row).id))) cur.scored += 1;
-    const m = String((r as Row).model ?? "");
-    if (m) cur.models.add(m);
-    perStage.set(slug, cur);
-  }
-
-  const approvedTakes = takes.filter((t) => (t as Row).approved === true).length;
-  const voiceCost = takes.reduce((a, t) => a + num((t as Row).cost_usd), 0);
-  const voiceMissingCost = takes.filter((t) => (t as Row).cost_usd == null).length;
-  if (takesTotal) {
-    const cur =
-      perStage.get("voice") ??
-      { outputs: 0, cost: 0, missing_cost: 0, scored: 0, models: new Set<string>() };
-    // `outputs` uses the exact count so the headline is right even if the page
-    // was truncated; the derived figures below describe the rows we actually read.
-    cur.outputs += takesTotal;
-    cur.scored += approvedTakes;
-    cur.cost += voiceCost;
-    cur.missing_cost += voiceMissingCost;
-    perStage.set("voice", cur);
-  }
-
-  const payload = stages.map((s) => {
-    const slug = String((s as Row).slug);
-    const g = gates.filter((x) => String((x as Row).stage_slug) === slug);
-    const done = g.filter((x) => (x as Row).done === true).length;
-    const live = perStage.get(slug);
+  const stages = (stageRows ?? []).map((sRaw) => {
+    const s = sRaw as Row;
+    const slug = String(s.slug);
+    const items = itemsByStage.get(slug) ?? [];
+    const done = items.filter((it) => it.status === "done").length;
+    const now = items.filter((it) => it.status === "now").length;
+    const total = items.length;
     return {
-      ...s,
-      gates: g,
-      gates_done: done,
-      gates_total: g.length,
-      progress_pct: g.length ? Math.round((done / g.length) * 100) : 0,
-      challenges_expected: challenges.filter(
-        (c) => String((c as Row).stage_slug) === slug && (c as Row).kind === "expected",
-      ),
-      challenges_hit: challenges.filter(
-        (c) => String((c as Row).stage_slug) === slug && (c as Row).kind === "hit",
-      ),
-      outputs: live?.outputs ?? 0,
-      scored: live?.scored ?? 0,
-      cost_usd: Number((live?.cost ?? 0).toFixed(4)),
-      runs_missing_cost: live?.missing_cost ?? 0,
-      models_run: live ? [...live.models].sort() : [],
+      slug,
+      name: s.name_en,
+      blurb: s.blurb_en,
+      hue: s.hue,
+      kind: s.kind,
+      plan: {
+        desc: s.plan_desc_en,
+        general: s.plan_general,
+        detail: s.plan_detail,
+        verify: s.plan_verify,
+        smrtplan_url: s.smrtplan_url,
+      },
+      items: items.map((it) => ({
+        group_key: it.group_key,
+        group_order: it.group_order,
+        group_note: it.group_note_en,
+        title: it.title_en,
+        status: it.status,
+        desc: it.desc_en,
+        link_url: it.link_url,
+        link_label: it.link_label,
+      })),
+      challenges: (chalByStage.get(slug) ?? []).map((c) => ({
+        problem: c.title_en,
+        // `solved` is the authoritative flag from the column — the client must
+        // not re-derive it from whether `solution` text happens to be present,
+        // or a solved-but-undocumented challenge would read as unsolved.
+        solved: !!c.solved,
+        solution: c.solved ? c.detail_en : null,
+      })),
+      outputs: (outByStage.get(slug) ?? []).map((o) => ({
+        kind: o.out_kind,
+        label: o.label_en,
+        meta: o.meta_en,
+        link_url: o.link_url,
+      })),
+      done,
+      total,
+      pct: total ? Math.round(((done + 0.5 * now) / total) * 100) : 0,
     };
   });
 
-  res.json({
-    stages: payload,
-    totals: {
-      runs: runs.length,
-      // Scoped to experiment_runs so it stays comparable to `runs`. The voice
-      // gap is reported on its own line rather than folded in, which would make
-      // "missing" larger than the run count it appears to describe.
-      runs_missing_cost: runs.filter((r) => (r as Row).cost_usd == null).length,
-      voice_missing_cost: voiceMissingCost,
-      recorded_cost_usd: Number(
-        (runs.reduce((a, r) => a + num((r as Row).cost_usd), 0) + voiceCost).toFixed(4),
-      ),
-      scores: scoredRunIds.size,
-      voice_takes: takesTotal,
-      voice_approved: approvedTakes,
-      /** True when the take page was capped: the counts above stay exact, but
-       *  `recorded_cost_usd` then covers only the rows actually read. The
-       *  console renders a "partial records" marker off this. */
-      voice_cost_partial: takesTruncated,
-      stages_locked: stages.filter((s) => (s as Row).decision_state === "locked").length,
-      stages_total: stages.length,
-    },
-  });
+  res.json({ stages, models_total: modelsCount ?? 0 });
 });
 
 /**
@@ -464,31 +427,6 @@ router.get("/studio/models", async (req: Request, res: Response) => {
     audio_probed_total: probedRes.count ?? 0,
     audio_video_total: audioVideoRes.count ?? 0,
     pipeline_tool_total: toolRes.count ?? 0,
-  });
-});
-
-/** GET /studio/investment — the hours/value ledger behind the investor page. */
-router.get("/studio/investment", async (req: Request, res: Response) => {
-  const orgId = req.org!.id;
-  const { data, error } = await db
-    .from("studio_investment")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("position");
-  if (error) return res.status(500).json({ error: error.message });
-
-  const rows = data ?? [];
-  const work = rows.filter((r) => (r as Row).kind === "work");
-  res.json({
-    items: rows,
-    total_hours: work.reduce((a, r) => a + num((r as Row).hours), 0),
-    total_work_usd: Number(work.reduce((a, r) => a + num((r as Row).value_usd), 0).toFixed(2)),
-    total_direct_usd: Number(
-      rows
-        .filter((r) => (r as Row).kind === "direct")
-        .reduce((a, r) => a + num((r as Row).value_usd), 0)
-        .toFixed(2),
-    ),
   });
 });
 

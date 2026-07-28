@@ -15,14 +15,14 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { StudioResearchList } from "./StudioResearchList";
-import type { Overview, ResearchResponse } from "./types";
+import type { StudioOverview, ResearchResponse } from "./types";
 
 export function StudioResearchScreen() {
   const t = useTranslations("smrtStudio");
   const locale = useLocale();
 
   const [research, setResearch] = useState<ResearchResponse | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
+  const [overview, setOverview] = useState<StudioOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -32,7 +32,7 @@ export function StudioResearchScreen() {
     try {
       const [r, o] = await Promise.all([
         api<ResearchResponse>("/api/studio/research"),
-        api<Overview>("/api/studio/overview"),
+        api<StudioOverview>("/api/studio/overview"),
       ]);
       setResearch(r);
       setOverview(o);
