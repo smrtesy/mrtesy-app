@@ -14,23 +14,37 @@
  *      fallback during initial setup).
  *   4. Verify X-Signature = HMAC-SHA256(key, rawBody + X-Timestamp) and reject
  *      stale timestamps (>5 min) to block replays. Unverifiable → drop.
- *   5. Upsert the message into sms_messages (idempotent on user_id+messageId,
+ *   5. MMS attachments (if the payload carries any): store the bytes in the
+ *      sms-media bucket and run them through the SAME Gemini helpers the
+ *      WhatsApp webhook uses — images get OCR, audio gets transcribed — so the
+ *      resulting text becomes the message body the classifier reads.
+ *   6. Upsert the message into sms_messages (idempotent on user_id+messageId,
  *      so a gateway re-delivery is a no-op).
- *   6. Unless it looks like a one-time/verification code, upsert a per-message
+ *   7. Unless it looks like a one-time/verification code, upsert a per-message
  *      row into source_messages (source_type='sms', pending) so the ai-process
  *      pipeline classifies it and creates a task — exactly like WhatsApp/Gmail.
  *      OTP/2FA codes are stored in sms_messages only and never reach the AI.
- *   7. Return 200 on soft failures (unknown device, bad signature) so the
+ *   8. Return 200 on soft failures (unknown device, bad signature) so the
  *      gateway does not retry-storm; only true server faults bubble up.
  */
 
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import {
+  AUDIO_TRANSCRIBE_MAX_BYTES,
+  performImageOcr,
+  transcribeAudio,
+} from "@/lib/media/gemini";
 
 // Node runtime: we need `node:crypto`, `Buffer`, and the full Supabase client.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// An MMS with attachments does a Storage upload plus one Gemini call per part;
+// the default serverless timeout (~10-15s) is not enough and a timeout makes
+// the gateway redeliver the whole payload. 60s is Vercel's cross-plan maximum,
+// same as the WhatsApp webhook.
+export const maxDuration = 60;
 
 // Reject timestamps further than this from now (seconds) — replay protection.
 const MAX_CLOCK_SKEW_SECONDS = 300;
@@ -56,6 +70,53 @@ interface SmsReceivedPayload {
   subject?: string;
   /** `mms:downloaded` carries the message text here (with `subject`/attachments). */
   body?: string;
+  /**
+   * MMS parts. The UPSTREAM gateway never sends these — its `mms:received`
+   * payload is metadata only (`size`, `contentClass`), verified against
+   * docs.sms-gate.app and against three weeks of production `raw_payload`
+   * rows, none of which carried a single media field. They arrive only from
+   * our fork's `mms:downloaded` / `mms:sent-observed` events, which read
+   * `content://mms/part` on the phone. Contract + Kotlin patch spec:
+   * docs/sms-mms-media-handoff.md.
+   *
+   * `parts` is accepted as an alias because the Android side names the
+   * provider table that way; a naming slip between the two repos must not
+   * silently drop media, which is the exact failure this whole change fixes.
+   */
+  attachments?: SmsAttachmentPayload[];
+  parts?: SmsAttachmentPayload[];
+}
+
+/** One MMS part as the fork sends it: metadata + the bytes, base64-encoded. */
+interface SmsAttachmentPayload {
+  /** MIME type, e.g. "image/jpeg", "audio/amr". `mimeType`/`type` are aliases. */
+  contentType?: string;
+  mimeType?: string;
+  type?: string;
+  /** Base64 of the raw bytes. `base64`/`content` are aliases. */
+  data?: string;
+  base64?: string;
+  content?: string;
+  /** Original filename as the sender's device named it. `name` is an alias. */
+  filename?: string;
+  name?: string;
+}
+
+/** A normalized, decoded attachment ready to store and analyse. */
+interface NormalizedAttachment {
+  buf: Buffer;
+  mime: string;
+  filename: string;
+  kind: "image" | "audio" | "video" | "file";
+}
+
+/** What we persist in sms_messages.media_parts (see the migration's comment). */
+interface StoredMediaPart {
+  path: string;
+  mime: string;
+  filename: string;
+  size: number;
+  kind: NormalizedAttachment["kind"];
 }
 
 interface SmsWebhookEnvelope {
@@ -196,7 +257,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       event,
       outcome: "ignored",
       reason: `ignored:${event || "unknown"}`,
-      payload: envelope.payload as Record<string, unknown> | undefined,
+      payload: envelope.payload ? payloadForStorage(envelope.payload) : undefined,
     });
     return NextResponse.json({ ok: true, ignored: event || "unknown" }, { status: 200 });
   }
@@ -265,7 +326,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       direction: isIncoming ? "incoming" : "outgoing",
       outcome: "dropped",
       reason: "ingest_failed",
-      payload: envelope.payload as Record<string, unknown> | undefined,
+      payload: envelope.payload ? payloadForStorage(envelope.payload) : undefined,
     });
     return NextResponse.json({ ok: false, error: "ingest_failed" }, { status: 500 });
   }
@@ -452,6 +513,199 @@ function timingSafeEqual(a: string, b: string): boolean {
 // Rolling-transcript constants (mirror the WhatsApp thread builder).
 const SMS_CONVO_BUDGET = 2600;
 const SMS_MAX_MSG_CHARS = 400;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MMS attachments — Storage + Gemini transcription / OCR
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cap on how many parts of ONE message we send to Gemini. Every part is stored
+ * and shown in the reader; only the analysis is capped, because each part is a
+ * paid call on a 60s serverless budget. Four covers every real MMS we have
+ * seen. When a message exceeds it the body says so explicitly — a silent cap
+ * would read to the classifier (and to the user) as "that's all there was".
+ */
+const MAX_MEDIA_AI_PARTS = 4;
+
+function kindForMime(mime: string): NormalizedAttachment["kind"] {
+  const m = mime.toLowerCase();
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("audio/")) return "audio";
+  if (m.startsWith("video/")) return "video";
+  return "file";
+}
+
+function extForMime(mime: string, filename: string): string {
+  const fromName = filename.match(/\.([A-Za-z0-9]{1,8})$/)?.[1];
+  if (fromName) return fromName.toLowerCase();
+  const map: Record<string, string> = {
+    "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
+    "image/webp": "webp", "image/gif": "gif",
+    "audio/amr": "amr", "audio/3gpp": "3gp", "audio/mpeg": "mp3",
+    "audio/mp4": "m4a", "audio/ogg": "ogg", "audio/wav": "wav",
+    "video/mp4": "mp4", "video/3gpp": "3gp",
+    "application/pdf": "pdf", "text/plain": "txt",
+  };
+  return map[mime.toLowerCase().split(";")[0].trim()] ?? "bin";
+}
+
+/**
+ * Decode the payload's attachment list. Anything without usable bytes is
+ * dropped here rather than half-handled downstream. SMIL layout parts (every
+ * MMS carries one) and the text/plain part — whose content is already the
+ * message body — are not media and would otherwise be stored as junk files.
+ */
+function normalizeAttachments(payload: SmsReceivedPayload): NormalizedAttachment[] {
+  const raw = payload.attachments ?? payload.parts ?? [];
+  if (!Array.isArray(raw)) return [];
+  const out: NormalizedAttachment[] = [];
+  for (const [i, a] of raw.entries()) {
+    if (!a || typeof a !== "object") continue;
+    const mime = String(a.contentType ?? a.mimeType ?? a.type ?? "").trim().toLowerCase();
+    const b64 = String(a.data ?? a.base64 ?? a.content ?? "").trim();
+    if (!b64) continue;
+    if (mime.includes("smil") || mime.startsWith("text/")) continue;
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(b64, "base64");
+    } catch {
+      continue;
+    }
+    if (buf.length === 0) continue;
+    const filename = String(a.filename ?? a.name ?? "").trim() || `part${i}`;
+    out.push({ buf, mime: mime || "application/octet-stream", filename, kind: kindForMime(mime) });
+  }
+  return out;
+}
+
+/**
+ * Store one attachment in the private sms-media bucket. The object key is built
+ * from the messageId (ASCII-safe) plus the part index — never from the sender's
+ * filename, which can be Hebrew and which Supabase Storage rejects as an
+ * invalid key (the bug that silently lost Hebrew-named WhatsApp documents).
+ */
+async function storeSmsAttachment(
+  db: SupabaseAdmin,
+  userId: string,
+  messageId: string,
+  index: number,
+  att: NormalizedAttachment,
+): Promise<StoredMediaPart> {
+  const safeBase = messageId.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80);
+  const path = `${userId}/${safeBase}-${index}.${extForMime(att.mime, att.filename)}`;
+  const { error } = await db.storage.from("sms-media").upload(path, att.buf, {
+    contentType: att.mime,
+    upsert: true,
+  });
+  if (error) throw new Error(`sms-media upload: ${error.message}`);
+  return {
+    path,
+    mime: att.mime,
+    filename: att.filename,
+    size: att.buf.length,
+    kind: att.kind,
+  };
+}
+
+/**
+ * Has this exact messageId already been ingested WITH its media analysed? The
+ * gateway redelivers a webhook it didn't get a fast enough 200 for, and
+ * re-running Gemini on the same MMS is how a single WhatsApp voice note once
+ * turned into five paid calls and tripped the rate limit for everything after
+ * it. Returns the stored body + parts so the caller can reuse them wholesale.
+ *
+ * "Analysed" means the body carries real derived text: an OCR block, or a
+ * transcript. Every failure path writes a bracketed placeholder ("[תמונה —
+ * שגיאת הורדה]"), so a body that starts with "[" and has no [OCR] marker is a
+ * previous failure and SHOULD be retried.
+ */
+async function existingSmsMedia(
+  db: SupabaseAdmin,
+  userId: string,
+  messageId: string,
+): Promise<{ body: string; parts: StoredMediaPart[] } | null> {
+  const { data, error } = await db
+    .from("sms_messages")
+    .select("body_text, media_parts")
+    .eq("user_id", userId)
+    .eq("message_id", messageId)
+    .maybeSingle();
+  if (error) {
+    console.error("[sms-webhook] existingSmsMedia lookup failed:", error.message);
+    return null;
+  }
+  const parts = (data?.media_parts as StoredMediaPart[] | null) ?? null;
+  if (!parts || parts.length === 0) return null;
+  const body = String(data?.body_text ?? "").trim();
+  const analysed = body.includes("[OCR]") || (body.length > 0 && !body.startsWith("["));
+  return analysed ? { body, parts } : null;
+}
+
+/**
+ * Turn an MMS's attachments into stored files plus the text the classifier will
+ * read. Runs the SAME Gemini helpers as the WhatsApp webhook (@/lib/media/gemini)
+ * — images get OCR, audio gets transcribed — so the two channels can't drift.
+ *
+ * A failure on one part never loses the others or the message: the part gets an
+ * honest bracketed placeholder and everything else proceeds. The bytes are
+ * stored BEFORE the analysis for the same reason WhatsApp does it — a Gemini
+ * outage must not cost the user the picture itself.
+ */
+async function processSmsAttachments(
+  db: SupabaseAdmin,
+  userId: string,
+  messageId: string,
+  caption: string,
+  attachments: NormalizedAttachment[],
+): Promise<{ body: string; parts: StoredMediaPart[] }> {
+  const parts: StoredMediaPart[] = [];
+  const blocks: string[] = [];
+
+  for (const [i, att] of attachments.entries()) {
+    try {
+      parts.push(await storeSmsAttachment(db, userId, messageId, i, att));
+    } catch (e) {
+      console.error("[sms-webhook] attachment storage failed:", e);
+    }
+
+    if (i >= MAX_MEDIA_AI_PARTS) {
+      blocks.push(`[קובץ מצורף ${i + 1} (${att.mime}) — נשמר, לא נותח]`);
+      continue;
+    }
+
+    // Gemini's inline_data request is capped at ~20MB and base64 inflates by
+    // ~33%, so anything past the ceiling cannot be analysed inline at all —
+    // attempting it just burns money. The file is already stored above.
+    if (att.buf.length > AUDIO_TRANSCRIBE_MAX_BYTES) {
+      const mb = (att.buf.length / 1024 / 1024).toFixed(0);
+      blocks.push(`[קובץ גדול (${mb}MB) — נשמר, לא נותח אוטומטית]`);
+      continue;
+    }
+
+    const b64 = att.buf.toString("base64");
+    try {
+      if (att.kind === "image") {
+        const ocr = await performImageOcr(db, b64, att.mime, "gemini.sms");
+        blocks.push(`[OCR]\n${ocr}`);
+      } else if (att.kind === "audio") {
+        blocks.push(await transcribeAudio(db, b64, att.mime, "gemini.sms"));
+      } else if (att.kind === "video") {
+        blocks.push("[וידאו]");
+      } else {
+        blocks.push(`[קובץ: ${att.filename}]`);
+      }
+    } catch (e) {
+      console.warn("[sms-webhook] media analysis failed:", e);
+      blocks.push(att.kind === "audio" ? "[אודיו - לא ניתן לתמלל כרגע]" : "[תמונה]");
+    }
+  }
+
+  const body = [caption.trim() ? `כיתוב: ${caption.trim()}` : "", ...blocks]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return { body, parts };
+}
 
 function fmtTsLocal(iso: string, tz: string): string {
   const d = new Date(iso);
@@ -745,13 +999,48 @@ async function ingestSms(
     typeof payload.simNumber === "number" && Number.isFinite(payload.simNumber)
       ? payload.simNumber
       : null;
-  // OTP detection applies only to INCOMING messages — an outgoing SMS the user
-  // wrote is never a one-time code to suppress.
+  // OTP detection runs on the TEXT the sender typed, never on OCR output — a
+  // screenshot of a bank statement is not a one-time code. And it applies only
+  // to INCOMING messages: an outgoing SMS the user wrote is never a code to
+  // suppress.
   const isOtp = isIncoming ? looksLikeOtp(body) : false;
 
-  // 1. Durable record (idempotent on re-delivery). For outgoing SMS the "from"
+  // 1. MMS attachments → stored files + the text the classifier reads. Until
+  //    2026-07-28 an MMS carrying nothing but a photo arrived with an empty
+  //    body and was dropped at step 3 below, so the picture never existed as
+  //    far as smrtesy was concerned. Now it is OCR'd (or transcribed) through
+  //    the same Gemini module the WhatsApp webhook uses, and the derived text
+  //    IS the body from here on — including in the rolling transcript that
+  //    step 5 builds. Skipped entirely for OTP messages: no reason to pay for
+  //    analysis of something we are about to withhold from the AI anyway.
+  const attachments = isOtp ? [] : normalizeAttachments(payload);
+  let finalBody = body;
+  let mediaParts: StoredMediaPart[] | null = null;
+  if (attachments.length > 0) {
+    // Redelivery guard, before any paid work: the gateway resends a webhook it
+    // didn't get a fast 200 for, and re-analysing the same MMS is pure waste.
+    const prior = await existingSmsMedia(db, userId, messageId);
+    if (prior) {
+      finalBody = prior.body;
+      mediaParts = prior.parts;
+    } else {
+      const processed = await processSmsAttachments(db, userId, messageId, body, attachments);
+      finalBody = processed.body || body;
+      mediaParts = processed.parts.length > 0 ? processed.parts : null;
+    }
+  }
+
+  // 2. Durable record (idempotent on re-delivery). For outgoing SMS the "from"
   //    is the user's own line, which the gateway doesn't report, so we store a
   //    "me" sentinel (from_phone is NOT NULL) and key threads off the peer.
+  //
+  //    media_parts is spread in ONLY when there is media, so this write stays
+  //    deploy-order independent: PostgREST rejects the WHOLE row with PGRST204
+  //    ("could not find the column ... in the schema cache") if the column
+  //    doesn't exist yet, which would take down every plain SMS as well the
+  //    moment this code shipped ahead of migration 20260728140000. Attachments
+  //    can't arrive before the gateway fork sends them, so the only path that
+  //    needs the column can't fire until well after the migration is applied.
   const { error: smsErr } = await db.from("sms_messages").upsert(
     {
       user_id: userId,
@@ -761,21 +1050,22 @@ async function ingestSms(
       from_phone: isIncoming ? peer : "me",
       to_phone: isIncoming ? (payload.recipient ?? null) : peer,
       sim_number: simNumber,
-      body_text: body,
+      body_text: finalBody,
+      ...(mediaParts ? { media_parts: mediaParts } : {}),
       is_otp: isOtp,
       received_at: receivedAt,
-      raw_payload: payload as Record<string, unknown>,
+      raw_payload: payloadForStorage(payload),
     },
     { onConflict: "user_id,message_id", ignoreDuplicates: false },
   );
   if (smsErr) throw new Error(`sms_messages upsert: ${smsErr.message}`);
 
-  // 2. OTP / verification codes never reach the AI pipeline; empty bodies have
+  // 3. OTP / verification codes never reach the AI pipeline; empty bodies have
   //    nothing to classify. Both are still recorded in sms_messages above.
   if (isOtp) return { outcome: "ingested", reason: "otp_suppressed", direction, messageId, peer, bodyPreview: body };
-  if (body.trim().length === 0) return { outcome: "ingested", reason: "empty_body", direction, messageId, peer, bodyPreview: body };
+  if (finalBody.trim().length === 0) return { outcome: "ingested", reason: "empty_body", direction, messageId, peer, bodyPreview: finalBody };
 
-  // 3. Self-note: the user texting their OWN number as a task-capture channel —
+  // 4. Self-note: the user texting their OWN number as a task-capture channel —
   //    the SMS twin of WhatsApp self-chat. The device's own line is the
   //    `recipient` on any INCOMING sms; learn it once, cache it, then a message
   //    whose peer matches it is a deliberate self-note. These bypass the
@@ -785,18 +1075,41 @@ async function ingestSms(
   const ownNumber = await resolveOwnNumber(db, userId, deviceId, isIncoming ? (payload.recipient ?? null) : null);
   const isSelfNote = !!ownNumber && numbersMatch(peer, ownNumber);
   if (isSelfNote) {
-    await emitSmsSelfNote(db, userId, body, receivedAt, ownNumber!);
-    return { outcome: "ingested", reason: "self_note", direction, messageId, peer, bodyPreview: body };
+    await emitSmsSelfNote(db, userId, finalBody, receivedAt, ownNumber!);
+    return { outcome: "ingested", reason: "self_note", direction, messageId, peer, bodyPreview: finalBody };
   }
 
-  // Build the rolling conversation transcript for this peer and write ONE
-  // source_messages row for THIS message (mirrors WhatsApp) so the classifier
-  // sees the whole thread — not this message in isolation — and can understand
-  // a reply like "Mistake, I didn't pay" in context. One row per message (no
-  // burst coalescing) so no message in a burst is ever dropped.
-  await refreshSmsSourceThread(db, userId, peer, { messageId, direction, body, receivedAt });
+  // 5. Build the rolling conversation transcript for this peer and write ONE
+  //    source_messages row for THIS message (mirrors WhatsApp) so the classifier
+  //    sees the whole thread — not this message in isolation — and can understand
+  //    a reply like "Mistake, I didn't pay" in context. One row per message (no
+  //    burst coalescing) so no message in a burst is ever dropped.
+  await refreshSmsSourceThread(db, userId, peer, { messageId, direction, body: finalBody, receivedAt });
 
-  return { outcome: "ingested", reason: null, direction, messageId, peer, bodyPreview: body };
+  return { outcome: "ingested", reason: null, direction, messageId, peer, bodyPreview: finalBody };
+}
+
+/**
+ * The payload as we archive it in sms_messages.raw_payload — with attachment
+ * BYTES stripped. Keeping them would store every photo twice (once in Storage,
+ * once base64-inflated inside a jsonb column) and blow the row size up by
+ * megabytes per MMS. The metadata is kept so a payload dispute is still
+ * diagnosable from the archive alone.
+ */
+function payloadForStorage(payload: SmsReceivedPayload): Record<string, unknown> {
+  const raw = payload.attachments ?? payload.parts;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return payload as unknown as Record<string, unknown>;
+  }
+  const describe = (a: SmsAttachmentPayload) => ({
+    contentType: a.contentType ?? a.mimeType ?? a.type ?? null,
+    filename: a.filename ?? a.name ?? null,
+    base64_length: String(a.data ?? a.base64 ?? a.content ?? "").length,
+  });
+  const out: Record<string, unknown> = { ...(payload as unknown as Record<string, unknown>) };
+  if (payload.attachments) out.attachments = payload.attachments.map(describe);
+  if (payload.parts) out.parts = payload.parts.map(describe);
+  return out;
 }
 
 /**

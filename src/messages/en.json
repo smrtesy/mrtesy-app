@@ -296,7 +296,10 @@
     "searchPlaceholder": "Search by number or text…",
     "searchOpen": "Search",
     "searchClose": "Close search",
-    "searchNoResults": "No matching conversations"
+    "searchNoResults": "No matching conversations",
+    "attachmentImageAlt": "Image received by MMS",
+    "attachmentOpen": "Open attachment",
+    "attachmentUnavailable": "Attachment unavailable"
   },
   "whatsappPage": {
     "title": "WhatsApp Messages",

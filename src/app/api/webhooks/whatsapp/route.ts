@@ -37,6 +37,11 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import {
+  AUDIO_TRANSCRIBE_MAX_BYTES,
+  performImageOcr,
+  transcribeAudio,
+} from "@/lib/media/gemini";
 import { runAutoReplies, type IncomingForReply } from "./autoreply";
 
 // We don't need the edge runtime; Node is fine here and lets us use
@@ -901,11 +906,8 @@ async function closeRunSession(
 // Per-message → whatsapp_messages row
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Skip inline Gemini transcription above this raw-bytes size. Gemini caps the
-// whole inline_data request at ~20MB; base64 inflates by ~33%, so ~15MB raw is
-// the safe ceiling. Bigger recordings also overflow the transcription token
-// budget, so an inline attempt just burns money and rate-limits the next notes.
-const AUDIO_TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
+// AUDIO_TRANSCRIBE_MAX_BYTES, transcribeAudio and performImageOcr now live in
+// @/lib/media/gemini so the SMS/MMS webhook runs the SAME code, not a copy.
 
 // Has this exact wamid already been stored with a REAL transcript (not a
 // placeholder)? Used to skip re-transcribing on Meta webhook redelivery.
@@ -1070,7 +1072,12 @@ async function buildMessageRow(
             break;
           }
 
-          const transcript = await transcribeAudio(db, blob.base64, blob.mimeType);
+          const transcript = await transcribeAudio(
+            db,
+            blob.base64,
+            blob.mimeType,
+            "gemini.whatsapp",
+          );
           body = transcript;
         } catch (e) {
           console.warn("[whatsapp-webhook] audio transcription failed:", e);
@@ -1125,7 +1132,12 @@ async function buildMessageRow(
           }
 
           try {
-            const ocr = await performImageOcr(db, blob.base64, blob.mimeType);
+            const ocr = await performImageOcr(
+              db,
+              blob.base64,
+              blob.mimeType,
+              "gemini.whatsapp",
+            );
             body = (caption ? "כיתוב: " + caption + "\n\n" : "") + "[OCR]\n" + ocr;
           } catch (e) {
             console.warn("[whatsapp-webhook] image OCR failed, using caption only:", e);
@@ -1391,212 +1403,6 @@ function filenameForImage(wamid: string, mime: string): string {
   const ext = map[mime.toLowerCase().split(";")[0].trim()] ?? "bin";
   const safeBase = wamid.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60);
   return `${safeBase}.${ext}`;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Gemini — audio transcription + image OCR
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface GeminiCandidate {
-  content?: { parts?: Array<{ text?: string }> };
-  finishReason?: string;
-}
-interface GeminiUsageMetadata {
-  promptTokenCount?: number;
-  candidatesTokenCount?: number;
-  thoughtsTokenCount?: number;
-  promptTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
-}
-interface GeminiResponse {
-  candidates?: GeminiCandidate[];
-  usageMetadata?: GeminiUsageMetadata;
-}
-
-const GEMINI_PRICING: Record<string, { audioInput: number; imageInput: number; textInput: number; output: number }> = {
-  "gemini-2.5-flash":       { textInput: 0.30, audioInput: 1.00, imageInput: 0.30, output: 2.50 },
-  "gemini-2.5-pro":         { textInput: 1.25, audioInput: 1.25, imageInput: 1.25, output: 10.0 },
-  "gemini-3-flash-preview": { textInput: 0.50, audioInput: 1.00, imageInput: 0.50, output: 3.00 },
-  "gemini-3-pro-preview":   { textInput: 1.50, audioInput: 2.50, imageInput: 1.50, output: 12.0 },
-};
-
-function estimateGeminiCostLocal(model: string, usage: GeminiUsageMetadata | undefined): number {
-  if (!usage) return 0;
-  const p = GEMINI_PRICING[model];
-  if (!p) return 0;
-  let audioTok = 0, imageTok = 0, textTok = 0;
-  if (Array.isArray(usage.promptTokensDetails)) {
-    for (const d of usage.promptTokensDetails) {
-      const n = d.tokenCount ?? 0;
-      const m = (d.modality ?? "").toUpperCase();
-      if (m === "AUDIO") audioTok += n;
-      else if (m === "IMAGE" || m === "VIDEO") imageTok += n;
-      else textTok += n;
-    }
-  } else {
-    textTok = usage.promptTokenCount ?? 0;
-  }
-  const outTok = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
-  return (audioTok / 1_000_000) * p.audioInput +
-    (imageTok / 1_000_000) * p.imageInput +
-    (textTok  / 1_000_000) * p.textInput +
-    (outTok   / 1_000_000) * p.output;
-}
-
-async function callGemini(
-  db: SupabaseAdmin,
-  prompt: string,
-  base64Data: string,
-  mimeType: string,
-): Promise<string> {
-  const apiKey = await getAppSecret(db, "smrttask", "GEMINI_API_KEY", "GEMINI_API_KEY");
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
-
-  const model =
-    (await getAppSecret(db, "smrttask", "GEMINI_MODEL", "GEMINI_MODEL")) ??
-    "gemini-3-flash-preview";
-  const thinkingLevel =
-    (await getAppSecret(db, "smrttask", "GEMINI_THINKING_LEVEL", "GEMINI_THINKING_LEVEL")) ??
-    "low";
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  const body = {
-    contents: [
-      {
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: mimeType, data: base64Data } },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 4096,
-      thinkingConfig: { thinkingLevel },
-    },
-  };
-
-  const fetchOnce = async () =>
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(body),
-    });
-
-  let res = await fetchOnce();
-  if (!res.ok && res.status >= 500 && res.status < 600) {
-    await new Promise((r) => setTimeout(r, 3000));
-    res = await fetchOnce();
-  }
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`Gemini ${res.status}: ${errText.slice(0, 300)}`);
-  }
-
-  const data = (await res.json()) as GeminiResponse;
-
-  // Log usage to ai_usage ledger (best-effort).
-  try {
-    const usage = data.usageMetadata;
-    const { error: usageInsertError } = await db.from("ai_usage").insert({
-      provider: "google",
-      component: "gemini.whatsapp",
-      model,
-      input_tokens: usage?.promptTokenCount ?? 0,
-      // Thinking tokens bill as output and ARE priced in below, so they belong
-      // in this column too — logging candidates alone made the per-call cost
-      // look impossible to derive from the tokens shown in /admin/usage.
-      output_tokens: (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0),
-      cost_usd: estimateGeminiCostLocal(model, usage),
-    });
-    if (usageInsertError) {
-      console.error("[whatsapp-webhook] ai_usage insert failed:", usageInsertError.message);
-    }
-  } catch { /* never block the caller */ }
-
-  const candidate = data.candidates?.[0];
-  if (!candidate) return "[Gemini: אין תגובה]";
-  if (candidate.finishReason === "SAFETY") return '[Gemini: תוכן נחסם ע"י מסנני בטיחות]';
-  if (candidate.finishReason === "RECITATION") return "[Gemini: נחסם בגלל ציטוט ידוע]";
-
-  const text = candidate.content?.parts
-    ?.filter((p) => p.text)
-    .map((p) => p.text)
-    .join("\n");
-  return text ?? "[Gemini החזיר תגובה ריקה]";
-}
-
-const TRANSCRIPTION_PROMPT =
-  "החזר אך ורק את תוכן הדיבור עצמו, מילה במילה. אסור להוסיף ולו מילה אחת משלך.\n" +
-  "• המילה הראשונה והמילה האחרונה בפלט חייבות להיות מתוך הדיבור עצמו.\n" +
-  "• בלי שום משפט פתיחה (\"הנה התמלול\", \"בטח, הנה...\", \"להלן התמלול:\") ובלי שום משפט סיום (\"מקווה שעזרתי\", \"זהו\", \"בהצלחה\").\n" +
-  "• בלי כותרות, בלי סוגריים מטא (כגון [תמלול אודיו]), ובלי markdown fences (```).\n" +
-  "• בלי תוויות דובר כמו \"דובר 1:\", \"דובר 2:\" אלא אם יש באמת כמה דוברים שונים בקובץ.\n" +
-  "\n" +
-  "חוקי תמלול:\n" +
-  "• זהה את שפת הדיבור (עברית/אנגלית/יידיש/אחר) ותמלל באותה שפה — אל תתרגם.\n" +
-  "• שמור על סימני פיסוק ופסקאות טבעיות.\n" +
-  "• אם יש קטע לא ברור — כתוב [לא ברור]. אסור להמציא.\n" +
-  "\n" +
-  "הפלט שלך נכנס ישירות לצ'אט של המשתמש כאילו הוא הקליד אותו בעצמו.";
-
-function sanitizeTranscript(text: string): string {
-  let out = text.trim();
-
-  if (/^```/.test(out)) {
-    out = out.replace(/^```[a-zA-Z0-9]*\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
-  }
-
-  out = out.replace(/^\[\s*תמלול(?:\s+אודיו)?\s*\]\s*\n*/u, "");
-
-  const HE_META = "תמלול|תרגום|טקסט|פלט|תוצאה|תיאור|פיענוח|קובץ\\s+קולי|הקלטה";
-  const EN_META = "transcript(?:ion)?|ocr|text|output|result|translation|description|audio|recording";
-  const preamblePatterns: RegExp[] = [
-    new RegExp(`^(?:הנה|להלן|בטח[,!:]?\\s*הנה)[^\\n]{0,80}(?:${HE_META})[^\\n]{0,40}:\\s*\\n+`, "iu"),
-    new RegExp(`^(?:here(?:'s| is| are|\\s+you\\s+go)|sure[,!:]?\\s*here|below(?:\\s+is)?)[^\\n]{0,80}(?:${EN_META})[^\\n]{0,40}:\\s*\\n+`, "i"),
-    new RegExp(`^the\\s+(?:${EN_META})\\s+(?:is|reads|follows)[^\\n]{0,40}:?\\s*\\n+`, "i"),
-    /^\*\*[^\n*]{1,80}\*\*\s*\n+/,
-    new RegExp(`^(?:${HE_META}|${EN_META})\\s*[:：]\\s*\\n+`, "i"),
-  ];
-  for (const re of preamblePatterns) {
-    const next = out.replace(re, "");
-    if (next.length < out.length) { out = next; break; }
-  }
-
-  out = out.replace(
-    /\n+(hope this helps[^\n]*|let me know if[^\n]*|מקווה שזה עוזר[^\n]*|מקווה שעזרתי[^\n]*|אם יש לך עוד שאלות[^\n]*|אני כאן[^\n]*|בהצלחה[!.]?)\s*$/i,
-    "",
-  );
-
-  if (/^דובר\s*1\s*[:：]/u.test(out) && !/דובר\s*2\s*[:：]/u.test(out)) {
-    out = out.replace(/^דובר\s*1\s*[:：]\s*/u, "");
-  }
-
-  return out.trim();
-}
-
-async function transcribeAudio(
-  db: SupabaseAdmin,
-  base64Data: string,
-  mimeType: string,
-): Promise<string> {
-  const raw = await callGemini(db, TRANSCRIPTION_PROMPT, base64Data, mimeType || "audio/ogg");
-  return sanitizeTranscript(raw);
-}
-
-async function performImageOcr(
-  db: SupabaseAdmin,
-  base64Data: string,
-  mimeType: string,
-): Promise<string> {
-  const prompt =
-    "נתח את התמונה:\n" +
-    "1. אם יש טקסט - חלץ אותו במלואו ובדיוק, שמור על מבנה (שורות/פסקאות)\n" +
-    "2. אם יש כמה שפות - תמלל כל אחת בשפתה המקורית\n" +
-    "3. אם אין טקסט או שהוא מינימלי - תן תיאור תמציתי (1-2 משפטים) של התמונה\n" +
-    "4. אם זה צילום מסך של שיחה/מסמך - שמור על פורמט מובן\n" +
-    "5. החזר רק את התוצאה, ללא הקדמות";
-  return callGemini(db, prompt, base64Data, mimeType || "image/jpeg");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

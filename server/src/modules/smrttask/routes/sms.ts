@@ -252,13 +252,27 @@ router.get("/sms/messages", ...gate, async (req: Request, res: Response) => {
   if (variants.length === 0) return res.json({ messages: [], tasks: [] });
   const inList = variants.join(",");
 
-  const { data, error } = await db
-    .from("sms_messages")
-    .select("id, message_id, direction, from_phone, to_phone, body_text, is_otp, received_at")
-    .eq("user_id", req.user!.id)
-    .or(`from_phone.in.(${inList}),to_phone.in.(${inList})`)
-    .order("received_at", { ascending: false })
-    .limit(limit);
+  // media_parts arrives with migration 20260728140000. Selecting a column that
+  // isn't there yet makes PostgREST reject the WHOLE query (PGRST204 / 42703),
+  // which would blank the entire conversation view — a screen that works today
+  // must not go dark because a migration hasn't been run yet. So the column is
+  // requested, and on that specific failure the query is retried without it:
+  // the conversation still renders, only the attachments are missing.
+  const baseCols = "id, message_id, direction, from_phone, to_phone, body_text, is_otp, received_at";
+  const conversationRows = async (cols: string) =>
+    db
+      .from("sms_messages")
+      .select(cols)
+      .eq("user_id", req.user!.id)
+      .or(`from_phone.in.(${inList}),to_phone.in.(${inList})`)
+      .order("received_at", { ascending: false })
+      .limit(limit);
+
+  let { data, error } = await conversationRows(`${baseCols}, media_parts`);
+  if (error && /media_parts/.test(error.message)) {
+    console.warn("[sms] media_parts column missing — run migration 20260728140000_sms_media.sql");
+    ({ data, error } = await conversationRows(baseCols));
+  }
   if (error) return res.status(500).json({ error: error.message });
 
   // Tasks created from this peer's messages (badge in the UI). Matched on the
@@ -292,7 +306,88 @@ router.get("/sms/messages", ...gate, async (req: Request, res: Response) => {
     }))
     .reverse();
 
-  return res.json({ messages: [...(data ?? [])].reverse(), tasks });
+  const messages = [...(data ?? [])].reverse();
+  await attachSmsMediaUrls(messages, req.user!.id);
+  return res.json({ messages, tasks });
+});
+
+// ── MMS media: signed URLs ───────────────────────────────────────────────────
+// The sms-media bucket is private. The frontend never receives a storage path
+// it can fetch directly — it gets a short-lived signed URL minted here.
+
+const SIGNED_URL_TTL_SECONDS = 60 * 60;
+
+/** One stored MMS part, as written by the webhook into sms_messages.media_parts. */
+interface SmsMediaPart {
+  path: string;
+  mime: string;
+  filename: string;
+  size: number;
+  kind: string;
+  /** Added here, never stored: a short-lived URL the browser can load. */
+  signed_url?: string | null;
+}
+
+/**
+ * Mint signed URLs for every attachment across the whole message page in ONE
+ * Storage call, mirroring the WhatsApp thread endpoint. Doing it per bubble
+ * would be a round-trip per photo on first render.
+ *
+ * Ownership is enforced here rather than trusted: the service-role client
+ * bypasses Storage RLS, so a path outside the caller's own folder is refused
+ * even though it could only get into their row through a bug.
+ */
+async function attachSmsMediaUrls(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  messages: any[],
+  userId: string,
+): Promise<void> {
+  const ownPrefix = `${userId}/`;
+  const paths = new Set<string>();
+  for (const m of messages) {
+    const parts = m.media_parts as SmsMediaPart[] | null;
+    if (!Array.isArray(parts)) continue;
+    for (const p of parts) {
+      if (typeof p?.path === "string" && p.path.startsWith(ownPrefix)) paths.add(p.path);
+    }
+  }
+  if (paths.size === 0) return;
+
+  const { data: signed, error } = await db.storage
+    .from("sms-media")
+    .createSignedUrls([...paths], SIGNED_URL_TTL_SECONDS);
+  if (error) {
+    // Best-effort: the bubble falls back to the per-path endpoint below.
+    console.warn("[sms] batch signed URLs failed:", error.message);
+    return;
+  }
+  const urlByPath = new Map<string, string>();
+  for (const s of signed ?? []) {
+    if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl);
+  }
+  for (const m of messages) {
+    const parts = m.media_parts as SmsMediaPart[] | null;
+    if (!Array.isArray(parts)) continue;
+    m.media_parts = parts.map((p) => ({ ...p, signed_url: urlByPath.get(p?.path) ?? null }));
+  }
+}
+
+// GET /sms/media?path=<storage path> → a fresh signed URL. The fallback for a
+// batch-sign failure and for a page left open past the URL's TTL.
+router.get("/sms/media", ...gate, async (req: Request, res: Response) => {
+  const path = String(req.query.path ?? "");
+  if (!path) return res.status(400).json({ error: "path is required" });
+  // Path convention is "<user_id>/<message_id>-<index>.<ext>". Enforced here
+  // because the service-role client bypasses Storage RLS.
+  if (!path.startsWith(`${req.user!.id}/`)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const { data, error } = await db.storage
+    .from("sms-media")
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ url: data.signedUrl });
 });
 
 // ── Search inside message content ────────────────────────────────────────────
