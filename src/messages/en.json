@@ -4125,7 +4125,7 @@
     "audioUnprobed": "Not probed yet",
     "indexRun": "Sweep the catalog",
     "indexRunning": "Sweeping…",
-    "indexDone": "Catalog swept: {total} models on fal, {written} written. Probed {probed} video endpoints — {driving} take our audio as a driver. {remaining} left to probe — press again to continue.",
+    "indexDone": "Catalog swept: {total} models on fal, {written} written. Probed {probed} endpoints, {driving} of them audio-driven. {remaining} left.",
     "audioRole": {
       "driving": "Driving",
       "reference": "Reference",
@@ -4164,7 +4164,99 @@
       "assembly": "Assembly",
       "market": "Distribution"
     },
-    "shelfMeaningTitle": "Shelf versus verified"
+    "shelfMeaningTitle": "Shelf versus verified",
+    "modelGroup": {
+      "image": "Image",
+      "video": "Video",
+      "audio": "Audio & voice",
+      "understanding": "Understanding",
+      "3d": "3D",
+      "training": "Training",
+      "tools": "Text & tools",
+      "audio_video": "🔊 Audio + video",
+      "tools_pipeline": "🔧 Pipeline tools"
+    },
+    "modelGroupHint": {
+      "audio_video": "Video endpoints that accept an audio file we upload. Not a fal category — its own label finds only 19 of them.",
+      "tools_pipeline": "ffmpeg utilities: mux a track, merge clips, trim, subtitle, normalise loudness. fal scatters them across four categories."
+    },
+    "falCategory": {
+      "text-to-image": "Text → image",
+      "image-to-image": "Image → image",
+      "text-to-video": "Text → video",
+      "image-to-video": "Image → video",
+      "video-to-video": "Video → video",
+      "audio-to-video": "Audio → video",
+      "text-to-speech": "Text → speech",
+      "text-to-audio": "Text → audio",
+      "audio-to-audio": "Audio → audio",
+      "speech-to-speech": "Speech → speech",
+      "video-to-audio": "Video → audio",
+      "vision": "Vision",
+      "speech-to-text": "Transcription",
+      "image-to-text": "Image → text",
+      "video-to-text": "Video → text",
+      "audio-to-text": "Audio → text",
+      "image-to-json": "Image → data",
+      "image-to-3d": "Image → 3D",
+      "text-to-3d": "Text → 3D",
+      "3d-to-3d": "3D → 3D",
+      "training": "Training",
+      "llm": "LLM",
+      "json": "Data utility",
+      "text-to-json": "Text → data",
+      "workflow": "Helper step",
+      "unknown": "Other"
+    },
+    "build": {
+      "full_scene": "Full shot",
+      "full_body": "Full body",
+      "avatar": "Avatar",
+      "mouth_fix": "Mouth fix"
+    },
+    "buildHint": {
+      "full_scene": "Builds background, camera and action — a whole scene from the audio and prompt",
+      "full_body": "Moves the whole character; the scene is the image you gave it",
+      "avatar": "A talking head or body from a photo. The background is frozen",
+      "mouth_fix": "An existing clip goes in — only the mouth changes"
+    },
+    "audioRoleHint": {
+      "driving": "Our audio moves the mouth — lip-sync only happens here",
+      "reference": "Guides generation, with no promise of lip-sync to our track",
+      "mux": "Pastes a track onto the output. The lips do not move"
+    },
+    "cap": {
+      "si": "Start image",
+      "ei": "End image",
+      "pr": "Prompt",
+      "lo": "LoRA",
+      "ma": "2+ speakers"
+    },
+    "capShort": {
+      "si": "image",
+      "ei": "end",
+      "pr": "prompt",
+      "lo": "LoRA",
+      "ma": "2 speakers"
+    },
+    "filterCategory": "Sub-category",
+    "filterAudioAxis": "Axis 1 · the audio",
+    "filterBuildAxis": "Axis 2 · what it builds",
+    "filterCaps": "What it accepts",
+    "axesNote": "Two independent axes: what the audio does, and what the model builds. Axis 2 applies to driving models only — a model that merely pastes a track on has nothing to build.",
+    "audioFromPurpose": "Class inferred from the model's purpose — fal did not describe the field",
+    "colClass": "Class",
+    "colCaps": "Accepts",
+    "colPublished": "Published",
+    "priceShot": "per 8s 720p shot",
+    "priceFlat": "flat per run",
+    "pricePer": "per",
+    "priceTiered": "Tiered — see detail",
+    "priceUnpublished": "Not published",
+    "modelsAudioVideo": "Video taking our audio",
+    "indexIncomplete": "⚠️ The sweep did not reach the total fal reports — the catalog is partial, run it again.",
+    "modelsProbeIncomplete": "The sweep is not finished — schemas read for {probed} of {total} endpoints. Press \"Run sweep\" to continue.",
+    "indexPartial": "{remaining} left — stopped before finishing (time limit). Press again to continue."
   },
   "claudeRuns": {
     "title": "Claude runs",
