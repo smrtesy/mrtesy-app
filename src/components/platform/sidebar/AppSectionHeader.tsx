@@ -47,6 +47,13 @@ export function AppSectionHeader({
   const appName = `smrt${app.word}`;
   return (
     <div className={cn("flex items-center gap-2 px-3 pb-1 pt-4", className)}>
+      {/* Thin per-app accent bar — the category marker. Inline color so the
+          arbitrary hex from the registry survives Tailwind's purge. */}
+      <span
+        aria-hidden
+        className="h-4 w-1 shrink-0 rounded-full"
+        style={{ backgroundColor: app.color }}
+      />
       <Link
         href={`${base}${app.settingsHref}`}
         aria-label={`${app.slug} settings`}
