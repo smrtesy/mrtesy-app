@@ -1979,6 +1979,7 @@
     "allMarkedRead": "כל ההתראות סומנו כנקראו",
     "copyForAi": "העתק ל-AI",
     "copiedForAi": "הפרטים הועתקו — הדבק כאן ב-AI",
+    "continueClaude": "המשך עם Claude",
     "timeJustNow": "עכשיו",
     "timeMinsAgo": "לפני {n} דק'",
     "timeHoursAgo": "לפני {n} שע'",
