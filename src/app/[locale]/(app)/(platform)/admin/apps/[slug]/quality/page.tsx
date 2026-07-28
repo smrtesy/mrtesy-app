@@ -35,12 +35,14 @@ interface WeekRow {
   cache_read_share_pct: number | null;
 }
 
-/** Weeks are ISO Monday-start dates; show them in the user's zone-free form. */
-const weekFmt = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-  timeZone: "UTC",
-});
+/**
+ * Weeks are ISO Monday-start dates. Formatted in the viewer's locale and in
+ * UTC — the bucket boundaries are UTC, so rendering them in another zone would
+ * shift a week label off its own data.
+ */
+function makeWeekFmt(locale: string) {
+  return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", timeZone: "UTC" });
+}
 
 function pct(n: number | null): string {
   return n === null || n === undefined ? "—" : `${Number(n).toFixed(2)}%`;
@@ -79,12 +81,13 @@ export default async function AdminAppQualityPage({
   if (slug !== "smrttask") notFound();
 
   const t = await getTranslations("admin");
+  const weekFmt = makeWeekFmt(locale);
   const admin = createAdminSupabaseClient();
 
   let rows: WeekRow[] = [];
   let error: string | null = null;
   if (!admin) {
-    error = "Service-role key not configured";
+    error = t("qualityNoServiceKey");
   } else {
     const { data, error: rpcError } = await admin.rpc("classifier_quality_metrics", {
       p_weeks: WEEKS,
@@ -93,10 +96,7 @@ export default async function AdminAppQualityPage({
       // A missing function (PGRST202) means the migration hasn't been applied —
       // say so precisely instead of showing an empty table that reads as "no
       // problems this quarter".
-      error =
-        rpcError.code === "PGRST202"
-          ? "classifier_quality_metrics() is missing — apply migration 20260728030000_classifier_quality_metrics.sql"
-          : rpcError.message;
+      error = rpcError.code === "PGRST202" ? t("qualityMigrationMissing") : rpcError.message;
     } else {
       rows = (data ?? []) as WeekRow[];
     }
@@ -128,39 +128,22 @@ export default async function AdminAppQualityPage({
           {t("appQualityTitle")}
         </Link>
         <h1 className="text-2xl font-bold mt-2">{t("appQualityTitle")}</h1>
-        <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
-          Weekly trend for the message classifier, from data the pipeline already
-          writes — no AI call and no extra cost. The headline is the correction
-          rate: the share of classified messages that had to be fixed by hand.
-          Judge every prompt or model change against it, and compare{" "}
-          <span className="font-medium">cost per message</span> rather than token
-          counts (a model change can move token counts ~30% for identical text).
-        </p>
+        <p className="text-sm text-muted-foreground mt-1 max-w-3xl">{t("qualityIntro")}</p>
       </div>
 
       {error && (
         <div className="rounded-lg border border-status-late bg-status-late-bg p-3 text-sm text-status-late">
-          Failed to load metrics: {error}
+          {t("qualityLoadFailed")}: {error}
         </div>
       )}
 
       {(totalParseFailures > 0 || totalCrossParty > 0) && (
         <div className="rounded-lg border border-status-warn bg-status-warn-bg p-3 text-sm text-status-warn space-y-1">
           {totalParseFailures > 0 && (
-            <div>
-              {num(totalParseFailures)} unparseable AI repl
-              {totalParseFailures === 1 ? "y" : "ies"} in the last {WEEKS} weeks — each one is a
-              duplicate check that silently found nothing. If they cluster, raise the
-              dupe_match <code>max_tokens</code> ceiling.
-            </div>
+            <div>{t("qualityParseWarn", { count: num(totalParseFailures), weeks: WEEKS })}</div>
           )}
           {totalCrossParty > 0 && (
-            <div>
-              {num(totalCrossParty)} cross-party merge flag
-              {totalCrossParty === 1 ? "" : "s"} — a task carried an update from a different
-              person&rsquo;s chat. The identity veto should make this impossible; investigate
-              before it repeats.
-            </div>
+            <div>{t("qualityCrossPartyWarn", { count: num(totalCrossParty) })}</div>
           )}
         </div>
       )}
@@ -170,15 +153,18 @@ export default async function AdminAppQualityPage({
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Correction rate
+                {t("qualityCorrectionRate")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{pct(latest.correction_rate_pct)}</div>
               <p className="text-xs text-muted-foreground">
-                {num(latest.corrections)} of {num(latest.classified_messages)} this week
+                {t("qualityCorrectionRateSub", {
+                  corrections: num(latest.corrections),
+                  classified: num(latest.classified_messages),
+                })}
                 {baseline && delta(latest.correction_rate_pct, baseline.correction_rate_pct)
-                  ? ` · ${delta(latest.correction_rate_pct, baseline.correction_rate_pct)} pp vs last week`
+                  ? ` · ${t("qualityVsLastWeek", { delta: delta(latest.correction_rate_pct, baseline.correction_rate_pct)! })}`
                   : ""}
               </p>
             </CardContent>
@@ -186,38 +172,38 @@ export default async function AdminAppQualityPage({
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Cost per message
+                {t("qualityCostPerMessage")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{usd(latest.cost_per_message_usd, 4)}</div>
               <p className="text-xs text-muted-foreground">
-                {usd(latest.cost_usd)} over {num(latest.ai_calls)} calls
+                {t("qualityCostPerMessageSub", { cost: usd(latest.cost_usd), calls: num(latest.ai_calls) })}
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Low confidence
+                {t("qualityLowConfidence")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{pct(latest.low_confidence_pct)}</div>
               <p className="text-xs text-muted-foreground">
-                {num(latest.escalations)} escalated to a second model
+                {t("qualityLowConfidenceSub", { count: num(latest.escalations) })}
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Prompt cache
+                {t("qualityCache")}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{pct1(latest.cache_read_share_pct)}</div>
-              <p className="text-xs text-muted-foreground">of prompt tokens served from cache</p>
+              <p className="text-xs text-muted-foreground">{t("qualityCacheSub")}</p>
             </CardContent>
           </Card>
         </div>
@@ -225,7 +211,7 @@ export default async function AdminAppQualityPage({
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Last {WEEKS} weeks</CardTitle>
+          <CardTitle className="text-base">{t("qualityLastWeeks", { weeks: WEEKS })}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {/* Wide table scrolls inside its own container — the page body must
@@ -234,17 +220,17 @@ export default async function AdminAppQualityPage({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-xs text-muted-foreground">
-                  <th className="text-start font-medium px-4 py-2">Week of</th>
-                  <th className="text-end font-medium px-4 py-2">Classified</th>
-                  <th className="text-end font-medium px-4 py-2">Corrections</th>
-                  <th className="text-end font-medium px-4 py-2">Rate</th>
-                  <th className="text-end font-medium px-4 py-2">Low conf.</th>
-                  <th className="text-end font-medium px-4 py-2">Escalations</th>
-                  <th className="text-end font-medium px-4 py-2">Parse fails</th>
-                  <th className="text-end font-medium px-4 py-2">Cross-party</th>
-                  <th className="text-end font-medium px-4 py-2">Cost</th>
-                  <th className="text-end font-medium px-4 py-2">Per msg</th>
-                  <th className="text-end font-medium px-4 py-2">Cache</th>
+                  <th className="text-start font-medium px-4 py-2">{t("qualityColWeek")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColClassified")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColCorrections")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColRate")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColLowConf")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColEscalations")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColParseFails")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColCrossParty")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColCost")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColPerMsg")}</th>
+                  <th className="text-end font-medium px-4 py-2">{t("qualityColCache")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -274,7 +260,7 @@ export default async function AdminAppQualityPage({
                 {rows.length === 0 && !error && (
                   <tr>
                     <td colSpan={11} className="px-4 py-6 text-center text-muted-foreground">
-                      No classifier activity recorded yet.
+                      {t("qualityEmpty")}
                     </td>
                   </tr>
                 )}

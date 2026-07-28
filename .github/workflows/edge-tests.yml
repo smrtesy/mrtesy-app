@@ -28,3 +28,16 @@ jobs:
 
       - name: Run tests
         run: deno test supabase/functions/ai-process/
+
+      # `deno test` only loads the modules the tests import, so a broken import
+      # in index.ts itself would sail past it and ship to Supabase. index.ts is
+      # excluded here only because its `jsr:` edge-runtime types pull an npm
+      # dependency this job has no node_modules for — the modules and tests are
+      # where the moved code actually lives.
+      - name: Type-check the extracted modules
+        run: |
+          deno check \
+            supabase/functions/ai-process/message-body.ts \
+            supabase/functions/ai-process/preclassify.ts \
+            supabase/functions/ai-process/party-identity.ts \
+            supabase/functions/ai-process/*_test.ts

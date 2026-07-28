@@ -95,12 +95,19 @@ COMMENT ON TABLE public.classifier_golden_set IS
 
 -- ── Seeder ────────────────────────────────────────────────────────────────
 -- Idempotent and re-runnable: new corrections/approvals join the corpus on the
--- next run, and a row a human has since edited is never overwritten (the
--- ON CONFLICT clauses only fill in a MISSING label, and skip any row whose
--- review_status is no longer the seeded default).
+-- next run, and a row a human has already labelled is never overwritten.
 --
--- Insert order IS the precedence order: an explicit reclassification outranks
--- an approval, which outranks a sender dismissal.
+-- Insert order IS the precedence order — reclassification > approval > sender
+-- dismissal > unlabelled note. The unlabelled note goes LAST on purpose: it
+-- carries no label, so inserting it first would let a placeholder squat on a
+-- message that one of the labelled sources could have answered.
+--
+-- Only block 1 (an explicit reclassification — the user stating the correct
+-- answer outright) may UPGRADE an existing placeholder, and only while that row
+-- is still an untouched `needs_review` with no label. Every other block is
+-- DO NOTHING. Without that upgrade, a note filed before a reclassification
+-- would freeze the row forever and silently discard the most valuable label in
+-- the whole corpus.
 CREATE OR REPLACE FUNCTION public.seed_classifier_golden_set(
   p_target_verified integer DEFAULT 120,
   p_since           timestamptz DEFAULT now() - interval '180 days'
@@ -141,34 +148,19 @@ BEGIN
   FROM src s
   JOIN public.source_messages m ON m.id = s.source_message_id
   WHERE s.cls IN ('actionable', 'informational', 'spam')
-  ON CONFLICT (user_id, source_message_id) DO NOTHING;
+  ON CONFLICT (user_id, source_message_id) DO UPDATE
+    SET expected_classification = EXCLUDED.expected_classification,
+        review_status           = EXCLUDED.review_status,
+        origin                  = EXCLUDED.origin,
+        origin_ref              = EXCLUDED.origin_ref,
+        note                    = EXCLUDED.note,
+        updated_at              = now()
+    -- Upgrades an unlabelled placeholder ONLY. A row a human has labelled,
+    -- confirmed or rejected is never touched by the seeder again.
+    WHERE classifier_golden_set.expected_classification IS NULL
+      AND classifier_golden_set.review_status = 'needs_review';
   GET DIAGNOSTICS v_n = ROW_COUNT;
   v_counts := v_counts || jsonb_build_object('reclassify_correction', v_n);
-
-  -- 2. Free-text notes — kept as UNLABELLED hard cases. These are messages the
-  -- user complained about, so they are exactly the interesting ones; inferring
-  -- a label from the prose would be a model guessing ground truth, which is the
-  -- one thing this table must not contain.
-  WITH src AS (
-    SELECT DISTINCT ON (c.user_id, c.source_message_id)
-           c.user_id, c.source_message_id, c.id AS origin_ref, c.note
-    FROM public.task_corrections c
-    WHERE c.correction_type = 'note'
-      AND c.app_slug = 'smrttask'
-      AND c.source_message_id IS NOT NULL
-      AND c.created_at >= p_since
-    ORDER BY c.user_id, c.source_message_id, c.created_at DESC
-  )
-  INSERT INTO public.classifier_golden_set (
-    user_id, source_message_id, expected_classification, review_status, origin, origin_ref, note,
-    source_type, sender_email, subject, message_received_at)
-  SELECT s.user_id, s.source_message_id, NULL, 'needs_review', 'note_correction', s.origin_ref, s.note,
-         m.source_type, m.sender_email, m.subject, m.received_at
-  FROM src s
-  JOIN public.source_messages m ON m.id = s.source_message_id
-  ON CONFLICT (user_id, source_message_id) DO NOTHING;
-  GET DIAGNOSTICS v_n = ROW_COUNT;
-  v_counts := v_counts || jsonb_build_object('note_correction', v_n);
 
   -- 3. Sender-based dismissals → not actionable. Only the two codes that mean
   -- "this sender should never have produced a task"; see the header for why the
@@ -195,7 +187,7 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   v_counts := v_counts || jsonb_build_object('dismissed_sender', v_n);
 
-  -- 4. Approved tasks → actionable. There are ~1,000 of these, far more than a
+  -- 2. Approved tasks → actionable. There are ~1,000 of these, far more than a
   -- corpus needs, and taking the newest N would skew to whatever the user
   -- happened to work on last month. Sample STRATIFIED BY source_type so
   -- WhatsApp, email, calendar and Drive are all represented — a corpus that is
@@ -211,17 +203,23 @@ BEGIN
       AND t.created_at >= p_since
     ORDER BY t.user_id, t.source_message_id, t.created_at DESC
   ),
-  strata AS (SELECT count(DISTINCT source_type) AS n FROM ranked),
+  -- PER USER, not globally. A global quota would let the busiest tenant consume
+  -- the whole per-source_type allowance and leave every other tenant with zero
+  -- verified rows — the quiet failure mode of a shared corpus.
+  strata AS (
+    SELECT user_id, count(DISTINCT source_type) AS n FROM ranked GROUP BY user_id
+  ),
   picked AS (
     SELECT r.*
     FROM (
       SELECT ranked.*,
-             row_number() OVER (PARTITION BY source_type ORDER BY received_at DESC) AS rn
+             row_number() OVER (PARTITION BY user_id, source_type ORDER BY received_at DESC) AS rn
       FROM ranked
     ) r
-    -- Even split across the source types present, at least 5 each so a
-    -- low-volume channel still contributes something testable.
-    WHERE r.rn <= GREATEST(5, p_target_verified / GREATEST((SELECT n FROM strata), 1))
+    JOIN strata st ON st.user_id = r.user_id
+    -- Even split across the source types that user actually has, at least 5
+    -- each so a low-volume channel still contributes something testable.
+    WHERE r.rn <= GREATEST(5, p_target_verified / GREATEST(st.n, 1))
   )
   INSERT INTO public.classifier_golden_set (
     user_id, source_message_id, expected_classification, review_status, origin, origin_ref, note,
@@ -233,6 +231,31 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   v_counts := v_counts || jsonb_build_object('verified_task', v_n);
 
+  -- 4. Free-text notes — kept as UNLABELLED hard cases. These are messages the
+  -- user complained about, so they are exactly the interesting ones; inferring
+  -- a label from the prose would be a model guessing ground truth, which is the
+  -- one thing this table must not contain.
+  WITH src AS (
+    SELECT DISTINCT ON (c.user_id, c.source_message_id)
+           c.user_id, c.source_message_id, c.id AS origin_ref, c.note
+    FROM public.task_corrections c
+    WHERE c.correction_type = 'note'
+      AND c.app_slug = 'smrttask'
+      AND c.source_message_id IS NOT NULL
+      AND c.created_at >= p_since
+    ORDER BY c.user_id, c.source_message_id, c.created_at DESC
+  )
+  INSERT INTO public.classifier_golden_set (
+    user_id, source_message_id, expected_classification, review_status, origin, origin_ref, note,
+    source_type, sender_email, subject, message_received_at)
+  SELECT s.user_id, s.source_message_id, NULL, 'needs_review', 'note_correction', s.origin_ref, s.note,
+         m.source_type, m.sender_email, m.subject, m.received_at
+  FROM src s
+  JOIN public.source_messages m ON m.id = s.source_message_id
+  ON CONFLICT (user_id, source_message_id) DO NOTHING;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  v_counts := v_counts || jsonb_build_object('note_correction', v_n);
+
   RETURN QUERY SELECT k, (v_counts->>k)::bigint FROM jsonb_object_keys(v_counts) AS k;
 END;
 $$;
@@ -240,7 +263,18 @@ $$;
 COMMENT ON FUNCTION public.seed_classifier_golden_set(integer, timestamptz) IS
   'Idempotently (re)builds the classifier golden set from recorded user actions. Safe to re-run; never overwrites a human-edited row.';
 
+-- SECURITY DEFINER + the default PUBLIC EXECUTE would let ANY authenticated
+-- user trigger a write across every tenant's rows. The function needs definer
+-- rights to read tasks/corrections across users when the admin seeds the
+-- corpus, so the grant is what must be locked down, not the rights.
+REVOKE ALL ON FUNCTION public.seed_classifier_golden_set(integer, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.seed_classifier_golden_set(integer, timestamptz) TO service_role;
+
 -- Convenience view for the eval harness: only rows with a usable label.
-CREATE OR REPLACE VIEW public.classifier_golden_set_active AS
+-- security_invoker is mandatory: without it the view runs with the OWNER's
+-- rights and quietly bypasses the RLS policy defined above, exposing every
+-- tenant's sender_email / subject / note to any authenticated caller.
+CREATE OR REPLACE VIEW public.classifier_golden_set_active
+  WITH (security_invoker = true) AS
   SELECT * FROM public.classifier_golden_set
   WHERE is_active AND review_status = 'confirmed' AND expected_classification IS NOT NULL;

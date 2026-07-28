@@ -4,17 +4,16 @@ import { extractEmailBody } from "../_shared/email-body.ts";
 import { anthropicCostUsdFromCounts, anthropicFamily } from "../_shared/ai-pricing.ts";
 import {
   isWhatsApp, isConversational, threadKey,
-  bodyForAI, bodyForClassify, hasMeetingInvite, extractMeetingBlock,
+  bodyForAI, bodyForClassify, hasMeetingInvite,
   splitWhatsAppByHighWater, stripLoneSurrogates,
 } from "./message-body.ts";
 import {
   buildCategoryFilter, preClassify,
-  FOLLOWUP_LEAD_HOURS, MEETING_LEAD_HOURS, addBusinessHours, subBusinessHours,
+  FOLLOWUP_LEAD_HOURS, MEETING_LEAD_HOURS, addBusinessHours,
 } from "./preclassify.ts";
-import type { CategoryRuleRow } from "./preclassify.ts";
 import {
   extractEmails, emailDomains, extractPhones, extractUrls,
-  partyIdsFrom, msgPartyIds, taskPartyIds, mergeParties,
+  msgPartyIds, taskPartyIds, mergeParties,
   partiesConflict, partiesMatch, taskTextNamesParty, describeParty,
 } from "./party-identity.ts";
 import type { PartyIds } from "./party-identity.ts";
@@ -4437,7 +4436,17 @@ Deno.serve(async (req) => {
         supabase.from("rules_memory").select("trigger").eq("user_id", userId).eq("is_active", true).or("trigger.ilike.to=%,trigger.ilike.from=%,trigger.ilike.contains=%"),
         supabase.from("ai_prompts").select("prompt_key, content").eq("user_id", userId).eq("is_active", true).in("prompt_key", ["edge_classifier", "edge_task_builder"]),
         supabase.auth.admin.getUserById(userId),
-        supabase.from("task_corrections").select("note, correction_type, old_value, new_value").eq("user_id", userId).eq("scope", "personal").eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(25),
+        // BOTH scopes, newest first. `general` used to be excluded here on the
+        // theory that those corrections would be hand-baked into the prompt by
+        // a developer — a manual step that, in practice, nobody ran: by
+        // 2026-07-28 there were 61 general corrections spanning eight weeks and
+        // NOT ONE of them reached the classifier, which is why the same
+        // complaints kept coming back ("כבר הערתי ש..."). There is no reason a
+        // real correction should depend on someone remembering to copy it.
+        // The 200 cap is a runaway guard, not a memory window — at ~30 tokens
+        // per line it bounds the block at ~6k tokens so a pathological history
+        // can never crowd out the prompt itself. Today's 68 are nowhere near it.
+        supabase.from("task_corrections").select("note, correction_type, old_value, new_value, scope").eq("user_id", userId).eq("app_slug", "smrttask").order("created_at", { ascending: false }).limit(200),
       ]);
       const settings = settingsRes.data;
       if (!settings) continue;
@@ -4478,17 +4487,26 @@ Deno.serve(async (req) => {
       // genuinely addressed to the user when user_settings.my_emails is sparse.
       settings.__authEmail = ((userAuthRes.data?.user?.email as string | undefined) || "").toLowerCase();
 
-      // Per-user correction rules (scope='personal'): items the user explicitly
-      // fixed in the smrtTask log. Distilled into short directives and injected
-      // into the classifier's PER-MESSAGE context (not the cached static prefix,
-      // so the shared prompt cache stays warm) where they override the general
-      // rules on conflict. General-scope corrections are baked into the prompt
-      // directly and are intentionally NOT loaded here. This is the runtime half
-      // of the corrections pipeline (the export/table half already existed).
+      // Correction rules the user filed in the smrtTask log, distilled into
+      // short directives and appended to the classifier's system prefix, where
+      // they outrank every general rule on conflict.
+      //
+      // DE-DUPLICATED, not truncated. The same complaint filed three times is
+      // one rule, and repeating it wastes tokens on every message without
+      // adding information; but a correction that is still unique is still
+      // live, however old, so nothing is dropped for age. Comparison is on the
+      // normalised text (case, punctuation and whitespace folded) so
+      // "למה יצרת הצעה כזאת?" and "למה יצרת הצעה כזאת" collapse to one line.
       const personalRuleLines: string[] = [];
+      const seenRules = new Set<string>();
+      const ruleKey = (s: string) =>
+        s.toLowerCase().replace(/[.,!?;:"'״׳()\[\]-]/g, "").replace(/\s+/g, " ").trim();
       for (const c of (correctionsRes.data ?? [])) {
         const note = String((c as any).note ?? "").trim();
         if (!note) continue;
+        const key = ruleKey(note);
+        if (!key || seenRules.has(key)) continue;
+        seenRules.add(key);
         if (String((c as any).correction_type) === "reclassify" && (c as any).new_value) {
           // The log UI stores reclassifications with pipeline-internal labels
           // ("user_actionable", "*_followup") that are NOT classifier

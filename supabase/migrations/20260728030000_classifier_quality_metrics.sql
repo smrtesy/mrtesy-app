@@ -92,11 +92,20 @@ AS $$
       AND (p_user_id IS NULL OR l.user_id = p_user_id)
     GROUP BY 1
   ),
+  -- Bucketed by the week the MESSAGE was classified, not the week the user got
+  -- around to fixing it. Bucketing by correction date compares this week's
+  -- corrections against this week's volume even when the correction is about a
+  -- message from three weeks ago — which can push the rate above 100% and makes
+  -- a bad week look fine as long as the user is slow to complain. The cost of
+  -- the cohort form is a lag: the most recent week's rate only firms up as
+  -- corrections arrive, so read the newest row as provisional.
   corrections AS (
-    SELECT date_trunc('week', c.created_at)::date AS week_start, count(*) AS n
+    SELECT date_trunc('week', COALESCE(m.processed_at, m.received_at))::date AS week_start,
+           count(*) AS n
     FROM public.task_corrections c
+    JOIN public.source_messages m ON m.id = c.source_message_id
     WHERE c.app_slug = 'smrttask'
-      AND c.created_at >= (SELECT first_week FROM bounds)
+      AND COALESCE(m.processed_at, m.received_at) >= (SELECT first_week FROM bounds)
       AND (p_user_id IS NULL OR c.user_id = p_user_id)
     GROUP BY 1
   ),
@@ -156,6 +165,11 @@ $$;
 
 COMMENT ON FUNCTION public.classifier_quality_metrics(integer, uuid) IS
   'Weekly classifier quality + cost trend from existing tables (no AI calls). See docs/classifier-review-2026-07.md §6.4.';
+
+-- Same grant shape as ai_usage_summary(): no reason for `anon` to hold EXECUTE
+-- on a platform-metrics function, even an invoker-rights one.
+REVOKE ALL ON FUNCTION public.classifier_quality_metrics(integer, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.classifier_quality_metrics(integer, uuid) TO authenticated, service_role;
 
 -- The three window scans this function runs every time the admin page loads.
 -- log_entries is the big one (~10k rows/30d and growing); without these the
