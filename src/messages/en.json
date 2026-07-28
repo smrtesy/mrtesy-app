@@ -4404,7 +4404,7 @@
     }
   },
   "claudeChat": {
-    "placeholder": "Write a message…",
+    "placeholder": "Describe a task or ask a question",
     "send": "Send",
     "stop": "Stop",
     "stopped": "Turn stopped",
@@ -4435,7 +4435,9 @@
     "taskRouter": "Free-text task update",
     "contextLost": "This turn started a new session — it does not know the earlier messages",
     "copyMessage": "Copy message",
-    "copied": "Copied"
+    "copied": "Copied",
+    "modelLabel": "Model",
+    "effortLabel": "Effort"
   },
   "markdown": {
     "anchor": "Link to section {title}",
