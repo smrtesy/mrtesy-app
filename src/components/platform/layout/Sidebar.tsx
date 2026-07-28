@@ -18,7 +18,6 @@ import {
   Layers,
   PanelRightClose,
   PanelRightOpen,
-  Mic,
   Users,
   MoreHorizontal,
   BookOpen,
@@ -27,7 +26,6 @@ import {
   CalendarRange,
   Archive,
   Send,
-  Reply,
   KeyRound,
   Info,
 } from "lucide-react";
@@ -55,15 +53,11 @@ const smrtTaskItems = [
   { key: "inboxIncoming", href: "/inbox",    icon: Bell          },
   { key: "tasks",         href: "/tasks",    icon: CheckSquare   },
   { key: "whatsapp",      href: "/whatsapp", icon: MessageCircle },
-  { key: "whatsappAutoreply", href: "/whatsapp/autoreply", icon: Reply },
+  // whatsappAutoreply moved out of the main nav — it's now reached from
+  // smrtTask settings ("כללים ואוטומציה"), not a top-level menu item.
   { key: "sms",           href: "/sms",      icon: MessageSquare },
   { key: "projects",      href: "/projects", icon: FolderOpen    },
   { key: "knowledge",     href: "/knowledge", icon: BookOpen     },
-] as const;
-
-const smrtVoiceItems = [
-  { key: "voiceProjects",   href: "/voice",            icon: Mic    },
-  { key: "voiceCharacters", href: "/voice/characters", icon: Users  },
 ] as const;
 
 const smrtCrmItems = [
@@ -109,7 +103,6 @@ type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 // the parent doesn't also light up when you're on a child screen.
 const ALL_NAV_HREFS: readonly string[] = [
   ...smrtTaskItems,
-  ...smrtVoiceItems,
   ...smrtCrmItems,
   ...smrtReachItems,
   ...smrtBotItems,
@@ -130,7 +123,6 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
     ? smrtTaskItems.filter((i) => i.key === "tasks")
     : smrtTaskItems;
   const showTaskExtras = hasSmrtTask && !isLiteTask;
-  const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const hasSmrtCrm = enabledApps.includes("smrtcrm");
   const hasSmrtReach = enabledApps.includes("smrtreach");
   const hasSmrtBot = enabledApps.includes("smrtbot");
@@ -159,42 +151,27 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   }, []);
 
   // Mobile bottom-tab primary items.
-  // Spec: keep תיבה (inbox), משימות (tasks), פרויקטי קול (voice projects) /
-  // WhatsApp fallback when no voice, הגדרות (settings), and "עוד" (more).
+  // Spec: keep תיבה (inbox), משימות (tasks), WhatsApp, הגדרות (settings), and
+  // "עוד" (more). smrtVoice was removed from the sidebar (folding into Studio),
+  // so there's no longer a voice-specific bottom-tab layout.
   const activeMobileItems: MobileNavItem[] =
     isLiteTask
       ? [
           { key: "tasks",    href: "/tasks",    icon: CheckSquare },
           { key: "settings", href: "/settings", icon: Settings    },
         ]
-      : !hasSmrtTask && !hasSmrtVoice
+      : !hasSmrtTask
       ? [
-          { key: "inbox",    href: "/inbox",    icon: Bell     },
-          { key: "settings", href: "/settings", icon: Settings },
+          { key: "inbox",    href: "/inbox",    icon: Bell           },
+          { key: "settings", href: "/settings", icon: Settings       },
+          { key: "more",     href: "",          icon: MoreHorizontal },
         ]
-      : hasSmrtTask && hasSmrtVoice
-      ? [
-          { key: "inbox",         href: "/inbox",    icon: Bell           },
-          { key: "tasks",         href: "/tasks",    icon: CheckSquare    },
-          { key: "voiceProjects", href: "/voice",    icon: Mic            },
-          { key: "settings",      href: "/settings", icon: Settings       },
-          { key: "more",          href: "",          icon: MoreHorizontal },
-        ]
-      : hasSmrtTask
-      ? [
+      : [
           { key: "inbox",    href: "/inbox",    icon: Bell           },
           { key: "tasks",    href: "/tasks",    icon: CheckSquare    },
           { key: "whatsapp", href: "/whatsapp", icon: MessageCircle  },
           { key: "settings", href: "/settings", icon: Settings       },
           { key: "more",     href: "",          icon: MoreHorizontal },
-        ]
-      : /* smrtVoice only */
-        [
-          { key: "inbox",           href: "/inbox",            icon: Bell           },
-          { key: "voiceProjects",   href: "/voice",            icon: Mic            },
-          { key: "voiceCharacters", href: "/voice/characters", icon: Users          },
-          { key: "settings",        href: "/settings",         icon: Settings       },
-          { key: "more",            href: "",                  icon: MoreHorizontal },
         ];
 
   useEffect(() => {
@@ -329,15 +306,15 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   // its complete item set, then a management group. Each section gets the app
   // title above and a divider line between sections (when there's more than one).
   const moreSections: Array<{ app?: AppDef; titleKey?: string; items: MobileNavItem[] }> = [];
+  // Same order as the desktop nav: smrtTask → smrtPlan → smrtStudio → the rest.
   if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...visibleSmrtTaskItems] });
-  if (hasSmrtVoice) moreSections.push({ app: APPS.smrtvoice, items: [...smrtVoiceItems] });
+  if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
+  if (hasSmrtStudio) moreSections.push({ app: APPS.smrtstudio, items: [...smrtStudioItems] });
   if (hasSmrtCrm) moreSections.push({ app: APPS.smrtcrm, items: [...smrtCrmItems] });
   if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
-  if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtVault) moreSections.push({ app: APPS.smrtvault, items: [...smrtVaultItems] });
   if (hasSmrtInfo) moreSections.push({ app: APPS.smrtinfo, items: [...smrtInfoItems] });
-  if (hasSmrtStudio) moreSections.push({ app: APPS.smrtstudio, items: [...smrtStudioItems] });
   const managementMoreItems: MobileNavItem[] = [
     ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
     { key: "settings", href: "/settings", icon: Settings },
@@ -407,10 +384,20 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             </>
           )}
 
-          {hasSmrtVoice && (
+          {hasSmrtPlan && (
             <>
-              <AppSectionHeader app={APPS.smrtvoice} />
-              {smrtVoiceItems.map((item) => (
+              <AppSectionHeader app={APPS.smrtplan} />
+              {smrtPlanItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </>
+          )}
+
+          {hasSmrtStudio && (
+            <>
+              <AppSectionHeader app={APPS.smrtstudio} />
+              {smrtStudioItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
@@ -441,26 +428,6 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             <>
               <AppSectionHeader app={APPS.smrtbot} />
               {smrtBotItems.map((item) => (
-                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
-                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
-              ))}
-            </>
-          )}
-
-          {hasSmrtPlan && (
-            <>
-              <AppSectionHeader app={APPS.smrtplan} />
-              {smrtPlanItems.map((item) => (
-                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
-                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
-              ))}
-            </>
-          )}
-
-          {hasSmrtStudio && (
-            <>
-              <AppSectionHeader app={APPS.smrtstudio} />
-              {smrtStudioItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
