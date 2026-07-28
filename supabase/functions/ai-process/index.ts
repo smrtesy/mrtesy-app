@@ -1040,7 +1040,7 @@ async function appendUpdateToTask(
   msg: any,
   analysis: ThreadAnalysis,
   classification: string,
-  opts?: { reopen?: boolean },
+  opts?: { reopen?: boolean; confirmOnly?: boolean },
 ): Promise<string> {
   taskId = await resolveRecurringOccurrence(taskId, msg);
   const { data: existing } = await supabase
@@ -1211,7 +1211,17 @@ async function appendUpdateToTask(
     // back from snooze after the matter already closed (the Alte case: "שני
     // הצדדים סגרו" recorded, yet the follow-up woke 48h later into the inbox).
     // A real action card stays pending_completion for one-click user confirm.
-    if (existing?.task_type === "followup") {
+    //
+    // opts.confirmOnly forces the confirm branch even for a tracker. The
+    // cross-source duplicate linker sets it: that path matches by CONTACT, not
+    // by thread, so "paid, thanks" from a contact can legitimately resolve a
+    // DIFFERENT matter with the same contact than the one it matched. The
+    // matched party is code-verified (findDuplicateOpenTask only reaches the
+    // auto-link at confidence "high", i.e. no party conflict), which is enough
+    // to record the resolution — but not enough to close a card without the
+    // user ever seeing it. Confirm is the honest middle: the task stops looking
+    // open, and one click finishes it.
+    if (existing?.task_type === "followup" && !opts?.confirmOnly) {
       updateFields.status = "dismissed";
       updateFields.snoozed_until = null;
       updateFields.dismissal_reason_code = "auto_resolved";
@@ -2593,11 +2603,25 @@ async function linkAndEnrichDuplicate(
     // the renamed title then fed detectMaterialChanges below, which dutifully
     // reported a "⚠️ מה השתנה" diff between two unrelated matters.
     newTitle: "",
-    completionSignal: false,
-    completionReason: "",
+    // completionSignal is NOT dropped here, unlike the summary and title above.
+    // It used to be, bundled in with them under their identity rationale, and
+    // that silently discarded the classifier's verdict: a message whose only
+    // route into a task was this cross-source link could say "paid it, done"
+    // and the task stayed open forever with no trace of the resolution (T1267 —
+    // "the task never closes even though it is finished"). Title and summary are
+    // dropped because a linked message is EVIDENCE, never a re-definition of the
+    // matter; a completion verdict IS evidence, so it belongs.
+    //
+    // What makes it safe to honour: this function is only reached at confidence
+    // "high", which by construction means findDuplicateOpenTask's code-level
+    // party veto did not fire (a conflict downgrades to "medium", and medium
+    // only ever raises the merge-suggestion banner). And opts.confirmOnly below
+    // keeps the outcome at pending_completion — the user still confirms — so
+    // honouring the verdict cannot become a new silent-close path (T1256,
+    // "the task closes by itself", is the complaint on the other side of this).
     reason: `קישור חוצה-מקורות (${msg.source_type}): ${reasonHe}${urls.length ? `\nקישורים: ${urls.join(" ")}` : ""}`,
   };
-  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable", opts);
+  await appendUpdateToTask(taskId, msg, linkAnalysis, "actionable", { ...opts, confirmOnly: true });
 
   // Backfill fields the existing task lacked, and detect any MATERIAL change the
   // follow-up introduces (modality/date/place/amount) so it's surfaced, not buried.
