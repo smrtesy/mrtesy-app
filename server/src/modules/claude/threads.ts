@@ -29,6 +29,7 @@ import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS } from "./attachments";
 import { removeThreadWorkspace, sweepWorkspaces } from "./workspace";
+import { runSplitAnalysis, applySplit, runGroupAnalysis, shouldAnalyzeSplit } from "./analysis";
 
 const router = Router();
 
@@ -148,7 +149,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
   const { data: runs, error: rErr } = await db
     .from("claude_runs")
     .select(
-      "id, turn_index, status, user_prompt, result_summary, error, model, effort, resumed_session, total_cost_usd, input_tokens, output_tokens, num_turns, duration_ms, created_at, ended_at",
+      "id, turn_index, status, user_prompt, result_summary, error, model, effort, resumed_session, moved_to_thread_id, total_cost_usd, input_tokens, output_tokens, num_turns, duration_ms, created_at, ended_at",
     )
     .eq("thread_id", thread.id)
     .order("turn_index", { ascending: true })
@@ -188,6 +189,26 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
     .order("created_at", { ascending: true });
   if (aErr) console.error("[claude/threads] attachments failed:", aErr.message);
 
+  // The open split proposal, if any — the banner the user acts on.
+  const { data: splitProposal } = await db
+    .from("claude_thread_analyses")
+    .select("id, proposal, created_at")
+    .eq("thread_id", thread.id)
+    .eq("kind", "split")
+    .eq("status", "proposed")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // Child threads this one was split into — shown as links so a moved-turns fold can
+  // point at where the turns went.
+  const { data: children } = await db
+    .from("claude_threads")
+    .select("id, title")
+    .eq("parent_thread_id", thread.id)
+    .eq("org_id", req.org!.id)
+    .order("created_at", { ascending: true });
+
   return res.json({
     thread,
     turns: (runs ?? []).map((r) => ({
@@ -195,6 +216,8 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
       events: eventsByRun.get(r.id) ?? [],
       attachments: (attachments ?? []).filter((a) => a.run_id === r.id),
     })),
+    split_proposal: splitProposal ?? null,
+    children: children ?? [],
   });
 });
 
@@ -285,8 +308,19 @@ router.delete("/claude/threads/:id", async (req: Request, res: Response) => {
     return res.status(500).json({ error: "could not delete thread" });
   }
 
-  // The conversation's working directory — a checkout and any downloaded files.
-  await removeThreadWorkspace(owned.id);
+  // The conversation's working directory — a checkout and any downloaded files —
+  // UNLESS a fork child still borrows it (workspace_thread_id points here). Removing
+  // it out from under an active fork child would delete the engine session that
+  // child resumes, silently erasing its memory. The dir is left for the borrower;
+  // it is swept once nothing points at it and it goes stale.
+  const { data: borrowers } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("workspace_thread_id", owned.id)
+    .limit(1);
+  if (!borrowers || borrowers.length === 0) {
+    await removeThreadWorkspace(owned.id);
+  }
   return res.json({ ok: true });
 });
 
@@ -347,7 +381,7 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
 
   const { data: thread, error: tErr } = await db
     .from("claude_threads")
-    .select("id, session_id, model, effort, repo, git_branch, playbook_id, title, title_source")
+    .select("id, session_id, model, effort, repo, git_branch, playbook_id, title, title_source, workspace_thread_id")
     .eq("id", req.params.id)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -357,13 +391,22 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   }
   if (!thread) return res.status(404).json({ error: "thread not found" });
 
-  // One turn at a time. Sending while the previous turn is still running would
-  // start a second process resuming the SAME session — two writers on one
-  // conversation, whose interleaving is undefined.
+  // One turn at a time — but across the whole WORKSPACE group, not just this thread.
+  // A fork child shares its parent's directory, so a parent turn and a child turn
+  // running at once would be two `claude` processes in one project dir: racing
+  // session writes and file edits. Serialize on the shared workspace id.
+  const workspaceId = thread.workspace_thread_id ?? thread.id;
+  const { data: workspacePeers } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("org_id", orgId)
+    .or(`id.eq.${workspaceId},workspace_thread_id.eq.${workspaceId}`);
+  const peerIds = (workspacePeers ?? []).map((p) => p.id);
+  const liveScope = peerIds.length > 0 ? peerIds : [thread.id];
   const { data: live, error: lErr } = await db
     .from("claude_runs")
     .select("id")
-    .eq("thread_id", thread.id)
+    .in("thread_id", liveScope)
     .in("status", ["queued", "running"])
     .limit(1);
   if (lErr) return res.status(500).json({ error: "could not check thread state" });
@@ -430,10 +473,40 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
 
   void executeRun(run.id)
     .then(() => maybeTitle(thread.id, orgId))
+    .then(() => maybeAutoSplit(thread.id, orgId))
     .catch((e) => console.error("[claude/threads] executeRun threw:", e instanceof Error ? e.message : e));
 
   return res.status(201).json({ run });
 });
+
+/**
+ * The split gate (plan §5), run after a turn completes — the moment the thread just
+ * grew, which is the only time a new split could exist. Layer 1 is a cheap SQL check
+ * (enough turns, grown enough since last analysis); only if it passes does the model
+ * run in runSplitAnalysis. A thread you are not growing is never reconsidered.
+ *
+ * Never throws into the caller: a failed analysis must not fail the turn that
+ * triggered it.
+ */
+async function maybeAutoSplit(threadId: string, orgId: string): Promise<void> {
+  try {
+    const { count } = await db
+      .from("claude_runs")
+      .select("id", { count: "exact", head: true })
+      .eq("thread_id", threadId)
+      .is("moved_to_thread_id", null);
+    const { data: thread } = await db
+      .from("claude_threads")
+      .select("analyzed_turn_count")
+      .eq("id", threadId)
+      .maybeSingle();
+    if (!thread) return;
+    if (!shouldAnalyzeSplit(count ?? 0, thread.analyzed_turn_count ?? 0)) return;
+    await runSplitAnalysis(threadId, orgId, null);
+  } catch (e) {
+    console.error("[claude/threads] auto-split failed:", e instanceof Error ? e.message : e);
+  }
+}
 
 // ── cancel ────────────────────────────────────────────────────────────────────
 
@@ -557,5 +630,185 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
     console.error("[claude/threads] title failed:", e instanceof Error ? e.message : e);
   }
 }
+
+// ── split ───────────────────────────────────────────────────────────────────
+
+/** Confirm a thread belongs to this org; returns its id or null. */
+async function ownThread(id: string, orgId: string): Promise<boolean> {
+  const { data } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+/**
+ * POST /claude/threads/:id/analyze-split — the "פצל" button (decision §8.2).
+ *
+ * Runs the analysis now and returns the proposal. This IS a subscription run, but
+ * not a paid-API one, so it needs no cost gate; it does spend a little usage window,
+ * which is why it is a deliberate button, not automatic on every open.
+ */
+router.post("/claude/threads/:id/analyze-split", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  if (!(await ownThread(req.params.id, req.org!.id))) {
+    return res.status(404).json({ error: "thread not found" });
+  }
+  try {
+    const analysis = await runSplitAnalysis(req.params.id, req.org!.id, req.user!.id);
+    // null = the model found nothing worth splitting. A real answer, not an error.
+    return res.json({ analysis: analysis ?? null, split: Boolean(analysis) });
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * POST /claude/threads/:id/split — apply an approved split.
+ *
+ * Body: { analysis_id?, selections: [{ title, turn_indexes, handover, method }] }.
+ * The selections are what the USER approved (possibly edited), not the raw proposal
+ * — the client sends back exactly what it showed, so the handover text the user read
+ * is the handover that ships.
+ */
+router.post("/claude/threads/:id/split", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  if (!(await ownThread(req.params.id, req.org!.id))) {
+    return res.status(404).json({ error: "thread not found" });
+  }
+  const body = req.body ?? {};
+  const rawSelections = Array.isArray(body.selections) ? body.selections : [];
+  const selections = rawSelections
+    .map((s: Record<string, unknown>) => ({
+      title: str(s?.title, 200),
+      handover: typeof s?.handover === "string" ? s.handover.slice(0, 8000) : "",
+      method: s?.method === "fork" ? ("fork" as const) : ("summary" as const),
+      turn_indexes: Array.isArray(s?.turn_indexes)
+        ? (s.turn_indexes as unknown[]).map((n) => Number(n)).filter((n) => Number.isInteger(n))
+        : [],
+    }))
+    .filter((s: { title: string; turn_indexes: number[] }) => s.title && s.turn_indexes.length > 0);
+
+  if (selections.length === 0) return res.status(400).json({ error: "no valid selections" });
+
+  const analysisId = str(body.analysis_id, 64) || null;
+  if (analysisId && !UUID_RE.test(analysisId)) return res.status(400).json({ error: "invalid analysis_id" });
+
+  try {
+    const { children } = await applySplit({
+      parentThreadId: req.params.id,
+      orgId: req.org!.id,
+      userId: req.user!.id,
+      analysisId,
+      selections,
+    });
+    return res.status(201).json({ children });
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/** POST /claude/analyses/:id/dismiss — reject a split proposal so it stops showing. */
+router.post("/claude/analyses/:id/dismiss", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "not found" });
+  const { data, error } = await db
+    .from("claude_thread_analyses")
+    .update({ status: "dismissed", decided_at: new Date().toISOString() })
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .eq("status", "proposed")
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "not found" });
+  return res.json({ ok: true });
+});
+
+// ── topics (grouping) ─────────────────────────────────────────────────────────
+
+/** GET /claude/topics — topics with the threads under each, for the grouped list. */
+router.get("/claude/topics", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const { data: topics, error } = await db
+    .from("claude_topics")
+    .select("id, title, title_source")
+    .eq("org_id", orgId)
+    .order("title", { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+
+  const { data: links, error: lErr } = await db
+    .from("claude_thread_topics")
+    .select("thread_id, topic_id, assigned_by, confidence");
+  if (lErr) return res.status(500).json({ error: lErr.message });
+
+  // links is not org-scoped by column, so intersect with THIS org's topics — a
+  // topic id from another org can't leak a thread id in.
+  const topicIds = new Set((topics ?? []).map((t) => t.id));
+  const byTopic = new Map<string, { thread_id: string; assigned_by: string }[]>();
+  for (const l of links ?? []) {
+    if (!topicIds.has(l.topic_id)) continue;
+    const arr = byTopic.get(l.topic_id) ?? [];
+    arr.push({ thread_id: l.thread_id, assigned_by: l.assigned_by });
+    byTopic.set(l.topic_id, arr);
+  }
+
+  return res.json({
+    topics: (topics ?? []).map((t) => ({ ...t, threads: byTopic.get(t.id) ?? [] })),
+  });
+});
+
+/** POST /claude/topics/regroup — the "אגד עכשיו" button; also the daily job's call. */
+router.post("/claude/topics/regroup", async (req: Request, res: Response) => {
+  try {
+    const result = await runGroupAnalysis(req.org!.id, req.user!.id);
+    return res.json(result);
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * PATCH /claude/threads/:id/topics — user assigns or removes a topic by name.
+ *
+ * Body: { add?: string, remove_topic_id?: string }. A user assignment is marked
+ * assigned_by='user', which the automatic grouping run never overrides.
+ */
+router.patch("/claude/threads/:id/topics", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  const orgId = req.org!.id;
+  if (!(await ownThread(req.params.id, orgId))) return res.status(404).json({ error: "thread not found" });
+
+  const add = str(req.body?.add, 200);
+  const removeTopicId = str(req.body?.remove_topic_id, 64) || null;
+
+  if (add) {
+    const { data: topic, error: tErr } = await db
+      .from("claude_topics")
+      .upsert({ org_id: orgId, title: add, title_source: "user" }, { onConflict: "org_id,title" })
+      .select("id")
+      .single();
+    if (tErr) return res.status(500).json({ error: tErr.message });
+    const { error: aErr } = await db
+      .from("claude_thread_topics")
+      .upsert(
+        { thread_id: req.params.id, topic_id: topic.id, confidence: 1, assigned_by: "user" },
+        { onConflict: "thread_id,topic_id" },
+      );
+    if (aErr) return res.status(500).json({ error: aErr.message });
+  }
+
+  if (removeTopicId && UUID_RE.test(removeTopicId)) {
+    const { error: dErr } = await db
+      .from("claude_thread_topics")
+      .delete()
+      .eq("thread_id", req.params.id)
+      .eq("topic_id", removeTopicId);
+    if (dErr) return res.status(500).json({ error: dErr.message });
+  }
+
+  return res.json({ ok: true });
+});
 
 export default router;

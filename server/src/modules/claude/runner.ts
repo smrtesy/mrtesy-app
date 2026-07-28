@@ -349,14 +349,32 @@ async function executeRunBody(runId: string): Promise<void> {
   // still holds the history, so the turn is resumed rather than started, and the
   // prompt carries only what the user just said.
   let resumeSession: string | null = null;
+  // Split-child inheritance, read on the FIRST turn only (session_id still null):
+  //   forkFromSession — method A: resume the PARENT's session with --fork-session.
+  //   seedContext     — method B: prepend the handover to the first prompt.
+  let forkFromSession: string | null = null;
+  let seedContext: string | null = null;
+  // A method-A fork child must run in the PARENT's working directory, because the
+  // engine stores sessions per project dir — both the parent session it forks from
+  // and the forked session it then owns live there. Its own dir would find neither.
+  // workspace_thread_id carries that directory key durably (it survives the parent's
+  // deletion — see the migration), so it is the authority on where turns run.
+  let workspaceThreadId: string | null = run.thread_id;
   if (run.thread_id) {
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
-      .select("session_id")
+      .select("session_id, fork_from_session, seed_context, workspace_thread_id")
       .eq("id", run.thread_id)
       .maybeSingle();
     if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
     resumeSession = thread?.session_id ?? null;
+    if (thread?.workspace_thread_id) workspaceThreadId = thread.workspace_thread_id;
+    // Only when the thread has no session of its own yet — a split child's first
+    // turn. Once it has resumed once, it owns a session and these are irrelevant.
+    if (!resumeSession) {
+      forkFromSession = thread?.fork_from_session ?? null;
+      seedContext = thread?.seed_context ?? null;
+    }
   }
 
   // ── the working directory ──
@@ -371,7 +389,7 @@ async function executeRunBody(runId: string): Promise<void> {
   // Held for the whole function, not just the clone: anything the run prints can
   // echo a tokenised remote URL, so the final error text has to be redacted too.
   let ghToken: string | null = null;
-  const workDir = run.thread_id ? await threadWorkspace(run.thread_id) : null;
+  const workDir = workspaceThreadId ? await threadWorkspace(workspaceThreadId) : null;
 
   if (run.repo) {
     ghToken = await getGitHubToken();
@@ -441,6 +459,15 @@ async function executeRunBody(runId: string): Promise<void> {
   // --file flag is for Anthropic Files API ids, NOT local paths, so pointing at
   // the path is the correct contract here, not a workaround.
   let promptText = run.prompt;
+  // Method B handover: the seed goes in FRONT of the first message, so the child
+  // opens knowing its topic. Prepended (not appended) so it reads as background the
+  // message then acts on. Written back to the row too, so the stored prompt matches
+  // what actually ran.
+  if (seedContext && !resumeSession) {
+    promptText = `# רקע מהשיחה הקודמת\n\n${seedContext}\n\n---\n\n${promptText}`;
+    const { error: sErr } = await db.from("claude_runs").update({ prompt: promptText }).eq("id", runId);
+    if (sErr) console.error("[claude/runner] seed prompt update failed:", sErr.message);
+  }
   if (cwd) {
     const { paths, failures } = await materializeAttachments(runId, cwd);
     if (paths.length > 0) {
@@ -467,6 +494,11 @@ async function executeRunBody(runId: string): Promise<void> {
   // thread already owns, so this turn sees every earlier turn. Without it each
   // message would start from nothing and the chat would have no memory.
   if (resumeSession) args.push("--resume", resumeSession);
+  // Method A (split "take everything"): the child's first turn resumes the PARENT's
+  // session and forks it — a new session id that starts with the whole parent
+  // history and diverges from here. Only on the first turn; afterwards the child has
+  // its own session and resumes that normally above.
+  else if (forkFromSession) args.push("--resume", forkFromSession, "--fork-session");
   // Omitted when unset rather than defaulted, so a run without a choice follows
   // the CLI's current default instead of being pinned to a model that will age.
   if (run.model) args.push("--model", run.model);
