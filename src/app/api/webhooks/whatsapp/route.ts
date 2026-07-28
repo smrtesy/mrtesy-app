@@ -1057,6 +1057,16 @@ async function buildMessageRow(
           break;
         }
         try {
+          // The DOWNLOAD is gated too, not only the analysis. It runs before any
+          // Gemini call and used to be unbounded, so several large notes in one
+          // delivery could burn the whole 60s ceiling on transfers alone and die
+          // before writing anything — which makes Meta redeliver the batch. Past
+          // the deadline the message is recorded with an honest placeholder and
+          // the redelivery guards let a retry pick up just the tail.
+          if (mediaDeadline - Date.now() < META_FETCH_TIMEOUT_MS) {
+            body = "[אודיו — נגמר הזמן להורדה בקליטה]";
+            break;
+          }
           const blob = await downloadMetaMedia(db, mediaId, accessToken);
           // Persist the audio blob to storage alongside images. Without this
           // media_url stays NULL and the WhatsApp thread view can only show
@@ -1138,10 +1148,16 @@ async function buildMessageRow(
           break;
         }
         let blob: MetaMediaBlob | null = null;
-        try {
-          blob = await downloadMetaMedia(db, mediaId, accessToken);
-        } catch (e) {
-          console.error("[whatsapp-webhook] image download failed:", e);
+        if (mediaDeadline - Date.now() < META_FETCH_TIMEOUT_MS) {
+          // Same reasoning as the audio gate above: the download is what can run
+          // away, so it is bounded before it starts rather than after.
+          console.warn("[whatsapp-webhook] image download skipped — delivery budget spent");
+        } else {
+          try {
+            blob = await downloadMetaMedia(db, mediaId, accessToken);
+          } catch (e) {
+            console.error("[whatsapp-webhook] image download failed:", e);
+          }
         }
 
         if (blob) {
@@ -1332,6 +1348,18 @@ async function buildMessageRow(
 // Media — Meta fetch + Supabase Storage upload
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Ceiling on each of the two Meta fetches a media download performs.
+ *
+ * They had no timeout at all, and they run BEFORE the Gemini budget check — so a
+ * Meta CDN that accepts the connection and then stalls held the function until
+ * the platform killed it, having written nothing, and Meta redelivered the whole
+ * payload. The Gemini deadline could not help: it only bounds work that happens
+ * after the bytes are in hand. Two large notes at ~10s of download each also ate
+ * the headroom the 40s analysis budget was sized against.
+ */
+const META_FETCH_TIMEOUT_MS = 15_000;
+
 async function downloadMetaMedia(
   db: SupabaseAdmin,
   mediaId: string,
@@ -1340,6 +1368,7 @@ async function downloadMetaMedia(
   const apiVersion = await getMetaApiVersion(db);
   const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
   });
   if (!metaRes.ok) {
     throw new Error(
@@ -1349,7 +1378,10 @@ async function downloadMetaMedia(
   const meta = (await metaRes.json()) as { url?: string; mime_type?: string };
   if (!meta.url) throw new Error("Meta media response missing url");
 
-  const fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+  const fileRes = await fetch(meta.url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
+  });
   if (!fileRes.ok) throw new Error(`Meta media download ${fileRes.status}`);
   const buf = Buffer.from(await fileRes.arrayBuffer());
 
