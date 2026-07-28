@@ -1653,7 +1653,8 @@
     "triageClass_unclear": "Unclear",
     "triageUnderstood": "Understood: {text}",
     "triageFixStarted": "Fix started — Claude is implementing it and opening a PR",
-    "triageFixOpen": "View the conversation"
+    "triageFixOpen": "View the conversation",
+    "triageContinueClaude": "Continue with Claude"
   },
   "calendarPage": {
     "noTitle": "(No title)",
@@ -1976,6 +1977,7 @@
     "markAllRead": "Mark all as read",
     "allMarkedRead": "All notifications marked as read",
     "copyForAi": "Copy for AI",
+    "continueClaude": "Continue with Claude",
     "copiedForAi": "Details copied — paste here into the AI",
     "timeJustNow": "just now",
     "timeMinsAgo": "{n}m ago",
@@ -4400,7 +4402,7 @@
     }
   },
   "claudeChat": {
-    "placeholder": "Write a message…",
+    "placeholder": "Describe a task or ask a question",
     "send": "Send",
     "stop": "Stop",
     "stopped": "Turn stopped",
@@ -4429,7 +4431,39 @@
     },
     "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
     "taskRouter": "Free-text task update",
-    "contextLost": "This turn started a new session — it does not know the earlier messages"
+    "contextLost": "This turn started a new session — it does not know the earlier messages",
+    "copyMessage": "Copy message",
+    "copied": "Copied",
+    "modelLabel": "Model",
+    "effortLabel": "Effort",
+    "split": {
+      "button": "Split the conversation",
+      "none": "No topics to split — this conversation is about one thing",
+      "bannerFound": "This looks like {count} separate topics",
+      "review": "Review",
+      "dismiss": "Dismiss",
+      "created": "Created {count} new chats",
+      "movedTo": "{count} turns moved to {title}",
+      "title": "Split the conversation",
+      "intro": "For each topic: choose whether to split it, edit the handover text, and pick how the new chat starts. Nothing moves until you confirm.",
+      "turns": "{count} turns",
+      "handoverLabel": "What the new chat receives",
+      "handoverPlaceholder": "The text the new chat will get…",
+      "methodSummary": "Start clean",
+      "methodFork": "Take all context",
+      "methodSummaryHint": "The new chat gets only the handover text above — clean, without the other topics.",
+      "methodForkHint": "The new chat inherits this entire conversation, including the other topics. (Handover text is unused in this mode.)",
+      "willKeep": "The turns stay here too, folded — you can undo.",
+      "cancel": "Cancel",
+      "apply": "Split {count} topics",
+      "done": "Split into {count} chats"
+    },
+    "group": {
+      "toggle": "Group by topic",
+      "now": "Group now",
+      "done": "Grouping updated",
+      "none": "No topic"
+    }
   },
   "markdown": {
     "anchor": "Link to section {title}",

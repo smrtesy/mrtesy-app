@@ -20,6 +20,7 @@
 
 import { db } from "../../../db";
 import { executeRun } from "../../claude/runner";
+import { maybeTitle } from "../../claude/threads";
 import { composePrompt } from "../../claude/playbooks";
 
 /** The repo autofix works against. Overridable, defaults to the app repo. */
@@ -82,10 +83,17 @@ export async function createFixThread(
   orgId: string,
   userId: string,
   fixCtx: FixContext,
+  opts: { force?: boolean } = {},
 ): Promise<string | null> {
-  if (!autofixEnabled()) return null;
+  // The auto-on-approval path is gated by the flag; a user who explicitly taps
+  // "continue with Claude" is initiating it themselves (like opening Claude on a
+  // task), so `force` bypasses the flag for that human-driven case only.
+  if (!opts.force && !autofixEnabled()) return null;
   try {
-    const title = `תיקון אוטומטי: ${fixCtx.serial ?? ""} ${fixCtx.note}`.trim().slice(0, 120);
+    // Concise initial title, no "אוטומטי" — the user initiated this by tapping,
+    // it is not an automatic run. maybeTitle below replaces it with a title drawn
+    // from the actual conversation once the run has content.
+    const title = ([fixCtx.serial, fixCtx.note].filter(Boolean).join(" · ") || "תיקון").slice(0, 60);
 
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
@@ -127,9 +135,13 @@ export async function createFixThread(
       return thread.id; // the thread exists; the user can send the message by hand
     }
 
-    void executeRun(run.id).catch((e) =>
-      console.error("[corrections.execute] executeRun threw:", e instanceof Error ? e.message : e),
-    );
+    void executeRun(run.id)
+      // Re-title from the conversation once it has content, exactly like a
+      // normal thread — so the header reads as a concise summary, not the note.
+      .then(() => maybeTitle(thread.id, orgId))
+      .catch((e) =>
+        console.error("[corrections.execute] executeRun threw:", e instanceof Error ? e.message : e),
+      );
 
     return thread.id;
   } catch (e) {

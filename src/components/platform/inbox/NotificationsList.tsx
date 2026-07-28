@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
+import { useOpenTab } from "@/components/platform/layout/OpenTabLink";
 import { createClient } from "@/lib/supabase/client";
 import { api, getActiveOrgId } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Bell, CheckCheck, ExternalLink, Info, AlertTriangle, CheckCircle2, AlertCircle, Copy } from "lucide-react";
+import { Bell, CheckCheck, ExternalLink, Info, AlertTriangle, CheckCircle2, AlertCircle, Copy, Bot } from "lucide-react";
 import { toast } from "sonner";
 import { PaneLink } from "@/lib/panes/nav";
 interface Notification {
@@ -19,6 +20,8 @@ interface Notification {
   from_user_id: string | null;
   is_read: boolean;
   created_at: string;
+  entity_type: string | null;
+  entity_id: string | null;
 }
 
 const TYPE_CONFIG = {
@@ -31,6 +34,8 @@ const TYPE_CONFIG = {
 
 export function NotificationsList() {
   const t = useTranslations("inbox");
+  const locale = useLocale();
+  const openTab = useOpenTab();
   const supabase = createClient();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +81,29 @@ export function NotificationsList() {
       setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, is_read: true } : n));
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  }
+
+  // "Continue with Claude" straight from a correction notification: open a Claude
+  // conversation seeded with the correction and deep-link onto it. Human-initiated,
+  // so it is not gated by the auto-fix flag.
+  const [claudeBusy, setClaudeBusy] = useState<string | null>(null);
+  async function continueWithClaude(correctionId: string) {
+    setClaudeBusy(correctionId);
+    try {
+      const { thread_id } = await api<{ thread_id: string }>(
+        `/api/corrections/${correctionId}/claude-thread`,
+        { method: "POST", body: {} },
+      );
+      // Open as an in-app tab in the tabs-workspace, not a new browser window.
+      openTab(
+        thread_id ? `/${locale}/claude?thread=${thread_id}` : `/${locale}/claude`,
+        t("continueClaude"),
+      );
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setClaudeBusy(null);
     }
   }
 
@@ -158,7 +186,26 @@ export function NotificationsList() {
                     )}
                   </div>
                   {n.body && (
-                    <p className="text-xs text-muted-foreground mt-0.5">{n.body}</p>
+                    <div className="mt-1 space-y-0.5" dir="auto">
+                      {n.body.split("\n").map((line, i) => {
+                        const done = line.trimStart().startsWith("✓");
+                        const ask = line.trimStart().startsWith("❓");
+                        return (
+                          <p
+                            key={i}
+                            className={
+                              done
+                                ? "text-xs text-foreground"
+                                : ask
+                                  ? "text-xs font-medium text-foreground"
+                                  : "text-xs text-muted-foreground"
+                            }
+                          >
+                            {line}
+                          </p>
+                        );
+                      })}
+                    </div>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-1">
                     {(() => {
@@ -173,6 +220,18 @@ export function NotificationsList() {
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  {n.entity_type === "task_correction" && n.entity_id && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title={t("continueClaude")}
+                      disabled={claudeBusy === n.entity_id}
+                      onClick={() => continueWithClaude(n.entity_id!)}
+                    >
+                      <Bot className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
