@@ -165,9 +165,10 @@ const CSS = `
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,sans-serif;
   --sat:42%; --lit:44%;
-  max-width:1320px;margin-inline:auto;padding:22px clamp(14px,3vw,30px) 48px;direction:ltr;
+  width:100%;min-height:100%;padding:22px 0 48px;direction:ltr;
   background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;
 }
+.ss-inner{max-width:1320px;margin-inline:auto;padding-inline:clamp(14px,3vw,30px)}
 .ss-app *{box-sizing:border-box}
 
 /* dark tokens — OS preference, the app's .dark class, and an explicit override */
@@ -209,21 +210,24 @@ const CSS = `
 .ss-ring{--p:0;width:34px;height:34px;border-radius:50%;flex:none;background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-2) 0);display:grid;place-items:center}
 .ss-ring span{width:24px;height:24px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:9.5px;font-weight:800;font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-.ss-shell{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:36px;align-items:start;direction:ltr}
+.ss-shell{display:grid;grid-template-columns:minmax(300px,336px) minmax(0,1fr);gap:72px;align-items:start;direction:ltr}
 .ss-nav{display:flex;flex-direction:column;gap:8px;position:sticky;top:14px}
 .ss-nav-head{display:flex;align-items:baseline;justify-content:space-between;padding:2px 4px 4px}
 .ss-nav-head b{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .ss-nav-head .cnt{font-size:11px;color:var(--muted);font-family:var(--mono)}
 
-.ss-tab{--h:200;position:relative;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
+.ss-stage{position:relative;padding-left:62px}
+.ss-stage.active{z-index:5}
+.ss-gnum{position:absolute;left:0;top:50%;transform:translateY(-50%);width:64px;text-align:right;font-family:var(--mono);font-weight:800;font-variant-numeric:tabular-nums;font-size:54px;line-height:1;letter-spacing:-.04em;color:var(--muted);opacity:.18;z-index:0;user-select:none;pointer-events:none;white-space:nowrap}
+.ss-stage.active .ss-gnum{opacity:.26}
+.ss-tab{--h:200;position:relative;z-index:1;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
 .ss-tab:hover{border-color:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 55%,var(--line-strong))}
 .ss-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .ss-tab .ic{width:34px;height:34px;border-radius:9px;flex:none;display:grid;place-items:center;color:hsl(var(--h) var(--sat) var(--lit));background:hsl(var(--h) var(--sat) var(--lit)/.13)}
 .ss-tab .ic svg{width:19px;height:19px}
 .ss-tab .body{min-width:0}
-.ss-tab .row1{display:flex;align-items:center;gap:7px}
-.ss-tab .idx{font-size:10px;font-weight:800;font-family:var(--mono);color:var(--muted)}
-.ss-tab .nm{font-size:13.5px;font-weight:650;letter-spacing:-.01em}
+.ss-tab .row1{display:flex;align-items:center;gap:7px;min-width:0}
+.ss-tab .nm{font-size:15.5px;font-weight:650;letter-spacing:-.01em;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ss-tab .prog-txt{font-size:10.5px;color:var(--muted);font-family:var(--mono);font-variant-numeric:tabular-nums;margin:5px 0 4px}
 .ss-tab .bar{display:none;height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden}
 .ss-tab .bar i{display:block;height:100%;border-radius:999px;width:0;transition:width .5s cubic-bezier(.4,0,.2,1)}
@@ -233,7 +237,7 @@ const CSS = `
 
 .ss-tab.active{border-color:hsl(var(--h) var(--sat) var(--lit));padding:20px 17px 22px;box-shadow:var(--shadow-lift),inset 0 0 0 1.5px hsl(var(--h) var(--sat) var(--lit));transform:scale(1.06);z-index:3}
 .ss-tab.active .ic{color:#fff;background:hsl(var(--h) var(--sat) var(--lit))}
-.ss-tab.active .nm{font-size:15px;font-weight:750}
+.ss-tab.active .nm{font-size:17px;font-weight:750}
 .ss-tab.active .prog-txt{font-size:12px;color:var(--ink-2);font-weight:650}
 .ss-tab.active .bar{display:block;height:8px;margin-top:10px;box-shadow:inset 0 0 0 1px color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 16%,transparent)}
 .ss-tab.active .bar i{background:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 66%,var(--muted))}
@@ -340,7 +344,9 @@ const CSS = `
   .ss-shell{grid-template-columns:1fr}
   .ss-nav{position:static;flex-direction:row;overflow-x:auto;padding-bottom:6px;gap:10px}
   .ss-nav-head{display:none}
-  .ss-tab{width:180px;flex:none;grid-template-columns:30px 1fr}
+  .ss-gnum{display:none}
+  .ss-stage{padding-left:0;width:180px;flex:none}
+  .ss-tab{width:100%;grid-template-columns:30px 1fr}
   .ss-tab.active{transform:none}
 }
 @media (prefers-reduced-motion:reduce){.ss-app *{transition:none!important}}
@@ -841,6 +847,7 @@ export function StudioConsole() {
     <div className="ss-app" dir="ltr">
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
+      <div className="ss-inner">
       <div className="ss-top">
         <div className="ss-brand">
           <div>
@@ -867,33 +874,39 @@ export function StudioConsole() {
           {stages.map((st, i) => {
             const isActive = st.slug === selected;
             return (
-              <button
+              <div
                 key={st.slug}
-                type="button"
-                className={`ss-tab${isActive ? " active" : ""}`}
-                style={vars({ "--h": st.hue })}
-                data-complete={st.pct === 100 ? "1" : "0"}
-                onClick={() => setSelected(st.slug)}
+                className={`ss-stage${isActive ? " active" : ""}`}
               >
-                <span className="flag">
-                  <Svg paths={ICON.cdone} />
+                <span className="ss-gnum" aria-hidden="true">
+                  {String(i + 1).padStart(2, "0")}
                 </span>
-                <span className="ic">
-                  <Svg paths={ICON[st.slug] ?? ICON.sets} />
-                </span>
-                <span className="body">
-                  <span className="row1">
-                    <span className="idx">{String(i + 1).padStart(2, "0")}</span>
-                    <span className="nm">{st.name}</span>
+                <button
+                  type="button"
+                  className={`ss-tab${isActive ? " active" : ""}`}
+                  style={vars({ "--h": st.hue })}
+                  data-complete={st.pct === 100 ? "1" : "0"}
+                  onClick={() => setSelected(st.slug)}
+                >
+                  <span className="flag">
+                    <Svg paths={ICON.cdone} />
                   </span>
-                  <span className="prog-txt">
-                    {st.done} of {st.total} done · {st.pct}%
+                  <span className="ic">
+                    <Svg paths={ICON[st.slug] ?? ICON.sets} />
                   </span>
-                  <span className="bar">
-                    <i style={isActive ? { width: `${st.pct}%` } : undefined} />
+                  <span className="body">
+                    <span className="row1">
+                      <span className="nm">{st.name}</span>
+                    </span>
+                    <span className="prog-txt">
+                      {st.done}/{st.total}
+                    </span>
+                    <span className="bar">
+                      <i style={isActive ? { width: `${st.pct}%` } : undefined} />
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+              </div>
             );
           })}
         </nav>
@@ -912,6 +925,7 @@ export function StudioConsole() {
             <Dashboard overview={overview} />
           )}
         </main>
+      </div>
       </div>
     </div>
   );
