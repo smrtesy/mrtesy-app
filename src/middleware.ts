@@ -52,11 +52,18 @@ export async function middleware(request: NextRequest) {
   // round-trip below. Auth/session refresh simply happens on the request
   // that follows the redirect.
   //
-  // (1) The locale home ("/he", "/en") unconditionally redirects to /tasks —
-  //     mirror of [locale]/page.tsx, one hop earlier.
+  // (1) The locale home ("/he", "/en") redirects to /tasks — mirror of
+  //     [locale]/page.tsx, one hop earlier. The locale in THIS url is not
+  //     authoritative (see the saved-language block below): honor the saved
+  //     preference when we have it cached, and fall through to the DB lookup
+  //     when we don't ([locale]/page.tsx still redirects to /tasks, so the
+  //     extra hop is safe).
   const localeRoot = pathname.match(/^\/(he|en)\/?$/);
   if (localeRoot) {
-    return NextResponse.redirect(new URL(`/${localeRoot[1]}/tasks`, request.url));
+    const lang = request.cookies.get("smrt_lang_pref")?.value;
+    if (lang === "he" || lang === "en") {
+      return NextResponse.redirect(new URL(`/${lang}/tasks`, request.url));
+    }
   }
   // (2) Root entry with a saved-language cookie: straight to the landing
   //     page in ONE redirect. A logged-out visitor with a stale cookie just
@@ -113,46 +120,66 @@ export async function middleware(request: NextRequest) {
   const hasLocalePrefix = pathnameLocale === "he" || pathnameLocale === "en";
   const locale = hasLocalePrefix ? pathnameLocale : "he";
 
-  // Prefer saved language for entry URLs.
-  // Fast path: read from cookie (set on first visit, valid 24h) to skip DB.
-  if (!hasLocalePrefix && user) {
+  // ── Saved language wins on ENTRY urls ───────────────────────────────────
+  // An "entry url" is how the app OPENS: a prefix-less path, the bare locale
+  // root ("/he"), or the landing screen ("/he/tasks"). The locale inside such a
+  // url is NOT authoritative — an installed PWA's cached start_url, a bookmark,
+  // or a restored window all re-enter through one of them. Gating this lookup on
+  // "has no locale prefix" (what it used to do) therefore pinned the app to that
+  // url's locale permanently: switching to English reverted on every relaunch
+  // even though user_settings.preferred_language already said "en".
+  //
+  // Deep links keep their explicit locale — they carry a deeper path or a query
+  // string, so they never match here. That also excludes pane iframes (always
+  // ?embed=1) and client-side RSC navigations (always ?_rsc=…).
+  const isLandingEntry =
+    !!localeRoot ||
+    (hasLocalePrefix &&
+      !request.nextUrl.search &&
+      /^\/(he|en)\/tasks\/?$/.test(pathname));
+  if ((!hasLocalePrefix || isLandingEntry) && user) {
+    // A locale-prefixed entry url lands on the default screen; a prefix-less
+    // deep path keeps the path it asked for.
+    const entryPath = hasLocalePrefix || pathname === "/" ? "/tasks" : pathname;
+
+    /** Redirect to `pref`, or null when that is the url we are already on —
+     *  returning a redirect to the current path would loop forever. */
+    const toPreferred = (pref: "he" | "en", persist: boolean) => {
+      const path = `/${pref}${entryPath}`;
+      if (path === pathname || path === pathname.replace(/\/$/, "")) return null;
+      const redirectResp = NextResponse.redirect(
+        new URL(`${path}${request.nextUrl.search}`, request.url),
+      );
+      response.cookies.getAll().forEach((cookie) => {
+        redirectResp.cookies.set(cookie.name, cookie.value, { ...cookie });
+      });
+      if (persist) {
+        redirectResp.cookies.set("smrt_lang_pref", pref, {
+          path: "/",
+          sameSite: "lax",
+          maxAge: 60 * 60 * 24, // 24h
+        });
+      }
+      return redirectResp;
+    };
+
+    // Fast path: the cookie mirrors the saved preference (24h) and skips the DB.
     const cachedLang = request.cookies.get("smrt_lang_pref")?.value;
     if (cachedLang === "he" || cachedLang === "en") {
-      const target = new URL(
-        `/${cachedLang}${pathname === "/" ? "" : pathname}${request.nextUrl.search}`,
-        request.url,
-      );
-      const redirectResp = NextResponse.redirect(target);
-      response.cookies.getAll().forEach((cookie) => {
-        redirectResp.cookies.set(cookie.name, cookie.value, { ...cookie });
-      });
-      return redirectResp;
-    }
-
-    // Slow path: DB lookup on first visit or after cookie expiry.
-    const { data: settings } = await supabase
-      .from("user_settings")
-      .select("preferred_language")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    const pref = settings?.preferred_language;
-    if (pref === "he" || pref === "en") {
-      // Root goes straight to the landing page — skips the "/he" → "/he/tasks"
-      // intermediate hop (mirrors the cold-start fast-paths above).
-      const target = new URL(
-        `/${pref}${pathname === "/" ? "/tasks" : pathname}${request.nextUrl.search}`,
-        request.url,
-      );
-      const redirectResp = NextResponse.redirect(target);
-      response.cookies.getAll().forEach((cookie) => {
-        redirectResp.cookies.set(cookie.name, cookie.value, { ...cookie });
-      });
-      redirectResp.cookies.set("smrt_lang_pref", pref, {
-        path: "/",
-        sameSite: "lax",
-        maxAge: 60 * 60 * 24, // 24h
-      });
-      return redirectResp;
+      const resp = toPreferred(cachedLang, false);
+      if (resp) return resp;
+    } else {
+      // Slow path: DB lookup on first visit or after cookie expiry.
+      const { data: settings } = await supabase
+        .from("user_settings")
+        .select("preferred_language")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      const pref = settings?.preferred_language;
+      if (pref === "he" || pref === "en") {
+        const resp = toPreferred(pref, true);
+        if (resp) return resp;
+      }
     }
   }
 
