@@ -175,7 +175,9 @@
     "paneError": "משהו השתבש בטאב הזה",
     "paneReload": "טען מחדש",
     "maximizePane": "רוחב מלא",
-    "restorePane": "חזרה לתצוגה מפוצלת (Esc)"
+    "restorePane": "חזרה לתצוגה מפוצלת (Esc)",
+    "collapsePane": "צמצם לרצועה בצד",
+    "expandPaneNamed": "פתח את {label}"
   },
   "nav": {
     "account": "ניהול חשבון",

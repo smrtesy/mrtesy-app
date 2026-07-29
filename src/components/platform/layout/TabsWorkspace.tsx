@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, Minimize2, X } from "lucide-react";
+import { Maximize2, Minimize2, PanelLeftClose, PanelRightClose, X } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import {
@@ -15,6 +15,10 @@ import { PaneHost } from "./PaneHost";
 /** Smallest a pane may be dragged to, in pixels. */
 const MIN_PANE_PX = 200;
 
+/** Fixed width of a parked (rail) tab, in pixels. Wide enough for the vertical
+ *  title and the close affordance, narrow enough to stay out of the way. */
+const RAIL_PX = 44;
+
 /** True if the tab is the WhatsApp reader pane (not /whatsapp/autoreply). The
  *  href is locale-prefixed and may carry a query, so compare the bare path. */
 function isWhatsAppTab(tab: WorkspaceTab): boolean {
@@ -23,11 +27,12 @@ function isWhatsAppTab(tab: WorkspaceTab): boolean {
 }
 
 /**
- * Resolve each pane's width as a fraction (0..1) of the workspace.
+ * Resolve each EXPANDED pane's width as a fraction (0..1) of the space left for
+ * expanded panes (rails are fixed-width and excluded from this).
  *
- * - One tab fills the whole area.
- * - If every pane has an explicit width (i.e. the user has dragged a divider),
- *   use those, normalized to sum to 1.
+ * - One expanded pane fills the whole area.
+ * - If every expanded pane has an explicit width (i.e. the user has dragged a
+ *   divider), use those, normalized to sum to 1.
  * - Otherwise fall back to the default: the active pane takes half, the rest
  *   share the other half.
  */
@@ -45,8 +50,12 @@ function resolveFractions(
     const sum = tabs.reduce((s, t) => s + widths[t.id], 0) || 1;
     return Object.fromEntries(tabs.map((t) => [t.id, widths[t.id] / sum]));
   }
+  const activeExpanded = tabs.some((t) => t.id === activeId);
   return Object.fromEntries(
-    tabs.map((t) => [t.id, t.id === activeId ? 0.5 : 0.5 / (n - 1)]),
+    tabs.map((t) => [
+      t.id,
+      activeExpanded ? (t.id === activeId ? 0.5 : 0.5 / (n - 1)) : 1 / n,
+    ]),
   );
 }
 
@@ -60,17 +69,35 @@ type DragState = {
 };
 
 /**
- * Side-by-side panes for the open sidebar tabs (desktop only). The active pane
- * takes half the width by default; the rest share the other half and act as
- * previews — clicking one focuses it. The dividers between panes are draggable
- * to resize, and double-clicking a divider restores the default layout.
+ * Side-by-side panes for the open sidebar tabs (desktop only).
+ *
+ * Opening a page focuses it and parks every other tab as a narrow "rail" that
+ * shows only the title (see openTab). Clicking a rail expands it back beside
+ * the others, so several panes — including WhatsApp — can sit side by side on
+ * demand. Among the expanded panes the active one takes half the width by
+ * default; the rest share the other half and act as previews. Dividers between
+ * two adjacent expanded panes are draggable, and double-clicking a divider
+ * restores the default layout.
  */
 export function TabsWorkspace() {
-  const { tabs, activeId, widths, soloId, setActive, closeTab, setWidths, resetWidths, toggleSolo } =
-    useTabsWorkspace();
+  const {
+    tabs,
+    activeId,
+    widths,
+    soloId,
+    collapsedIds,
+    setActive,
+    closeTab,
+    expandTab,
+    collapseTab,
+    setWidths,
+    resetWidths,
+    toggleSolo,
+  } = useTabsWorkspace();
   const t = useTranslations("tabsWorkspace");
   const locale = useLocale();
   const isRtl = locale === "he";
+  const CollapseIcon = isRtl ? PanelRightClose : PanelLeftClose;
 
   // Escape leaves maximized view — the pane covers the whole workspace, so the
   // way back has to be reachable without hunting for the button.
@@ -103,8 +130,23 @@ export function TabsWorkspace() {
   const solo = soloId ? orderedTabs.find((tab) => tab.id === soloId) ?? null : null;
   const visibleTabs = solo ? [solo] : orderedTabs;
 
-  const n = visibleTabs.length;
-  const fractions = resolveFractions(visibleTabs, activeId, widths);
+  // Rails never apply while a pane is maximized — solo shows exactly one pane.
+  const collapsedSet = useMemo(() => new Set(collapsedIds), [collapsedIds]);
+  const isRail = useCallback(
+    (tab: WorkspaceTab) => !solo && collapsedSet.has(tab.id),
+    [solo, collapsedSet],
+  );
+  const expandedVisible = visibleTabs.filter((tab) => !isRail(tab));
+  const expandedCount = expandedVisible.length;
+  // Only offer "park this pane" when another expanded pane would remain — the
+  // last expanded pane can't be parked (nothing would be shown at full size).
+  const canCollapse = !solo && expandedCount > 1;
+
+  const fractions = resolveFractions(expandedVisible, activeId, widths);
+  // The drag handler pins the current expanded fractions so only the dragged
+  // pair moves. Read them from a ref to keep the handler identity stable.
+  const fractionsRef = useRef(fractions);
+  fractionsRef.current = fractions;
 
   const dragRef = useRef<DragState | null>(null);
   const [resizingIdx, setResizingIdx] = useState<number | null>(null);
@@ -127,8 +169,8 @@ export function TabsWorkspace() {
       const leftRect = aIsLeft ? ra : rb;
       const rightRect = aIsLeft ? rb : ra;
 
-      // Pin every pane to its current fraction so only this pair moves.
-      const pinned = resolveFractions(tabs, activeId, widths);
+      // Pin every expanded pane to its current fraction so only this pair moves.
+      const pinned = { ...fractionsRef.current };
       setWidths(pinned);
 
       dragRef.current = {
@@ -142,7 +184,7 @@ export function TabsWorkspace() {
       setResizingIdx(idx);
       document.body.style.userSelect = "none";
     },
-    [tabs, activeId, widths, setWidths],
+    [setWidths],
   );
 
   const onHandleMove = useCallback(
@@ -177,8 +219,51 @@ export function TabsWorkspace() {
   return (
     <div className="flex h-[calc(100dvh_-_var(--wc-bar-h,0px))] w-full overflow-x-auto">
       {visibleTabs.map((tab, i) => {
+        // A parked tab renders as a narrow rail: title only, click to expand.
+        if (isRail(tab)) {
+          return (
+            <div
+              key={tab.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => expandTab(tab.id)}
+              onKeyDown={(e) => {
+                // Only the rail itself expands on Enter/Space — a keydown that
+                // bubbled up from the nested close button must not also fire
+                // expandTab on the tab being closed.
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  expandTab(tab.id);
+                }
+              }}
+              title={tab.label}
+              aria-label={t("expandPaneNamed", { label: tab.label })}
+              style={{ flex: `0 0 ${RAIL_PX}px`, width: RAIL_PX }}
+              className="group/rail relative flex h-full cursor-pointer flex-col items-center border-e bg-muted/30 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+            >
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                aria-label={t("close")}
+                title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
+                className="mt-1 inline-flex h-6 w-6 flex-none items-center justify-center rounded-md text-muted-foreground/70 opacity-100 transition-opacity hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover/rail:opacity-100"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+              <span className="mt-1 min-h-0 flex-1 select-none overflow-hidden text-ellipsis whitespace-nowrap text-xs font-medium [writing-mode:vertical-rl]">
+                {tab.label}
+              </span>
+            </div>
+          );
+        }
+
         const active = solo ? true : tab.id === activeId;
-        const frac = fractions[tab.id] ?? 1 / n;
+        const frac = fractions[tab.id] ?? 1 / Math.max(expandedCount, 1);
+        // A divider sits between this pane and the next ONLY when both are
+        // expanded panes (rails are fixed-width and share no draggable edge).
+        const next = visibleTabs[i + 1];
+        const showDivider = !solo && next != null && !isRail(next);
         return (
           <Fragment key={tab.id}>
             <section
@@ -216,6 +301,19 @@ export function TabsWorkspace() {
                   >
                     <X className="h-4 w-4" />
                   </button>
+                  {/* Park this pane back into a rail — only when another expanded
+                      pane would remain to fill the workspace. */}
+                  {canCollapse && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); collapseTab(tab.id); }}
+                      aria-label={t("collapsePane")}
+                      title={t("collapsePane")}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                    >
+                      <CollapseIcon className="h-4 w-4" />
+                    </button>
+                  )}
                   {/* Wide screens (the model-comparison grid) are unusable in a
                       half-width pane. This gives one pane the whole workspace
                       without closing the working set. */}
@@ -234,12 +332,12 @@ export function TabsWorkspace() {
                 </div>
               </div>
             </section>
-            {i < n - 1 && !solo && (
+            {showDivider && (
               <div
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t("resizePane")}
-                onPointerDown={(e) => onHandleDown(e, i, tab, visibleTabs[i + 1])}
+                onPointerDown={(e) => onHandleDown(e, i, tab, next)}
                 onPointerMove={onHandleMove}
                 onPointerUp={onHandleUp}
                 onPointerCancel={onHandleUp}
