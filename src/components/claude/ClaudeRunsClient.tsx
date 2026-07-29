@@ -370,11 +370,23 @@ export function ClaudeRunsClient() {
 
                 {/* Stated in the UI, not just the API: the cost figure is a consumption
                     measure on a subscription, and remaining quota genuinely is not
-                    available to us — leaving that implicit would be misleading. */}
+                    available to us — leaving that implicit would be misleading.
+
+                    Rendered from i18n, NOT from usage.disclaimer: the API's copy is
+                    hardcoded English (it serves non-UI callers), and printing it raw
+                    put three English paragraphs in a Hebrew screen — exactly the text
+                    a reader must understand to not mistake this for a bill. The API
+                    field stays for API consumers; the screen speaks the user's
+                    language. Same strings, both places. */}
                 <div className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
-                  <p>{usage.disclaimer.billing}</p>
-                  <p>{usage.disclaimer.remaining}</p>
-                  <p>{usage.disclaimer.scope}</p>
+                  {/* First line, and emphasised: "this is a separate account" is the
+                      question people actually arrive with when they see a $ figure. */}
+                  <p className="font-medium text-foreground">
+                    {t("usage.disclaimer.separateAccount")}
+                  </p>
+                  <p>{t("usage.disclaimer.billing")}</p>
+                  <p>{t("usage.disclaimer.remaining")}</p>
+                  <p>{t("usage.disclaimer.scope")}</p>
                 </div>
               </>
             )}
