@@ -247,11 +247,11 @@ body[data-content-wide="true"] main[data-sidebar-main] > div {
   scrollbar-color: transparent transparent;
 }
 *:hover {
-  scrollbar-color: hsl(var(--primary) / 0.35) transparent;
+  scrollbar-color: hsl(var(--primary) / 0.2) transparent;
 }
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
@@ -261,10 +261,10 @@ body[data-content-wide="true"] main[data-sidebar-main] > div {
   border-radius: 9999px;
 }
 *:hover::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--primary) / 0.35);
+  background-color: hsl(var(--primary) / 0.2);
 }
 *::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--primary) / 0.55);
+  background-color: hsl(var(--primary) / 0.35);
 }
 
 /* Quick-marathon finish-screen confetti (new-record celebration). */
