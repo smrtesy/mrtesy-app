@@ -7,6 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { stripLocale } from "@/lib/panes/nav";
 
 /**
  * In-app tabs workspace.
@@ -191,6 +192,66 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [openTab]);
+
+  // Bridge: the account screen's language toggle (inside a pane) posts here to
+  // switch the whole app's locale IN PLACE (see requestLocaleSwitch). Only the
+  // TOP provider handles it — from the top context the reload is a first-party
+  // navigation that stays inside an installed PWA. We relocalize the PERSISTED
+  // workspace (swap the /he ↔ /en prefix on every tab id/href, the width keys,
+  // solo and active ids) so the tabs reopen in the new locale instead of a
+  // stale mix, then reload the shell on the same screen. Reading/writing
+  // localStorage directly (not React state) keeps this race-free right before
+  // the reload.
+  useEffect(() => {
+    if (typeof window === "undefined" || window.top !== window.self) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const data = e.data as { type?: string; locale?: string } | null;
+      if (!data || data.type !== "smrtesy:switch-locale") return;
+      const loc = data.locale === "en" ? "en" : data.locale === "he" ? "he" : null;
+      if (!loc) return;
+      const swap = (s: string) => s.replace(/^\/(he|en)(?=\/|$)/, `/${loc}`);
+      // Reload the shell on the screen the operator is actually looking at (the
+      // active tab), so it dedupes onto an existing pane rather than adopting a
+      // stale top-window path as an extra tab. Falls back to the current path.
+      let reloadTarget: string | null = null;
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as {
+            tabs?: WorkspaceTab[];
+            activeId?: string | null;
+            widths?: PaneWidths;
+            soloId?: string | null;
+          };
+          const next = {
+            tabs: Array.isArray(parsed.tabs)
+              ? parsed.tabs.map((t) => ({ ...t, id: swap(t.id), href: swap(t.href) }))
+              : [],
+            activeId: parsed.activeId ? swap(parsed.activeId) : null,
+            widths:
+              parsed.widths && typeof parsed.widths === "object"
+                ? Object.fromEntries(
+                    Object.entries(parsed.widths).map(([k, v]) => [swap(k), v]),
+                  )
+                : {},
+            soloId: parsed.soloId ? swap(parsed.soloId) : null,
+          };
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+          reloadTarget = next.activeId;
+        }
+      } catch {
+        /* corrupt storage — the reload below still switches the shell locale */
+      }
+      if (!reloadTarget) {
+        const path = stripLocale(window.location.pathname);
+        reloadTarget = `/${loc}${path === "/" ? "/tasks" : path}`;
+      }
+      window.location.assign(reloadTarget);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   const setActive = useCallback((id: string) => setActiveId(id), []);
   const setWidths = useCallback((next: PaneWidths) => setWidthsState(next), []);

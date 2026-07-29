@@ -175,7 +175,9 @@
     "paneError": "משהו השתבש בטאב הזה",
     "paneReload": "טען מחדש",
     "maximizePane": "רוחב מלא",
-    "restorePane": "חזרה לתצוגה מפוצלת (Esc)"
+    "restorePane": "חזרה לתצוגה מפוצלת (Esc)",
+    "emptyTitle": "אין טאבים פתוחים",
+    "emptyHint": "בחר מסך מהתפריט כדי לפתוח טאב"
   },
   "nav": {
     "account": "ניהול חשבון",

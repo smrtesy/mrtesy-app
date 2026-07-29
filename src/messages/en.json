@@ -175,7 +175,9 @@
     "paneError": "Something went wrong in this tab",
     "paneReload": "Reload",
     "maximizePane": "Full width",
-    "restorePane": "Back to split view (Esc)"
+    "restorePane": "Back to split view (Esc)",
+    "emptyTitle": "No open tabs",
+    "emptyHint": "Pick a screen from the menu to open a tab"
   },
   "nav": {
     "account": "Account",
