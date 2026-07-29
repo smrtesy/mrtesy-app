@@ -46,12 +46,27 @@ type TabsWorkspaceValue = {
    *  (not closed). Wide screens — the model-comparison grid is the reason —
    *  are unusable in a half-width pane. */
   soloId: string | null;
+  /** Tabs currently parked as narrow "rails": they render as a thin strip that
+   *  shows only the title, keeping their content mounted but out of the way.
+   *  Opening/focusing a tab parks every OTHER tab here (focus by default);
+   *  clicking a rail expands it back beside the others (side-by-side on
+   *  demand). The active tab is never in this set — something must always be
+   *  shown at full size. */
+  collapsedIds: string[];
   /** Maximize this pane, or restore the split view if it is already solo. */
   toggleSolo: (id: string) => void;
-  /** Open (or focus, if already open) a page as a pane and make it active. */
+  /** Open (or focus, if already open) a page as a pane and make it active.
+   *  Every other open tab is parked as a rail so the opened page gets focus. */
   openTab: (href: string, label: string) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
+  /** Bring a parked (rail) tab back to full size beside the others and focus
+   *  it — WITHOUT parking the rest, so several panes can sit side by side. */
+  expandTab: (id: string) => void;
+  /** Park an expanded tab back into a rail. No-op on the last expanded pane —
+   *  at least one must stay visible. Parking the active pane moves focus to
+   *  another expanded pane. */
+  collapseTab: (id: string) => void;
   /** Replace the explicit pane-width fractions (used by the drag handles). */
   setWidths: (next: PaneWidths) => void;
   /** Drop all explicit widths and fall back to the automatic layout. */
@@ -67,6 +82,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [widths, setWidthsState] = useState<PaneWidths>({});
   const [soloId, setSoloId] = useState<string | null>(null);
+  const [collapsedIds, setCollapsedIds] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate from localStorage once, after mount, to avoid an SSR/client
@@ -80,20 +96,33 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
           activeId?: string | null;
           widths?: PaneWidths;
           soloId?: string | null;
+          collapsedIds?: string[];
         };
         if (Array.isArray(parsed.tabs)) {
           const valid = parsed.tabs.filter(
             (t) => t && typeof t.id === "string" && typeof t.href === "string",
           );
           setTabs(valid);
+          const openIds = new Set(valid.map((t) => t.id));
           const stillOpen = valid.some((t) => t.id === parsed.activeId);
-          setActiveId(stillOpen ? parsed.activeId! : valid[valid.length - 1]?.id ?? null);
+          const resolvedActive = stillOpen
+            ? parsed.activeId!
+            : valid[valid.length - 1]?.id ?? null;
+          setActiveId(resolvedActive);
           // Maximized state survives a reload — scoring a panel spans reloads —
           // but only for a tab that is still open.
           if (valid.some((t) => t.id === parsed.soloId)) setSoloId(parsed.soloId!);
+          // Parked (rail) tabs survive a reload too. Keep only those still open,
+          // and never leave the active tab parked — the active pane must show at
+          // full size, so removing it here also guarantees ≥1 expanded pane.
+          if (Array.isArray(parsed.collapsedIds)) {
+            const collapsed = parsed.collapsedIds.filter(
+              (id) => typeof id === "string" && openIds.has(id) && id !== resolvedActive,
+            );
+            setCollapsedIds(collapsed);
+          }
           if (parsed.widths && typeof parsed.widths === "object") {
             // Keep only widths for tabs that are still open.
-            const openIds = new Set(valid.map((t) => t.id));
             const pruned: PaneWidths = {};
             for (const [id, v] of Object.entries(parsed.widths)) {
               if (openIds.has(id) && typeof v === "number" && v > 0) pruned[id] = v;
@@ -113,12 +142,12 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     try {
       window.localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ tabs, activeId, widths, soloId }),
+        JSON.stringify({ tabs, activeId, widths, soloId, collapsedIds }),
       );
     } catch {
       /* storage full / unavailable — non-fatal */
     }
-  }, [tabs, activeId, widths, soloId, hydrated]);
+  }, [tabs, activeId, widths, soloId, collapsedIds, hydrated]);
 
   const openTab = useCallback((href: string, label: string) => {
     // Dedupe by PAGE (path without query), not by exact href: opening
@@ -139,12 +168,17 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       if (existing) {
         setActiveId(existing.id);
         setSoloId((cur) => (cur ? existing.id : null));
+        // Focus by default: the opened page is the only expanded pane, every
+        // other open tab is parked as a rail. Clicking a rail brings it back.
+        setCollapsedIds(prev.filter((t) => t.id !== existing.id).map((t) => t.id));
         return href === existing.href
           ? prev
           : prev.map((t) => (t.id === existing.id ? { ...t, href } : t));
       }
       setActiveId(href);
       setSoloId((cur) => (cur ? href : null));
+      // Park every previously-open tab; the new pane (href) stays expanded.
+      setCollapsedIds(prev.map((t) => t.id));
       // Manual widths are deliberately KEPT. They are keyed by tab id and
       // resolveFractions ignores a partially-explicit set, so the workspace
       // already falls back to the automatic layout while this pane is open —
@@ -161,11 +195,16 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       setActiveId((cur) => {
         if (cur !== id) return cur;
         if (next.length === 0) return null;
-        // Focus the neighbour that slid into the closed tab's slot.
-        return next[Math.min(idx, next.length - 1)].id;
+        // Focus the neighbour that slid into the closed tab's slot — and make
+        // sure it is expanded, not still parked as a rail, so something shows.
+        const newActive = next[Math.min(idx, next.length - 1)].id;
+        setCollapsedIds((cids) => cids.filter((c) => c !== newActive));
+        return newActive;
       });
       return next;
     });
+    // Drop the closed tab from the rail set regardless of whether it was active.
+    setCollapsedIds((prev) => prev.filter((c) => c !== id));
     setWidthsState((prev) => {
       if (!(id in prev)) return prev;
       const rest = { ...prev };
@@ -200,6 +239,30 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     setActiveId(id);
   }, []);
 
+  // Bring a rail back to full size beside the others (additive — the rest stay
+  // as they are) and focus it. This is what makes side-by-side possible again
+  // after the focus-on-open parking.
+  const expandTab = useCallback((id: string) => {
+    setCollapsedIds((prev) => prev.filter((c) => c !== id));
+    setActiveId(id);
+  }, []);
+
+  // Park an expanded pane back into a rail. Guarded so the last expanded pane
+  // can never be parked (the workspace would show nothing at full size), and
+  // parking the active pane hands focus to another expanded one.
+  const collapseTab = useCallback(
+    (id: string) => {
+      if (collapsedIds.includes(id)) return;
+      const expandedRemaining = tabs.filter(
+        (t) => t.id !== id && !collapsedIds.includes(t.id),
+      );
+      if (expandedRemaining.length === 0) return;
+      setCollapsedIds([...collapsedIds, id]);
+      if (activeId === id) setActiveId(expandedRemaining[0].id);
+    },
+    [tabs, collapsedIds, activeId],
+  );
+
   return (
     <TabsWorkspaceContext.Provider
       value={{
@@ -207,10 +270,13 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         activeId,
         widths,
         soloId,
+        collapsedIds,
         hydrated,
         openTab,
         closeTab,
         setActive,
+        expandTab,
+        collapseTab,
         setWidths,
         resetWidths,
         toggleSolo,
