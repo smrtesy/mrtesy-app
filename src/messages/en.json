@@ -175,7 +175,11 @@
     "paneError": "Something went wrong in this tab",
     "paneReload": "Reload",
     "maximizePane": "Full width",
-    "restorePane": "Back to split view (Esc)"
+    "restorePane": "Back to split view (Esc)",
+    "collapsePane": "Collapse to side rail",
+    "expandPaneNamed": "Expand {label}",
+    "emptyTitle": "No open tabs",
+    "emptyHint": "Pick a screen from the menu to open a tab"
   },
   "nav": {
     "account": "Account",
@@ -233,6 +237,7 @@
     "timezone": "Time zone",
     "timezoneSaved": "Time zone saved",
     "timezoneSaveFailed": "Failed to save time zone",
+    "languageSaveFailed": "Failed to change language — please try again",
     "timezoneUseBrowser": "Use browser time zone ({tz})",
     "connectionSaveFailed": "Saving the connection failed — please reconnect"
   },
@@ -419,6 +424,7 @@
     "googleHint": "Use the exact Google account that received this invitation.",
     "alreadyAccepted": "This invitation has already been accepted.",
     "expired": "This invitation has expired. Please ask for a new one.",
+    "notFound": "This invitation link is no longer valid. If you already have an account, sign in directly; otherwise ask for a new invitation.",
     "role_member": "Member",
     "role_admin": "Admin",
     "role_owner": "Owner"
@@ -3373,7 +3379,9 @@
       "titleHe": "Name (Hebrew)",
       "titleEn": "Name (English)",
       "goal": "Goal / description",
+      "goalEn": "Goal / description (English)",
       "group": "Group",
+      "groupEn": "Group (English)",
       "color": "Color",
       "kind": "Kind",
       "start": "Start",
@@ -4325,8 +4333,14 @@
       "cacheWrite": "Cache write",
       "turns": "Turns",
       "duration": "Duration",
-      "costEquivalent": "Equivalent value",
-      "byModel": "By model"
+      "costEquivalent": "Equivalent value (not billed)",
+      "byModel": "By model",
+      "disclaimer": {
+        "separateAccount": "Separate account: these figures are NOT part of the daily/monthly total on “AI Usage & Cost”, which counts only money a provider actually invoices (Anthropic API, Google, Resemble, fal).",
+        "billing": "Runs execute on the Claude subscription and are not billed per token. The cost figure is the engine's equivalent-API estimate, used here as a consumption measure only.",
+        "remaining": "Remaining subscription quota and reset time are not exposed programmatically on a Team plan. See the plan usage screens at claude.ai for those.",
+        "scope": "Covers only runs launched from this console, not other Claude usage."
+      }
     },
     "taskRouter": "Free-text task update",
     "dictation": {

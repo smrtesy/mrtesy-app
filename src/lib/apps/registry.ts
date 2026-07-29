@@ -33,6 +33,8 @@ export interface AppDef {
   /** Second word after "smrt" — used by SmrtName to render the styled label. */
   word: string;
   Icon: ComponentType<{ className?: string }>;
+  /** Path to the app's home/landing screen (relative, without locale). */
+  homeHref: string;
   /** Path to the app's guide page (relative, without locale). */
   guideHref: string;
   /** Path to the app's settings tab inside /settings. */
@@ -51,6 +53,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrttask",
     word: "Task",
     Icon: SmrtTaskIcon,
+    homeHref: "/tasks",
     guideHref: "/tasks/guide",
     settingsHref: "/settings/apps/smrttask",
     color: "#3b82f6",
@@ -59,14 +62,23 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtvoice",
     word: "Voice",
     Icon: SmrtVoiceIcon,
+    homeHref: "/voice",
     guideHref: "/voice/guide",
     settingsHref: "/settings/apps/smrtvoice",
-    color: "#8b5cf6",
+    // Lime, not the violet it used to carry: that violet (hue 258°) sat 12° from
+    // smrtStudio's purple below (hue 271°) — the closest pair in this table — so
+    // the two sections read as the same category in the sidebar. Hue 85° is the
+    // middle of the only wide gap left (smrtReach 38° → smrtCRM 160°), 47° clear
+    // of its nearest neighbour. The 600 shade, not 500: `color` is also the
+    // section-name TEXT color in AppSectionHeader, and lime-500 (#84cc16) is
+    // 1.98:1 on white — below every other app here; this is 3.09:1, mid-range.
+    color: "#65a30d",
   },
   smrtcrm: {
     slug: "smrtcrm",
     word: "CRM",
     Icon: SmrtCRMIcon,
+    homeHref: "/crm",
     guideHref: "/crm/guide",
     settingsHref: "/settings/apps/smrtcrm",
     color: "#10b981",
@@ -75,6 +87,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtreach",
     word: "Reach",
     Icon: SmrtReachIcon,
+    homeHref: "/reach",
     guideHref: "/reach/guide",
     settingsHref: "/settings/apps/smrtreach",
     color: "#f59e0b",
@@ -83,6 +96,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtbot",
     word: "Bot",
     Icon: SmrtBotIcon,
+    homeHref: "/bots",
     guideHref: "/bots/guide",
     settingsHref: "/settings/apps/smrtbot",
     color: "#06b6d4",
@@ -91,6 +105,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtplan",
     word: "Plan",
     Icon: SmrtPlanIcon,
+    homeHref: "/plan",
     guideHref: "/plan/guide",
     settingsHref: "/settings/apps/smrtplan",
     color: "#ec4899",
@@ -99,6 +114,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtvault",
     word: "Vault",
     Icon: SmrtVaultIcon,
+    homeHref: "/vault",
     guideHref: "/vault/guide",
     settingsHref: "/settings/apps/smrtvault",
     color: "#64748b",
@@ -107,6 +123,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtinfo",
     word: "Info",
     Icon: SmrtInfoIcon,
+    homeHref: "/info",
     guideHref: "/info/guide",
     settingsHref: "/settings/apps/smrtinfo",
     color: "#14b8a6",
@@ -115,6 +132,7 @@ export const APPS: Record<string, AppDef> = {
     slug: "smrtstudio",
     word: "Studio",
     Icon: SmrtStudioIcon,
+    homeHref: "/studio",
     guideHref: "/studio",
     settingsHref: "/settings/apps/smrtstudio",
     color: "#a855f7",
@@ -123,6 +141,38 @@ export const APPS: Record<string, AppDef> = {
 
 export function getApp(slug: string): AppDef | undefined {
   return APPS[slug];
+}
+
+/**
+ * Preference order for choosing a member's landing app when smrtTask isn't one
+ * of theirs. Mirrors the sidebar's app order so the app a user "sees first" in
+ * the nav is the one they land on.
+ */
+const LANDING_ORDER: readonly string[] = [
+  "smrttask", "smrtplan", "smrtstudio", "smrtvoice",
+  "smrtcrm", "smrtreach", "smrtbot", "smrtvault", "smrtinfo",
+];
+
+/**
+ * Where to send a user who hits the locale root (`/{locale}`). smrtTask owns the
+ * default (`/tasks`) — its inbox/tasks surface is the platform's daily home — so
+ * anyone who has it, and anyone we can't resolve an app for (logged-out / no
+ * membership, `enabledApps` empty), goes to `/tasks` exactly as before; the
+ * (app) layout then handles auth + onboarding. A member WITHOUT smrtTask (e.g. a
+ * smrtVoice-only employee) has no `/tasks` access, so route them to their first
+ * enabled app's home instead of bouncing them off the smrtTask-gated screen.
+ * Returns a locale-less path (leading slash); callers prepend `/{locale}`.
+ */
+export function getLandingHref(enabledApps: string[]): string {
+  if (enabledApps.length === 0 || enabledApps.includes("smrttask")) return "/tasks";
+  for (const slug of LANDING_ORDER) {
+    if (enabledApps.includes(slug)) return APPS[slug]?.homeHref ?? "/tasks";
+  }
+  // An enabled app not in LANDING_ORDER (shouldn't happen — it lists all
+  // registered slugs) — use the first enabled app that has a registry entry so
+  // we never hand back a home for an app that isn't in APPS.
+  const known = enabledApps.find((slug) => APPS[slug]);
+  return known ? APPS[known].homeHref : "/tasks";
 }
 
 /**

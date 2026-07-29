@@ -47,6 +47,93 @@ const NAV_LABEL_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["/admin", "platformAdmin"],
 ];
 
+import {
+  Archive,
+  BarChart3,
+  Bell,
+  BookOpen,
+  Bot,
+  Calendar,
+  CalendarRange,
+  CheckSquare,
+  Clapperboard,
+  FileText,
+  FlaskConical,
+  FolderOpen,
+  Info,
+  KeyRound,
+  Layers,
+  Lightbulb,
+  MessageCircle,
+  MessageSquare,
+  Mic,
+  Reply,
+  ScrollText,
+  Send,
+  Settings,
+  Shield,
+  UserCircle,
+  Users,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
+
+/**
+ * Locale-stripped path prefix → the same lucide icon the sidebar renders for
+ * that section. Kept alongside NAV_LABEL_KEYS (and matched the same way) so a
+ * pane can show its section's icon on the collapsed rail. Longest-prefix wins,
+ * so a deep route inherits its section's icon. Not every route needs an entry —
+ * a path no prefix owns simply has no icon.
+ */
+const NAV_ICONS: ReadonlyArray<readonly [string, LucideIcon]> = [
+  ["/inbox", Bell],
+  ["/tasks", CheckSquare],
+  ["/suggestions", Lightbulb],
+  ["/daily-report", FileText],
+  ["/day-tools", Wrench],
+  ["/account", UserCircle],
+  ["/whatsapp", MessageCircle],
+  ["/whatsapp/autoreply", Reply],
+  ["/sms", MessageSquare],
+  ["/projects", FolderOpen],
+  ["/knowledge", BookOpen],
+  ["/log", ScrollText],
+  ["/calendar", Calendar],
+  ["/voice", Mic],
+  ["/voice/characters", Users],
+  ["/crm", Users],
+  ["/reach", Send],
+  ["/bots", MessageCircle],
+  ["/plan", CalendarRange],
+  ["/plan/my", CheckSquare],
+  ["/plan/team", Users],
+  ["/plan/repository", Archive],
+  ["/plan/score", BarChart3],
+  ["/vault", KeyRound],
+  ["/info", Info],
+  ["/studio", Clapperboard],
+  ["/studio/models", Layers],
+  ["/studio/research", FlaskConical],
+  ["/claude", Bot],
+  ["/settings", Settings],
+  ["/transcription-experiment", FlaskConical],
+  ["/admin", Shield],
+];
+
+/** The lucide icon for the deepest section that owns `path`, or null. */
+export function navIconFor(path: string): LucideIcon | null {
+  let best: LucideIcon | null = null;
+  let bestLen = 0;
+  for (const [prefix, icon] of NAV_ICONS) {
+    const owns = path === prefix || path.startsWith(`${prefix}/`);
+    if (owns && prefix.length > bestLen) {
+      best = icon;
+      bestLen = prefix.length;
+    }
+  }
+  return best;
+}
+
 /** The "nav" key for the deepest section that owns `path`, or null. */
 export function navLabelKeyFor(path: string): string | null {
   let best: string | null = null;

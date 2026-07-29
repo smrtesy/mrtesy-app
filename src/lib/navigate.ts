@@ -66,3 +66,27 @@ export function requestOpenTab(href: string, label: string): boolean {
     return false;
   }
 }
+
+/**
+ * Ask the top-level workspace to switch the whole app to `locale`, IN PLACE.
+ *
+ * The language toggle lives on the account screen, which renders inside a
+ * workspace pane (an iframe). Navigating the iframe itself would only re-locale
+ * that one pane; setting `window.top.location` FROM the iframe is worse — in an
+ * installed PWA a child-initiated top navigation can pop out into an in-app
+ * browser tab. So we post to the top window and let its TabsWorkspaceProvider
+ * (which runs in the top context) relocalize the persisted tabs and reload the
+ * shell — a first-party top navigation that stays inside the PWA. Returns false
+ * if the post couldn't be sent, so the caller can fall back to a plain
+ * navigation (e.g. account opened full-page on mobile). Same-origin only.
+ */
+export function requestLocaleSwitch(locale: "he" | "en"): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const target = window.top ?? window;
+    target.postMessage({ type: "smrtesy:switch-locale", locale }, window.location.origin);
+    return true;
+  } catch {
+    return false;
+  }
+}

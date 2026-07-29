@@ -22,7 +22,7 @@ export default async function InvitePage({
 }: {
   params: Promise<{ locale: string; token: string }>;
 }) {
-  const { token } = await params;
+  const { locale, token } = await params;
   const t = await getTranslations("invite");
 
   const admin = createAdminSupabaseClient();
@@ -34,7 +34,24 @@ export default async function InvitePage({
     .eq("token", token)
     .maybeSingle<InviteRow>();
 
-  if (!invite) return notFound();
+  // Unknown token — the invite was revoked or replaced by a newer one (each
+  // re-invite mints a fresh token, so an old email link points at a token that
+  // no longer exists). Show a friendly message + a way in, not a raw 404: most
+  // people who hit this already have an account and just need to sign in.
+  if (!invite) {
+    return (
+      <div className="w-full max-w-sm space-y-6 text-center">
+        <h1 className="text-2xl font-bold text-primary">smrtesy</h1>
+        <p className="text-muted-foreground">{t("notFound")}</p>
+        <a
+          href={`/${locale}/login`}
+          className="inline-block text-sm font-medium text-primary hover:underline"
+        >
+          {t("signInWithGoogle")}
+        </a>
+      </div>
+    );
+  }
 
   if (invite.accepted_at) {
     return (

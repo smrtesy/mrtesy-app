@@ -16,6 +16,7 @@ import {
   FlaskConical,
   Clapperboard,
   Layers,
+  Mic,
   PanelRightClose,
   PanelRightOpen,
   Users,
@@ -96,6 +97,15 @@ const smrtStudioItems = [
   { key: "studioResearch", href: "/studio/research", icon: FlaskConical },
 ] as const;
 
+// The two top-level smrtVoice screens. The app's other screens (voice library,
+// insights, a project's scripts) are reached from VoiceNav inside the app, and
+// guide/settings from the section header — so only these two need a nav row.
+// Both are registered component panes (src/lib/panes/registry.tsx:283-284).
+const smrtVoiceItems = [
+  { key: "voiceProjects",   href: "/voice",            icon: Mic   },
+  { key: "voiceCharacters", href: "/voice/characters", icon: Users },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 // Every nav href across all apps + the management group. Used by isActive() to
@@ -111,6 +121,7 @@ const ALL_NAV_HREFS: readonly string[] = [
   ...smrtVaultItems,
   ...smrtInfoItems,
   ...smrtStudioItems,
+  ...smrtVoiceItems,
 ]
   .map((i): string => i.href)
   .concat(["/inbox", "/settings", "/transcription-experiment", "/admin"]);
@@ -131,6 +142,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtVault = enabledApps.includes("smrtvault");
   const hasSmrtInfo = enabledApps.includes("smrtinfo");
   const hasSmrtStudio = enabledApps.includes("smrtstudio");
+  const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -153,8 +165,9 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
   // Mobile bottom-tab primary items.
   // Spec: keep תיבה (inbox), משימות (tasks), WhatsApp, הגדרות (settings), and
-  // "עוד" (more). smrtVoice was removed from the sidebar (folding into Studio),
-  // so there's no longer a voice-specific bottom-tab layout.
+  // "עוד" (more). smrtVoice is back in the sidebar but deliberately NOT given a
+  // bottom-tab slot of its own: this bar is a fixed set of five, so the voice
+  // screens are reached from the "עוד" sheet, which lists every enabled app.
   const activeMobileItems: MobileNavItem[] =
     isLiteTask
       ? [
@@ -307,10 +320,12 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   // its complete item set, then a management group. Each section gets the app
   // title above and a divider line between sections (when there's more than one).
   const moreSections: Array<{ app?: AppDef; titleKey?: string; items: MobileNavItem[] }> = [];
-  // Same order as the desktop nav: smrtTask → smrtPlan → smrtStudio → the rest.
+  // Same order as the desktop nav: smrtTask → smrtPlan → smrtStudio → smrtVoice
+  // → the rest.
   if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...visibleSmrtTaskItems] });
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtStudio) moreSections.push({ app: APPS.smrtstudio, items: [...smrtStudioItems] });
+  if (hasSmrtVoice) moreSections.push({ app: APPS.smrtvoice, items: [...smrtVoiceItems] });
   if (hasSmrtCrm) moreSections.push({ app: APPS.smrtcrm, items: [...smrtCrmItems] });
   if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
@@ -358,7 +373,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             }}
             className="text-xl font-bold text-primary"
           >
-            <BrandWordmark />
+            <BrandWordmark
+              taglineStyle={{
+                fontSize: "0.54em",
+                letterSpacing: "0.05em",
+                paddingInlineEnd: "1.2em",
+                marginTop: "0.12em",
+              }}
+            />
           </Link>
           <div className="flex items-center gap-1">
             <UserAvatarLink />
@@ -376,83 +398,84 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
         <nav className="flex-1 overflow-y-auto p-3">
           {hasSmrtTask && (
-            <>
-              <AppSectionHeader app={APPS.smrttask} />
+            <AppNavGroup app={APPS.smrttask}>
               {visibleSmrtTaskItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtPlan && (
-            <>
-              <AppSectionHeader app={APPS.smrtplan} />
+            <AppNavGroup app={APPS.smrtplan}>
               {smrtPlanItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtStudio && (
-            <>
-              <AppSectionHeader app={APPS.smrtstudio} />
+            <AppNavGroup app={APPS.smrtstudio}>
               {smrtStudioItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
+          )}
+
+          {hasSmrtVoice && (
+            <AppNavGroup app={APPS.smrtvoice}>
+              {smrtVoiceItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </AppNavGroup>
           )}
 
           {hasSmrtCrm && (
-            <>
-              <AppSectionHeader app={APPS.smrtcrm} />
+            <AppNavGroup app={APPS.smrtcrm}>
               {smrtCrmItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtReach && (
-            <>
-              <AppSectionHeader app={APPS.smrtreach} />
+            <AppNavGroup app={APPS.smrtreach}>
               {smrtReachItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtBot && (
-            <>
-              <AppSectionHeader app={APPS.smrtbot} />
+            <AppNavGroup app={APPS.smrtbot}>
               {smrtBotItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtVault && (
-            <>
-              <AppSectionHeader app={APPS.smrtvault} />
+            <AppNavGroup app={APPS.smrtvault}>
               {smrtVaultItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtInfo && (
-            <>
-              <AppSectionHeader app={APPS.smrtinfo} />
+            <AppNavGroup app={APPS.smrtinfo}>
               {smrtInfoItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
@@ -659,6 +682,21 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
         }}
       />
     </>
+  );
+}
+
+/** Wraps one app's section (header + its nav items) with a continuous thin
+ *  accent rail down the inline-start edge, tinted with the app's color. The
+ *  rail runs the full height of the group so every item reads as part of the
+ *  category; the inter-section gap is a `mt-4` margin OUTSIDE the rail so
+ *  adjacent categories stay visually separate. `first:mt-0` drops the gap on
+ *  whichever group renders first. */
+function AppNavGroup({ app, children }: { app: AppDef; children: React.ReactNode }) {
+  return (
+    <div className="mt-4 border-s-2 ps-1 first:mt-0" style={{ borderColor: app.color }}>
+      <AppSectionHeader app={app} className="!pt-1" />
+      {children}
+    </div>
   );
 }
 

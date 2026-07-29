@@ -175,7 +175,11 @@
     "paneError": "משהו השתבש בטאב הזה",
     "paneReload": "טען מחדש",
     "maximizePane": "רוחב מלא",
-    "restorePane": "חזרה לתצוגה מפוצלת (Esc)"
+    "restorePane": "חזרה לתצוגה מפוצלת (Esc)",
+    "collapsePane": "צמצם לרצועה בצד",
+    "expandPaneNamed": "פתח את {label}",
+    "emptyTitle": "אין טאבים פתוחים",
+    "emptyHint": "בחר מסך מהתפריט כדי לפתוח טאב"
   },
   "nav": {
     "account": "ניהול חשבון",
@@ -233,6 +237,7 @@
     "timezone": "אזור זמן",
     "timezoneSaved": "אזור הזמן נשמר",
     "timezoneSaveFailed": "שמירת אזור הזמן נכשלה",
+    "languageSaveFailed": "שינוי השפה נכשל — נסה שוב",
     "timezoneUseBrowser": "השתמש באזור הזמן של הדפדפן ({tz})",
     "connectionSaveFailed": "שמירת החיבור נכשלה — נסה להתחבר שוב"
   },
@@ -419,6 +424,7 @@
     "googleHint": "השתמש בחשבון Google המדויק שקיבל את ההזמנה.",
     "alreadyAccepted": "הזמנה זו כבר אושרה.",
     "expired": "ההזמנה פגה תוקף. בקש הזמנה חדשה.",
+    "notFound": "הקישור להזמנה אינו תקף יותר. אם כבר יש לך חשבון — היכנס/י ישירות; אחרת בקש/י הזמנה חדשה.",
     "role_member": "משתמש",
     "role_admin": "מנהל",
     "role_owner": "בעלים"
@@ -3372,7 +3378,9 @@
       "titleHe": "שם (עברית)",
       "titleEn": "שם (אנגלית)",
       "goal": "מטרה / תיאור",
+      "goalEn": "מטרה / תיאור (אנגלית)",
       "group": "קבוצה",
+      "groupEn": "קבוצה (אנגלית)",
       "color": "צבע",
       "kind": "סוג",
       "start": "התחלה",
@@ -4324,8 +4332,14 @@
       "cacheWrite": "כתיבה ל-cache",
       "turns": "תורים",
       "duration": "משך",
-      "costEquivalent": "שווי-ערך",
-      "byModel": "לפי מודל"
+      "costEquivalent": "שווי-ערך (לא חיוב)",
+      "byModel": "לפי מודל",
+      "disclaimer": {
+        "separateAccount": "חשבון נפרד: המספרים כאן לא נכללים בסך החיוב היומי/החודשי במסך «AI Usage & Cost» — שם מופיע רק כסף שספק באמת מחייב עליו (Anthropic API, Google, Resemble, fal).",
+        "billing": "ההרצות רצות על מנוי Claude ולא מחויבות לפי טוקנים. הסכום הוא הערכת המנוע לשווי-ערך ב-API, ומשמש כאן כמדד צריכה בלבד — לא סכום לתשלום.",
+        "remaining": "יתרת המכסה של המנוי ושעת האיפוס לא נחשפות דרך API בתוכנית Team. לזה יש את מסכי השימוש ב-claude.ai.",
+        "scope": "כולל רק הרצות שהופעלו מהקונסולה הזו, לא שימוש אחר ב-Claude."
+      }
     },
     "taskRouter": "עדכון חופשי (משימות)",
     "dictation": {

@@ -52,6 +52,8 @@ const ICON: Record<string, string> = {
     '<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M6 8.2v7.6M8.1 6.6h4.4A4 4 0 0 1 16 10.4M8.1 17.4h4.4A4 4 0 0 0 16 13.6"/>',
   market:
     '<path d="M4 10v4a1 1 0 0 0 1 1h3l5 4V5L8 9H5a1 1 0 0 0-1 1z"/><path d="M18 8.5a4 4 0 0 1 0 7"/>',
+  megaphone:
+    '<path d="m3 11 18-5v12L3 13"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/><path d="M18 8a3 3 0 0 1 0 6"/>',
   cdone: '<circle cx="12" cy="12" r="9"/><path d="M8.4 12.4l2.4 2.4 4.8-5.2"/>',
   cnow: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/>',
   ctodo: '<circle cx="12" cy="12" r="9"/>',
@@ -68,6 +70,15 @@ const ICON: Record<string, string> = {
   img: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="10" r="1.8"/><path d="M21 16l-5-4.5L7 20"/>',
   aud: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/>',
   tool: '<path d="M14.5 5.5a3.5 3.5 0 0 0-4.9 4.4L3 16.5 5.5 19l6.6-6.6a3.5 3.5 0 0 0 4.4-4.9l-2.2 2.2-2-2z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/>',
+  users:
+    '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3.2 2.5-5.3 5.5-5.3s5.5 2.1 5.5 5.3"/><path d="M16 5.1a3.2 3.2 0 0 1 0 6M17.5 20c0-2.7-1.2-4.6-3-5.1"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>',
+  rocket:
+    '<path d="M12 15l-3-3c1-5 4-8 9-9-1 5-4 8-9 9z"/><path d="M9 12H5s.5-2.8 2-3.8c1.3-.9 3.5 0 3.5 0"/><path d="M12 15v4s2.8-.5 3.8-2c.9-1.3 0-3.5 0-3.5"/><path d="M5 16c-1 .8-1.3 3.3-1.3 3.3s2.5-.3 3.3-1.3"/>',
+  flask: '<path d="M9 3h6M10 3v6l-5.2 9A2 2 0 0 0 6.6 21h10.8a2 2 0 0 0 1.8-3L14 9V3"/><path d="M7 15h10"/>',
+  coin:
+    '<circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M14.6 9.3c-.6-.8-1.6-1.3-2.6-1.3-1.5 0-2.6 1-2.6 2.1s1.1 1.8 2.6 2.1 2.6 1 2.6 2.1-1.1 2.1-2.6 2.1c-1 0-2-.5-2.6-1.3"/>',
 };
 
 const ST_META: Record<StudioStatus, { ic: string; tag: string }> = {
@@ -165,9 +176,10 @@ const CSS = `
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,sans-serif;
   --sat:42%; --lit:44%;
-  max-width:1320px;margin-inline:auto;padding:22px clamp(14px,3vw,30px) 48px;direction:ltr;
+  width:100%;min-height:100vh;padding:22px 0 48px;direction:ltr;
   background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;
 }
+.ss-inner{max-width:1320px;margin-inline:auto;padding-inline:clamp(14px,3vw,30px)}
 .ss-app *{box-sizing:border-box}
 
 /* dark tokens — OS preference, the app's .dark class, and an explicit override */
@@ -204,26 +216,29 @@ const CSS = `
 .ss-title{font-size:20px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .ss-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
 .ss-top-right{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.ss-overallchip{display:flex;align-items:center;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 8px 7px 15px;box-shadow:var(--shadow)}
-.ss-overallchip .lab{font-size:11px;color:var(--muted);font-weight:600}
-.ss-ring{--p:0;width:34px;height:34px;border-radius:50%;flex:none;background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-2) 0);display:grid;place-items:center}
-.ss-ring span{width:24px;height:24px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:9.5px;font-weight:800;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.ss-overallchip{display:flex;align-items:center;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:8px 10px 8px 18px;box-shadow:var(--shadow)}
+.ss-overallchip .lab{font-size:13px;color:var(--muted);font-weight:600}
+.ss-ring{--p:0;width:41px;height:41px;border-radius:50%;flex:none;background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-2) 0);display:grid;place-items:center}
+.ss-ring span{width:29px;height:29px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:11.5px;font-weight:800;font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-.ss-shell{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:36px;align-items:start;direction:ltr}
+.ss-shell{display:grid;grid-template-columns:minmax(300px,336px) minmax(0,1fr);gap:48px;align-items:start;direction:ltr}
 .ss-nav{display:flex;flex-direction:column;gap:8px;position:sticky;top:14px}
 .ss-nav-head{display:flex;align-items:baseline;justify-content:space-between;padding:2px 4px 4px}
 .ss-nav-head b{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .ss-nav-head .cnt{font-size:11px;color:var(--muted);font-family:var(--mono)}
 
-.ss-tab{--h:200;position:relative;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
-.ss-tab:hover{border-color:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 55%,var(--line-strong))}
+.ss-stage{position:relative;padding-left:56px}
+.ss-stage.active{z-index:5}
+.ss-gnum{position:absolute;left:0;top:50%;transform:translateY(-50%);width:64px;text-align:right;font-family:var(--mono);font-weight:800;font-variant-numeric:tabular-nums;font-size:54px;line-height:1;letter-spacing:-.04em;color:hsl(var(--h) var(--sat) var(--lit));opacity:.18;z-index:0;user-select:none;pointer-events:none;white-space:nowrap}
+.ss-stage.active .ss-gnum{opacity:.26}
+.ss-tab{position:relative;z-index:1;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
+.ss-tab:hover{border-color:hsl(var(--h) var(--sat) var(--lit))}
 .ss-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .ss-tab .ic{width:34px;height:34px;border-radius:9px;flex:none;display:grid;place-items:center;color:hsl(var(--h) var(--sat) var(--lit));background:hsl(var(--h) var(--sat) var(--lit)/.13)}
 .ss-tab .ic svg{width:19px;height:19px}
 .ss-tab .body{min-width:0}
-.ss-tab .row1{display:flex;align-items:center;gap:7px}
-.ss-tab .idx{font-size:10px;font-weight:800;font-family:var(--mono);color:var(--muted)}
-.ss-tab .nm{font-size:13.5px;font-weight:650;letter-spacing:-.01em}
+.ss-tab .row1{display:flex;align-items:center;gap:7px;min-width:0}
+.ss-tab .nm{font-size:15.5px;font-weight:650;letter-spacing:-.01em;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ss-tab .prog-txt{font-size:10.5px;color:var(--muted);font-family:var(--mono);font-variant-numeric:tabular-nums;margin:5px 0 4px}
 .ss-tab .bar{display:none;height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden}
 .ss-tab .bar i{display:block;height:100%;border-radius:999px;width:0;transition:width .5s cubic-bezier(.4,0,.2,1)}
@@ -233,12 +248,12 @@ const CSS = `
 
 .ss-tab.active{border-color:hsl(var(--h) var(--sat) var(--lit));padding:20px 17px 22px;box-shadow:var(--shadow-lift),inset 0 0 0 1.5px hsl(var(--h) var(--sat) var(--lit));transform:scale(1.06);z-index:3}
 .ss-tab.active .ic{color:#fff;background:hsl(var(--h) var(--sat) var(--lit))}
-.ss-tab.active .nm{font-size:15px;font-weight:750}
+.ss-tab.active .nm{font-size:17px;font-weight:750}
 .ss-tab.active .prog-txt{font-size:12px;color:var(--ink-2);font-weight:650}
 .ss-tab.active .bar{display:block;height:8px;margin-top:10px;box-shadow:inset 0 0 0 1px color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 16%,transparent)}
 .ss-tab.active .bar i{background:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 66%,var(--muted))}
 
-.ss-content{min-height:60vh}
+.ss-content{min-height:60vh;border-inline-start:1px solid var(--line);padding-inline-start:24px}
 .ss-panel-head{margin-bottom:14px}
 .ss-panel-head .kick{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:hsl(var(--h) var(--sat) var(--lit));margin-bottom:5px}
 .ss-panel-head h2{margin:0;font-size:22px;font-weight:750;letter-spacing:-.02em;text-wrap:balance;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -338,9 +353,12 @@ const CSS = `
 
 @media (max-width:560px){
   .ss-shell{grid-template-columns:1fr}
+  .ss-content{border-inline-start:none;padding-inline-start:0}
   .ss-nav{position:static;flex-direction:row;overflow-x:auto;padding-bottom:6px;gap:10px}
   .ss-nav-head{display:none}
-  .ss-tab{width:180px;flex:none;grid-template-columns:30px 1fr}
+  .ss-gnum{display:none}
+  .ss-stage{padding-left:0;width:180px;flex:none}
+  .ss-tab{width:100%;grid-template-columns:30px 1fr}
   .ss-tab.active{transform:none}
 }
 @media (prefers-reduced-motion:reduce){.ss-app *{transition:none!important}}
@@ -637,86 +655,103 @@ function FocusView({
 }
 
 function Dashboard({ overview }: { overview: StudioOverview }) {
-  const s = computeStats(overview);
-  const cards: { ic: string; cc: string; fig: ReactNode; lab: string; sub: string }[] = [
+  // Headline numbers for the Smart Studio dashboard, per the approved spec
+  // (docs/smart-studio-dashboard-stats.md): one flat grid, two conceptual
+  // groups — what we've invested/built so far, then the plan for the year
+  // ahead. "X / Y" wherever there is a real denominator.
+  //
+  // Data sources: "Models scanned" is LIVE (overview.models_total — the fal
+  // catalog row count). "Research completed" (23) and "Methods built" (30) are
+  // the counts verified against video-lab's research-index.md, kept as
+  // constants until the overview endpoint exposes them. The seven project
+  // figures (hours, team, months, programs, cost, audiences) are hand-set and
+  // have no live source yet — edit them here.
+  const cards: { ic: string; cc: string; fig: ReactNode; lab: string; sub?: string }[] = [
     {
-      ic: "shield",
-      cc: "var(--ok)",
-      fig: (
-        <>
-          {s.complete}
-          <small> / {s.stageCount}</small>
-        </>
-      ),
-      lab: "Stages complete",
-      sub: "Fully settled and locked",
-    },
-    {
-      ic: "trend",
+      ic: "clock",
       cc: "var(--accent)",
       fig: (
         <>
-          {s.overallPct}
-          <small>%</small>
+          {(1360).toLocaleString("en-US")}
+          <small> / {(3400).toLocaleString("en-US")}</small>
         </>
       ),
-      lab: "Overall progress",
-      sub: "Across every build stage",
+      lab: "Hours logged",
+      sub: "Of the full-project estimate",
     },
     {
-      ic: "checklist",
+      ic: "users",
       cc: "#3a63c9",
       fig: (
         <>
-          {s.sumDone}
-          <small> / {s.sumTotal}</small>
+          3<small> / 7</small>
         </>
       ),
-      lab: "Sub-tasks done",
-      sub: "Across all stages",
+      lab: "Team hired",
     },
     {
-      ic: "check",
-      cc: "var(--ok)",
-      fig: (
-        <>
-          {s.chalSolved}
-          <small> / {s.chalTotal}</small>
-        </>
-      ),
-      lab: "Challenges solved",
-      sub: "Mapped problems with an answer",
-    },
-    {
-      ic: "play",
+      ic: "calendar",
       cc: "hsl(44 var(--sat) var(--lit))",
-      fig: s.active,
-      lab: "Active stage",
-      sub: "Where the work is now",
+      fig: 3,
+      lab: "Months in",
+      sub: "Invested so far",
+    },
+    {
+      ic: "rocket",
+      cc: "var(--warn)",
+      fig: "~4",
+      lab: "Months to launch",
+      sub: "Est. until production starts",
     },
     {
       ic: "db",
       cc: "#7a52c9",
       fig: overview.models_total.toLocaleString("en-US"),
-      lab: "Models researched",
-      sub: "AI endpoints indexed",
+      lab: "Models scanned",
+    },
+    {
+      ic: "flask",
+      cc: "var(--ok)",
+      fig: 23,
+      lab: "Research completed",
+      sub: "Across all pipeline stages",
     },
     {
       ic: "tool",
+      cc: "#3a63c9",
+      fig: 30,
+      lab: "Methods built",
+      sub: "How to drive each model",
+    },
+    {
+      ic: "megaphone",
+      cc: "#7a52c9",
+      fig: 3,
+      lab: "New audiences",
+    },
+    {
+      ic: "coin",
       cc: "var(--warn)",
-      fig: String(s.toolsCount),
-      lab: "Tools in build",
-      sub: s.toolsSub,
+      fig: "$2,000",
+      lab: "Cost per program",
+      sub: "End-to-end, incl. marketing",
+    },
+    {
+      ic: "motion",
+      cc: "var(--accent)",
+      fig: 100,
+      lab: "New programs",
+      sub: "Planned in the coming year",
     },
   ];
   return (
     <>
       <div className="ss-panel-head">
         <div className="kick">Dashboard</div>
-        <h2>Pipeline build at a glance</h2>
+        <h2>Smart Studio at a glance</h2>
         <p>
-          How far along we are in planning and building the production pipeline. Pick a stage on the
-          left to open its tasks, challenges and outputs.
+          What we&rsquo;ve invested and built so far, and the plan for the year ahead. Pick a stage
+          on the left to open its tasks, challenges and outputs.
         </p>
       </div>
       <div className="ss-stats">
@@ -727,7 +762,7 @@ function Dashboard({ overview }: { overview: StudioOverview }) {
             </div>
             <div className="fig">{c.fig}</div>
             <div className="lab">{c.lab}</div>
-            <div className="sub">{c.sub}</div>
+            {c.sub && <div className="sub">{c.sub}</div>}
           </div>
         ))}
       </div>
@@ -841,6 +876,7 @@ export function StudioConsole() {
     <div className="ss-app" dir="ltr">
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
+      <div className="ss-inner">
       <div className="ss-top">
         <div className="ss-brand">
           <div>
@@ -867,33 +903,39 @@ export function StudioConsole() {
           {stages.map((st, i) => {
             const isActive = st.slug === selected;
             return (
-              <button
+              <div
                 key={st.slug}
-                type="button"
-                className={`ss-tab${isActive ? " active" : ""}`}
+                className={`ss-stage${isActive ? " active" : ""}`}
                 style={vars({ "--h": st.hue })}
-                data-complete={st.pct === 100 ? "1" : "0"}
-                onClick={() => setSelected(st.slug)}
               >
-                <span className="flag">
-                  <Svg paths={ICON.cdone} />
+                <span className="ss-gnum" aria-hidden="true">
+                  {String(i + 1).padStart(2, "0")}
                 </span>
-                <span className="ic">
-                  <Svg paths={ICON[st.slug] ?? ICON.sets} />
-                </span>
-                <span className="body">
-                  <span className="row1">
-                    <span className="idx">{String(i + 1).padStart(2, "0")}</span>
-                    <span className="nm">{st.name}</span>
+                <button
+                  type="button"
+                  className={`ss-tab${isActive ? " active" : ""}`}
+                  data-complete={st.pct === 100 ? "1" : "0"}
+                  onClick={() => setSelected(st.slug)}
+                >
+                  <span className="flag">
+                    <Svg paths={ICON.cdone} />
                   </span>
-                  <span className="prog-txt">
-                    {st.done} of {st.total} done · {st.pct}%
+                  <span className="ic">
+                    <Svg paths={ICON[st.slug] ?? ICON.sets} />
                   </span>
-                  <span className="bar">
-                    <i style={isActive ? { width: `${st.pct}%` } : undefined} />
+                  <span className="body">
+                    <span className="row1">
+                      <span className="nm">{st.name}</span>
+                    </span>
+                    <span className="prog-txt">
+                      {st.done}/{st.total} · {st.pct}%
+                    </span>
+                    <span className="bar">
+                      <i style={isActive ? { width: `${st.pct}%` } : undefined} />
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+              </div>
             );
           })}
         </nav>
@@ -912,6 +954,7 @@ export function StudioConsole() {
             <Dashboard overview={overview} />
           )}
         </main>
+      </div>
       </div>
     </div>
   );
