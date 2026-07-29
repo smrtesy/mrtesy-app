@@ -308,12 +308,12 @@ function requireFull(req: Request, res: Response, next: NextFunction) {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const PLAN_FIELDS =
-  "id, org_id, parent_id, project_id, title_he, title_en, goal, kind, group_label, " +
+  "id, org_id, parent_id, project_id, title_he, title_en, goal, goal_en, kind, group_label, group_label_en, " +
   "start_date, end_date, stage, status, is_capability, is_available, progress, progress_manual, is_critical, color, " +
   "is_private, owner_user_id, manager_user_id, cost_approval_threshold_usd, created_by, created_at, updated_at";
 
 const PLAN_WRITABLE = new Set([
-  "parent_id", "project_id", "title_he", "title_en", "goal", "kind", "group_label",
+  "parent_id", "project_id", "title_he", "title_en", "goal", "goal_en", "kind", "group_label", "group_label_en",
   "start_date", "end_date", "stage", "status", "is_capability", "is_available",
   "progress_manual", "color", "is_private", "owner_user_id", "manager_user_id",
   "cost_approval_threshold_usd",
