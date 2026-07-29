@@ -176,6 +176,8 @@
     "paneReload": "טען מחדש",
     "maximizePane": "רוחב מלא",
     "restorePane": "חזרה לתצוגה מפוצלת (Esc)",
+    "collapsePane": "צמצם לרצועה בצד",
+    "expandPaneNamed": "פתח את {label}",
     "emptyTitle": "אין טאבים פתוחים",
     "emptyHint": "בחר מסך מהתפריט כדי לפתוח טאב"
   },

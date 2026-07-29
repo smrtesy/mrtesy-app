@@ -215,7 +215,11 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
     const taskId = task.id;
     descTimerRef.current = setTimeout(async () => {
       try {
-        const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${taskId}`, { method: "PATCH", body: { description } });
+        const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${taskId}`, {
+          method: "PATCH",
+          // Write to the slot matching the display language (mirrors title edit above).
+          body: locale === "en" ? { description } : { description_he: description },
+        });
         dirtyRef.current = true;
         if (fresh) setLiveTask(fresh);
         setSavedFlash(true);
@@ -235,6 +239,9 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
   const effectiveTask: Task = liveTask && liveTask.id === task.id ? liveTask : task;
 
   const title = locale === "he" && effectiveTask.title_he ? effectiveTask.title_he : effectiveTask.title;
+  // Description follows the display language: `description` is the English/
+  // default slot, `description_he` the Hebrew one (mirrors title/title_he).
+  const displayDescription = locale === "en" ? effectiveTask.description : effectiveTask.description_he || effectiveTask.description;
   const updates = (effectiveTask.updates || []).slice(-20).reverse();
   const generated = effectiveTask.ai_generated_content || [];
   const docs = effectiveTask.linked_drive_docs || [];
@@ -373,7 +380,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
         try {
           const { task: fresh } = await api<{ task: Task }>(`/api/tasks/${refreshId}`);
           if (fresh) {
-            setLiveTask((prev) => (prev && prev.id === refreshId ? { ...prev, title: fresh.title, title_he: fresh.title_he, description: fresh.description } : prev));
+            setLiveTask((prev) => (prev && prev.id === refreshId ? { ...prev, title: fresh.title, title_he: fresh.title_he, description: fresh.description, description_he: fresh.description_he } : prev));
             dirtyRef.current = true;
           }
         } catch { /* best-effort */ }
@@ -520,12 +527,12 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                       className="whitespace-pre-wrap text-sm cursor-text"
                       dir={dir}
                       onClick={() => {
-                        setDescription(effectiveTask.description || "");
+                        setDescription(displayDescription || "");
                         setEditingDesc(true);
                       }}
                     >
-                      {effectiveTask.description ? (
-                        <LinkifiedText>{effectiveTask.description}</LinkifiedText>
+                      {displayDescription ? (
+                        <LinkifiedText>{displayDescription}</LinkifiedText>
                       ) : (
                         <span className="text-muted-foreground italic">{t("detail.editDescription")}</span>
                       )}
@@ -817,7 +824,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
             <SaveAsInfoButton
               defaultProjectId={effectiveTask.project_id}
               defaultTitle={title}
-              defaultBody={effectiveTask.description}
+              defaultBody={displayDescription}
             />
             <AssigneeButton
               assignedTo={editAssignedTo || null}

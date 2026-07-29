@@ -176,6 +176,8 @@
     "paneReload": "Reload",
     "maximizePane": "Full width",
     "restorePane": "Back to split view (Esc)",
+    "collapsePane": "Collapse to side rail",
+    "expandPaneNamed": "Expand {label}",
     "emptyTitle": "No open tabs",
     "emptyHint": "Pick a screen from the menu to open a tab"
   },
