@@ -13,7 +13,19 @@ import { cn } from "@/lib/utils";
  * is inherited from the parent (matching the previous plain-text wordmark);
  * the tagline sets its own orange.
  */
-export function BrandWordmark({ className }: { className?: string }) {
+export function BrandWordmark({
+  className,
+  taglineStyle,
+}: {
+  className?: string;
+  /**
+   * Optional per-instance overrides for the "by Maor" line. Used by the
+   * sidebar to enlarge the tagline; when the font-size changes, the tracking
+   * and end-padding (both in tagline `em`) are re-tuned here too so the line
+   * still starts after "m" and ends beside "y".
+   */
+  taglineStyle?: React.CSSProperties;
+}) {
   return (
     <span
       dir="ltr"
@@ -32,6 +44,7 @@ export function BrandWordmark({ className }: { className?: string }) {
           paddingInlineEnd: "2em",
           marginTop: "0.14em",
           whiteSpace: "nowrap",
+          ...taglineStyle,
         }}
       >
         by Maor

@@ -358,7 +358,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             }}
             className="text-xl font-bold text-primary"
           >
-            <BrandWordmark />
+            <BrandWordmark
+              taglineStyle={{
+                fontSize: "0.54em",
+                letterSpacing: "0.05em",
+                paddingInlineEnd: "1.2em",
+                marginTop: "0.12em",
+              }}
+            />
           </Link>
           <div className="flex items-center gap-1">
             <UserAvatarLink />
