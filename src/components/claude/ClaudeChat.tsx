@@ -41,8 +41,10 @@ import { PlaybookList } from "./PlaybookList";
 import { RepoPicker } from "./RepoPicker";
 import { StandingInstructions } from "./StandingInstructions";
 import { SplitReview, type ProposedTopic } from "./SplitReview";
+import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
+import { ProjectPanel } from "./ProjectPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { Scissors, FolderTree, ExternalLink } from "lucide-react";
+import { Scissors, FolderTree, ExternalLink, ListTree } from "lucide-react";
 
 /**
  * Models, with the id visible — not just a friendly name.
@@ -117,6 +119,11 @@ interface ChildThread {
   title: string;
 }
 
+interface DecomposeProposal {
+  id: string;
+  parts: ProposedPart[];
+}
+
 export function ClaudeChat() {
   const t = useTranslations("claudeChat");
   const locale = useLocale();
@@ -141,8 +148,15 @@ export function ClaudeChat() {
    *  review dialog / a manual analysis is in flight. */
   const [splitProposal, setSplitProposal] = useState<SplitProposal | null>(null);
   const [children, setChildren] = useState<ChildThread[]>([]);
+  const [parent, setParent] = useState<ChildThread | null>(null);
   const [splitOpen, setSplitOpen] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  /** The project panel (decompose / parts / board), and a decompose proposal awaiting
+   *  review. Board attach is armed here and read by `send` for exactly one turn. */
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [decomposeProposal, setDecomposeProposal] = useState<DecomposeProposal | null>(null);
+  const [decomposeOpen, setDecomposeOpen] = useState(false);
+  const [attachBoard, setAttachBoard] = useState(false);
   /** Topics for the grouped rail. Off by default (flat list); the folder icon
    *  toggles it, so grouping is opt-in chrome, not permanent. */
   const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
@@ -194,6 +208,7 @@ export function ClaudeChat() {
         turns: Turn[];
         split_proposal: SplitProposal | null;
         children: ChildThread[];
+        parent: ChildThread | null;
       }>(`/api/claude/threads/${id}`);
       // Ignored when the user has already switched away: a slow response for the
       // previous thread must not paint over the one now on screen.
@@ -202,6 +217,7 @@ export function ClaudeChat() {
       setTurns(r.turns ?? []);
       setSplitProposal(r.split_proposal ?? null);
       setChildren(r.children ?? []);
+      setParent(r.parent ?? null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
     }
@@ -264,6 +280,13 @@ export function ClaudeChat() {
     setSplitProposal(null);
     setSplitOpen(false);
     setChildren([]);
+    setParent(null);
+    // A board armed on one chat must not leak onto another; the panel and any open
+    // decompose review belong to the chat that opened them.
+    setAttachBoard(false);
+    setProjectOpen(false);
+    setDecomposeOpen(false);
+    setDecomposeProposal(null);
     if (activeId) void loadThread(activeId);
     else {
       setThread(null);
@@ -332,10 +355,12 @@ export function ClaudeChat() {
         attachments: [],
       };
       setTurns((prev) => [...prev, optimistic]);
+      // Read the board into THIS turn only if the user armed it in the project panel.
+      const includeBoard = attachBoard;
       try {
         await api(`/api/claude/threads/${id}/messages`, {
           method: "POST",
-          body: { message, attachment_ids: attachmentIds },
+          body: { message, attachment_ids: attachmentIds, include_board: includeBoard },
         });
       } catch (e) {
         setTurns((prev) => prev.filter((x) => x.id !== optimistic.id));
@@ -344,6 +369,9 @@ export function ClaudeChat() {
         // Rethrown so the composer puts the text and the attachment chips back.
         throw e;
       }
+      // On-demand means once: disarm after a successful send so the next message is
+      // clean unless the user arms it again.
+      if (includeBoard) setAttachBoard(false);
       setSending(false);
       // Outside the try on purpose: the turn IS running by now. A blip on this
       // refresh used to remove the optimistic bubble and show a send error, leaving
@@ -354,7 +382,7 @@ export function ClaudeChat() {
         // The poll picks it up.
       }
     },
-    [ensureThread, turns.length, loadThread],
+    [ensureThread, turns.length, loadThread, attachBoard],
   );
 
   const liveTurn = turns.find((x) => (LIVE as readonly string[]).includes(x.status));
@@ -441,6 +469,21 @@ export function ClaudeChat() {
     if (activeId) void loadThread(activeId);
     void loadThreads();
     if (created.length > 0) toast.success(t("split.created", { count: created.length }));
+  }
+
+  /** The project panel proposed a decomposition — swap the panel for the review. */
+  function onDecomposeProposed(analysis: DecomposeProposal) {
+    setProjectOpen(false);
+    setDecomposeProposal(analysis);
+    setDecomposeOpen(true);
+  }
+
+  function onDecomposeDone(created: ChildThread[]) {
+    setDecomposeOpen(false);
+    setDecomposeProposal(null);
+    if (activeId) void loadThread(activeId);
+    void loadThreads();
+    if (created.length > 0) toast.success(t("decompose.created", { count: created.length }));
   }
 
   const title = thread?.title?.trim() || t("untitled");
@@ -587,6 +630,24 @@ export function ClaudeChat() {
               {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Scissors className="size-4" />}
             </Button>
           )}
+          {/* Project — decompose into parts, jump between parts, the shared board.
+              Shown once a thread exists; a dot marks a chat that already has parts or
+              a parent (i.e. is part of a project). */}
+          {activeId && (
+            <Button
+              size="sm"
+              variant={projectOpen ? "secondary" : "ghost"}
+              className="relative h-8 w-8 p-0"
+              onClick={() => setProjectOpen((v) => !v)}
+              aria-label={t("project.button")}
+              title={t("project.button")}
+            >
+              <ListTree className="size-4" />
+              {(children.length > 0 || parent) && (
+                <span className="absolute end-1 top-1 size-1.5 rounded-full bg-primary" />
+              )}
+            </Button>
+          )}
           <Button
             size="sm"
             variant={settingsOpen ? "secondary" : "ghost"}
@@ -672,6 +733,24 @@ export function ClaudeChat() {
           onApplied={() => setUpdateOpen(false)}
         />
 
+        {/* On-demand board read, armed in the project panel — a quiet, dismissible
+            line so the user knows the next message will carry the shared board. */}
+        {attachBoard && (
+          <div className="flex items-center gap-2 border-t bg-primary/5 px-3 py-1.5 text-[11px]">
+            <ListTree className="size-3.5 shrink-0 text-primary" />
+            <span className="min-w-0 flex-1" dir="auto">
+              {t("project.boardArmed")}
+            </span>
+            <button
+              type="button"
+              onClick={() => setAttachBoard(false)}
+              className="shrink-0 rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
+            >
+              {t("project.boardDisarm")}
+            </button>
+          </div>
+        )}
+
         <ChatComposer
           threadId={activeId}
           ensureThread={ensureThread}
@@ -696,6 +775,43 @@ export function ClaudeChat() {
           open={splitOpen}
           onClose={() => setSplitOpen(false)}
           onDone={onSplitDone}
+        />
+      )}
+
+      {activeId && projectOpen && (
+        <ProjectPanel
+          threadId={activeId}
+          parent={parent}
+          childThreads={children}
+          open={projectOpen}
+          onClose={() => setProjectOpen(false)}
+          locale={locale}
+          onOpenThread={(id) => {
+            setProjectOpen(false);
+            setActiveId(id);
+          }}
+          onDecomposeProposed={onDecomposeProposed}
+          onChildCreated={() => {
+            if (activeId) void loadThread(activeId);
+            void loadThreads();
+          }}
+          attachBoard={attachBoard}
+          setAttachBoard={setAttachBoard}
+        />
+      )}
+
+      {activeId && decomposeProposal && (
+        <DecomposeReview
+          // Force a fresh mount per proposal: the draft rows are seeded from `parts`
+          // in a useState initializer that runs only on mount, so without this a
+          // second "פרק לחלקים" would keep showing the FIRST proposal's parts.
+          key={decomposeProposal.id}
+          threadId={activeId}
+          analysisId={decomposeProposal.id}
+          parts={decomposeProposal.parts}
+          open={decomposeOpen}
+          onClose={() => setDecomposeOpen(false)}
+          onDone={onDecomposeDone}
         />
       )}
     </div>

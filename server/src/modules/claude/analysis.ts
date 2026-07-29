@@ -407,3 +407,172 @@ export async function runGroupAnalysis(orgId: string, userId: string | null): Pr
 export function shouldAnalyzeSplit(turnCount: number, analyzedTurnCount: number): boolean {
   return turnCount >= 6 && turnCount - analyzedTurnCount >= 4;
 }
+
+// ── decompose (forward): plan → parts, each part a briefed child ────────────────
+
+/** A part the decompose analysis proposes to spin out of a plan chat. */
+export interface DecomposePart {
+  title: string;
+  /** The briefing the new child chat starts with — its scope + what the plan already
+   *  settled that it needs. This becomes the child's seed_context. */
+  scope: string;
+}
+
+/**
+ * Analyse a "general plan" thread and propose how to break it into parts, each of
+ * which becomes its own child chat.
+ *
+ * Unlike runSplitAnalysis this does NOT look at which turns belong where — nothing is
+ * moved. It reads the plan and proposes forward-looking work streams. Runs on the
+ * subscription (runOneShot) — no paid API tokens.
+ *
+ * Returns the stored proposal (kind='decompose'), or null when the plan is too thin
+ * to break up. Supersedes an earlier open decompose proposal for the same thread.
+ */
+export async function runDecomposeAnalysis(
+  threadId: string,
+  orgId: string,
+  userId: string | null,
+): Promise<{ id: string; proposal: unknown } | null> {
+  const turns = await loadTurns(threadId);
+  if (turns.length < 1) return null;
+
+  const prompt = [
+    "להלן תמליל של שיחה שבה מתגבשת תוכנית כללית לעבודה כלשהי.",
+    "המשימה: להציע איך לפרק את העבודה הזו לכמה חלקים (work streams) שכל אחד ינוהל",
+    "בצ'אט נפרד משלו. זה פירוק קדימה — לא מזיזים כלום מהשיחה הקיימת.",
+    "",
+    "החזר JSON בלבד, בדיוק במבנה:",
+    '{ "parts": [ { "title": "<שם החלק בעברית, קצר>",',
+    '  "scope": "<תדריך פתיחה לצ\'אט של החלק הזה: מה התחום שלו, מה כבר סוכם בתוכנית',
+    '  הכללית שרלוונטי אליו, ומה המטרה. גוף שני, עברית.>" } ] }',
+    "",
+    "חוקים:",
+    "- הצע בין 2 ל-6 חלקים. אם באמת אין מה לפרק — החזר parts ריק.",
+    "- כל חלק עצמאי מספיק כדי שמישהו יעבוד עליו בנפרד.",
+    "- scope הוא מה שהצ'אט החדש יקבל כדי לדעת מה ולמה — כתוב אותו כתדריך, לא כתקציר.",
+    "- שמור על קישורים (URL) כלשונם אם הם מופיעים — אל תקצר לדומיין.",
+    "- בלי טקסט חופשי מחוץ ל-JSON.",
+    "",
+    transcriptOf(turns),
+  ].join("\n");
+
+  const reply = await runOneShot(prompt, { timeoutMs: 120_000 });
+  const parsed = parseJsonReply(reply) as { parts?: unknown } | null;
+  if (!parsed || !Array.isArray(parsed.parts)) return null;
+
+  const parts: DecomposePart[] = [];
+  for (const raw of parsed.parts as Record<string, unknown>[]) {
+    const title = typeof raw?.title === "string" ? raw.title.trim().slice(0, 200) : "";
+    const scope = typeof raw?.scope === "string" ? raw.scope.trim().slice(0, 8000) : "";
+    if (title) parts.push({ title, scope });
+  }
+  // One part is not a decomposition — nothing to break up.
+  if (parts.length < 2) return null;
+
+  await db
+    .from("claude_thread_analyses")
+    .update({ status: "superseded", decided_at: new Date().toISOString() })
+    .eq("thread_id", threadId)
+    .eq("kind", "decompose")
+    .eq("status", "proposed");
+
+  const proposal = { parts };
+  const { data, error } = await db
+    .from("claude_thread_analyses")
+    .insert({
+      org_id: orgId,
+      thread_id: threadId,
+      kind: "decompose",
+      proposal,
+      status: "proposed",
+      created_by: userId,
+    })
+    .select("id, proposal")
+    .single();
+  if (error) {
+    console.error("[claude/analysis] decompose insert failed:", error.message);
+    return null;
+  }
+  return data;
+}
+
+/** The line every decomposed/manual child's briefing ends with, so the child knows
+ *  the shared board exists and how it is read (on demand, never automatically). */
+const BOARD_NOTE =
+  "יש לפרויקט הזה לוח משותף שבו כל חלק רושם החלטות והתקדמות. " +
+  "לוח זה נטען אליך רק כשהמשתמש מבקש במפורש — אל תניח שאתה רואה אותו כברירת מחדל.";
+
+/**
+ * Apply an approved decomposition: create one briefed child chat per selected part.
+ *
+ * Children get seed_context (the briefing) — method B / "start clean" — so each begins
+ * knowing only its part plus the board note. The parent keeps ALL its turns (nothing
+ * is moved); it simply becomes the project root now that it has children.
+ *
+ * Board SEEDING is deliberately NOT here — it happens in the route, which resolves the
+ * project ROOT (the top ancestor) and seeds the board there. Seeding on this immediate
+ * parent would be wrong when the parent is itself a child (two-level decomposition):
+ * board GET/inject resolve to the top ancestor, so a board written on a middle node
+ * would be invisible to everyone.
+ */
+export async function applyDecompose(params: {
+  parentThreadId: string;
+  orgId: string;
+  userId: string | null;
+  analysisId: string | null;
+  parts: DecomposePart[];
+}): Promise<{ children: { id: string; title: string }[] }> {
+  const { parentThreadId, orgId, userId, analysisId, parts } = params;
+
+  const { data: parent, error: pErr } = await db
+    .from("claude_threads")
+    .select("id, model, effort, repo, git_branch, playbook_id")
+    .eq("id", parentThreadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (pErr || !parent) throw new Error("parent thread not found");
+
+  const children: { id: string; title: string }[] = [];
+
+  for (const part of parts) {
+    if (!part.title?.trim()) continue;
+    const briefing = [part.scope?.trim(), "", BOARD_NOTE].filter(Boolean).join("\n").slice(0, 8000);
+    const { data: child, error: cErr } = await db
+      .from("claude_threads")
+      .insert({
+        org_id: orgId,
+        created_by: userId,
+        title: part.title.trim().slice(0, 200),
+        title_source: "auto",
+        model: parent.model,
+        effort: parent.effort,
+        repo: parent.repo,
+        git_branch: parent.git_branch,
+        playbook_id: parent.playbook_id,
+        parent_thread_id: parentThreadId,
+        // Forward decomposition is always a clean, briefed start — never a fork. The
+        // child gets its own workspace (workspace_thread_id null).
+        seed_context: briefing,
+        fork_from_session: null,
+        workspace_thread_id: null,
+      })
+      .select("id, title")
+      .single();
+    if (cErr || !child) {
+      console.error("[claude/analysis] decompose child insert failed:", cErr?.message);
+      continue;
+    }
+    children.push(child);
+  }
+
+  if (analysisId && children.length > 0) {
+    await db
+      .from("claude_thread_analyses")
+      .update({ status: "applied", decided_at: new Date().toISOString() })
+      .eq("id", analysisId)
+      .eq("org_id", orgId);
+  }
+
+  return { children };
+}
