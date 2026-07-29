@@ -110,7 +110,9 @@ router.param("id", (req: Request, res: Response, next: NextFunction, id: string)
 
 // ── fields whitelisted for PATCH ───────────────────────────────────────────
 const UPDATABLE_FIELDS = new Set([
-  "title", "title_he", "description", "priority", "status",
+  // `description`/`description_he` are the bilingual pair (like title/title_he):
+  // the UI edits the slot matching the display language.
+  "title", "title_he", "description", "description_he", "priority", "status",
   "due_date", "due_time", "tags", "related_contact",
   "related_contact_email", "related_contact_phone",
   "project_id", "project_confidence", "assigned_to_user_id",
