@@ -231,6 +231,42 @@ body[data-content-wide="true"] main[data-sidebar-main] > div {
 }
 
 
+/* ── Quiet scrollbars ───────────────────────────────────────────────────────
+   Thin, muted-purple scrollbars that stay invisible until you hover (or scroll)
+   the area, instead of the browser's default heavy grey bar. Applied globally
+   so every scroll region in the app reads the same. Thumb = the system purple
+   (--primary) at low opacity; track always transparent.
+   - Firefox: `scrollbar-width: thin` + `scrollbar-color`. Hover propagates up
+     the ancestor chain, so hovering inside a scroll area re-colors that area's
+     (ancestor) scrollbar.
+   - WebKit (Chrome/Safari/Edge): a 6px bar with a transparent thumb that gains
+     color on hover of the scroll container, and a touch more when the pointer
+     is on the thumb itself. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover {
+  scrollbar-color: hsl(var(--primary) / 0.2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--primary) / 0.2);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--primary) / 0.35);
+}
+
 /* Quick-marathon finish-screen confetti (new-record celebration). */
 @keyframes confetti-fall {
   0%   { transform: translateY(-10vh) rotate(0deg); opacity: 1; }

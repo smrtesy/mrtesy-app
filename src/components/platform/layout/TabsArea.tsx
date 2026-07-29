@@ -95,11 +95,14 @@ export function TabsArea({ children }: { children: React.ReactNode }) {
 
     if (!didLoadPassRef.current) {
       // First pass after hydration — decide about the URL the document loaded
-      // at. With no panes open it is already on screen; with panes open it is
-      // hidden, so adopt it when the operator actually asked for it.
+      // at. A deliberate navigation (deep link, OAuth return, back button) is
+      // adopted so it shows as a pane; the desktop workspace no longer renders
+      // the bare route, so without this an operator with zero open tabs would
+      // land on a blank board. A plain reload (not a navigation) is NOT adopted,
+      // which is what lets "close every tab" stay an empty board across reloads.
       didLoadPassRef.current = true;
       settledHrefRef.current = href;
-      if (tabs.length > 0 && arrivedByNavigation()) adopt();
+      if (arrivedByNavigation()) adopt();
       return;
     }
 
@@ -120,12 +123,29 @@ export function TabsArea({ children }: { children: React.ReactNode }) {
     // navigation.
     if (!search && settled !== null && settled.split("?")[0] === pathname) return;
 
-    if (tabs.length > 0) adopt();
+    adopt();
   }, [href, pathname, search, tabs.length, hydrated, mqReady, isDesktop, isEmbedded, openTab, t]);
 
-  if (!isEmbedded && isDesktop && tabs.length > 0) {
-    return <TabsWorkspace />;
+  // Desktop, viewport measured and storage read: the workspace owns the content
+  // area. With tabs open, render the panes; with none open, render a quiet empty
+  // board (the sidebar stays) — the operator can close everything and nothing is
+  // force-opened by default. Before that (SSR, first paint, mobile, panes) the
+  // plain routed page renders as before.
+  if (!isEmbedded && isDesktop && mqReady && hydrated) {
+    if (tabs.length > 0) return <TabsWorkspace />;
+    return <EmptyWorkspace />;
   }
 
   return <div className="w-full max-w-4xl mx-auto p-4 md:p-6">{children}</div>;
+}
+
+/** Shown on desktop when every tab is closed: sidebar + a blank board. */
+function EmptyWorkspace() {
+  const t = useTranslations("tabsWorkspace");
+  return (
+    <div className="flex h-[calc(100dvh_-_var(--wc-bar-h,0px))] w-full flex-col items-center justify-center gap-1 p-6 text-center">
+      <p className="text-sm font-medium text-muted-foreground">{t("emptyTitle")}</p>
+      <p className="text-xs text-muted-foreground/70">{t("emptyHint")}</p>
+    </div>
+  );
 }
