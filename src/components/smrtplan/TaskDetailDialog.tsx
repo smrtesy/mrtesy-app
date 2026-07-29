@@ -28,6 +28,7 @@ interface DetailTask {
   title: string;
   title_he: string | null;
   description: string | null;
+  description_he: string | null;
   status: string;
   due_date: string | null;
   latest_finish: string | null;
@@ -144,7 +145,9 @@ export function TaskDetailDialog({
     // Edit the locale-appropriate title field only, so saving never clobbers
     // the other language's title with this one.
     setFTitle(locale === "en" ? task.title : task.title_he || task.title);
-    setFDescription(task.description ?? "");
+    // Edit the locale-appropriate description field only, mirroring the title
+    // rule above — so a Hebrew edit never clobbers the English description.
+    setFDescription(locale === "en" ? task.description ?? "" : task.description_he || task.description || "");
     setFDue(task.due_date ?? "");
     setEditing(true);
   }
@@ -154,11 +157,14 @@ export function TaskDetailDialog({
     setSaving(true);
     try {
       const titlePatch = locale === "en" ? { title: fTitle.trim() } : { title_he: fTitle.trim() };
+      const descPatch = locale === "en"
+        ? { description: fDescription.trim() || null }
+        : { description_he: fDescription.trim() || null };
       await api(`/api/plan-tasks/${task.id}`, {
         method: "PATCH",
         body: {
           ...titlePatch,
-          description: fDescription.trim() || null,
+          ...descPatch,
           due_date: fDue || null,
         },
       });
@@ -251,8 +257,8 @@ export function TaskDetailDialog({
                   rows={4}
                   className="text-[13px]"
                 />
-              ) : task.description ? (
-                <p className="whitespace-pre-wrap text-[13px] leading-relaxed">{task.description}</p>
+              ) : (locale === "en" ? task.description : task.description_he || task.description) ? (
+                <p className="whitespace-pre-wrap text-[13px] leading-relaxed">{locale === "en" ? task.description : task.description_he || task.description}</p>
               ) : (
                 <p className="text-[12.5px] italic text-muted-foreground">{t("my.detail.noDescription")}</p>
               )}

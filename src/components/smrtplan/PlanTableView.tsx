@@ -258,8 +258,13 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
       const d = valueOverride ?? draft;
       if (col === "title") {
         const v = d.trim();
-        if (v && v !== (task.title_he || task.title)) {
-          editField(task.id, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, { title_he: v, title: v }, { title_he: task.title_he, title: task.title }, te("actRename"), false);
+        // Edit only the locale-appropriate title slot so an English edit never
+        // clobbers the Hebrew title and vice-versa (matches TaskDetailDialog).
+        const cur = locale === "en" ? task.title : task.title_he || task.title;
+        if (v && v !== cur) {
+          const redo = locale === "en" ? { title: v } : { title_he: v };
+          const undo = locale === "en" ? { title: task.title } : { title_he: task.title_he };
+          editField(task.id, redo, undo, redo, undo, te("actRename"), false);
         }
       } else if (col === "due") {
         const v = d || null;
@@ -271,7 +276,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
         }
       }
     },
-    [draft, editField, t, te],
+    [draft, editField, t, te, locale],
   );
 
   // Reopening doesn't silently re-block dependents that were already released —
@@ -330,12 +335,12 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
       if (!task || !canEdit) return;
       const col = NAV_COLS[c];
       setActive({ r, c });
-      if (col === "title") setDraft(task.title_he || task.title);
+      if (col === "title") setDraft(locale === "en" ? task.title : task.title_he || task.title);
       else if (col === "due") setDraft(task.due_date ?? "");
       else if (col === "duration") setDraft(task.duration_days != null ? String(task.duration_days) : "");
       setEditing(true);
     },
-    [flat, canEdit],
+    [flat, canEdit, locale],
   );
 
   // Grid navigation (arrows + Enter to edit) — only when not in a cell editor.
@@ -1005,7 +1010,7 @@ function PlanGroup(props: {
                     {stages.map((s) => <option key={s.id} value={s.id}>{stageName(s)}</option>)}
                   </select>
                 )}
-                {textCell(0, "title", task.title_he || task.title, "text", { cls: done ? "line-through" : undefined })}
+                {textCell(0, "title", locale === "en" ? task.title : task.title_he || task.title, "text", { cls: done ? "line-through" : undefined })}
               </span>
             </td>
             <td className="border-b px-1 py-0.5">

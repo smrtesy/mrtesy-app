@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
-import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen, Smartphone, CalendarClock } from "lucide-react";
+import { Filter, Repeat, SlidersHorizontal, RotateCcw, Trash2, Loader2, FileText, FolderOpen, Smartphone, CalendarClock, Reply } from "lucide-react";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { APPS, getApp } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -245,6 +245,13 @@ function SmrtTaskSettings({ locale, pathname }: {
               {t("smsDevices")}
             </Button>
           </Link>
+          {/* Auto-reply moved out of the main sidebar nav — reached from here. */}
+          <OpenTabLink href={`/${locale}/whatsapp/autoreply`} label={tNav("whatsappAutoreply")}>
+            <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
+              <Reply className="h-4 w-4" />
+              {tNav("whatsappAutoreply")}
+            </Button>
+          </OpenTabLink>
           <OpenTabLink href={`/${locale}/log`} label={tNav("log")}>
             <Button variant="outline" className="min-h-[48px] w-full gap-2 justify-start sm:col-span-2">
               <FileText className="h-4 w-4" />

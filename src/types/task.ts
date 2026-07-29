@@ -30,6 +30,10 @@ export interface Task {
   title: string;
   title_he: string | null;
   description: string | null;
+  /** Hebrew description. Mirrors title/title_he: `description` is the
+   *  English/default slot, `description_he` the Hebrew one. Display picks by
+   *  locale (`locale === "en" ? description : description_he || description`). */
+  description_he?: string | null;
   priority: "urgent" | "high" | "medium" | "low";
   status: "inbox" | "in_progress" | "snoozed" | "archived" | "completed" | "pending_completion" | "dismissed";
   has_unread_update?: boolean | null;

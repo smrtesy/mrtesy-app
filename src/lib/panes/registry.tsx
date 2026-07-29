@@ -51,7 +51,6 @@ import { CharactersList } from "@/components/smrtvoice/CharactersList";
 import { BotsClient } from "@/components/smrtbot/BotsClient";
 import { CampaignsClient } from "@/components/smrtreach/CampaignsClient";
 import { StudioConsole } from "@/components/smrtstudio/StudioConsole";
-import { StudioInvestor } from "@/components/smrtstudio/StudioInvestor";
 import { StudioModels } from "@/components/smrtstudio/StudioModels";
 import { StudioResearchScreen } from "@/components/smrtstudio/StudioResearchScreen";
 
@@ -279,7 +278,6 @@ const PANE_SCREENS: PaneScreen[] = [
   // smrtStudio. Each wrapper mirrors its route page 1:1 — the page components
   // own their own headings, so there is nothing extra to replicate here.
   { match: (p) => p === "/studio", render: () => <StudioConsole /> },
-  { match: (p) => p === "/studio/investor", render: () => <StudioInvestor /> },
   { match: (p) => p === "/studio/models", render: () => <StudioModels /> },
   { match: (p) => p === "/studio/research", render: () => <StudioResearchScreen /> },
   { match: (p) => p === "/voice", render: (locale) => <VoicePane locale={locale} /> },
