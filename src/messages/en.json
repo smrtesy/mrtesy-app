@@ -424,6 +424,7 @@
     "googleHint": "Use the exact Google account that received this invitation.",
     "alreadyAccepted": "This invitation has already been accepted.",
     "expired": "This invitation has expired. Please ask for a new one.",
+    "notFound": "This invitation link is no longer valid. If you already have an account, sign in directly; otherwise ask for a new invitation.",
     "role_member": "Member",
     "role_admin": "Admin",
     "role_owner": "Owner"
