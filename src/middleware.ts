@@ -179,6 +179,15 @@ export async function middleware(request: NextRequest) {
       if (pref === "he" || pref === "en") {
         const resp = toPreferred(pref, true);
         if (resp) return resp;
+        // Already on the preferred locale — no redirect, but still cache the
+        // preference, or every hard load of the landing screen would repeat this
+        // DB round-trip inside the middleware. `response` is the updateSession
+        // response and its cookies are copied onto the final response below.
+        response.cookies.set("smrt_lang_pref", pref, {
+          path: "/",
+          sameSite: "lax",
+          maxAge: 60 * 60 * 24, // 24h
+        });
       }
     }
   }

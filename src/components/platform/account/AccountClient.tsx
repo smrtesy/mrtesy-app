@@ -180,9 +180,10 @@ export function AccountClient() {
       return;
     }
     // Keep the middleware's fast-path cookie in sync with the saved preference.
-    // The middleware trusts smrt_lang_pref for prefix-less entry URLs and skips
-    // the DB lookup whenever it's present (src/middleware.ts:118-130), so a stale
-    // value would keep bouncing the user back to the old language for up to 24h.
+    // The middleware trusts smrt_lang_pref on entry urls (a prefix-less path,
+    // the bare locale root, the landing screen) and skips the DB lookup whenever
+    // it is present, so a stale value would keep bouncing the user back to the
+    // old language for up to 24h.
     document.cookie = `smrt_lang_pref=${newLocale}; path=/; max-age=${60 * 60 * 24}; SameSite=Lax`;
     // The account screen renders inside a tabs-workspace pane (iframe). Ask the
     // top-level workspace to switch locale in place — it relocalizes the open
