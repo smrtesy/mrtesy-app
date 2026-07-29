@@ -7,6 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { useRouter } from "next/navigation";
 import { stripLocale } from "@/lib/panes/nav";
 
 /**
@@ -85,6 +86,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   const [soloId, setSoloId] = useState<string | null>(null);
   const [collapsedIds, setCollapsedIds] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const router = useRouter();
 
   // Hydrate from localStorage once, after mount, to avoid an SSR/client
   // markup mismatch (the server has no access to localStorage).
@@ -234,13 +236,14 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
 
   // Bridge: the account screen's language toggle (inside a pane) posts here to
   // switch the whole app's locale IN PLACE (see requestLocaleSwitch). Only the
-  // TOP provider handles it — from the top context the reload is a first-party
-  // navigation that stays inside an installed PWA. We relocalize the PERSISTED
-  // workspace (swap the /he ↔ /en prefix on every tab id/href, the width keys,
-  // solo and active ids) so the tabs reopen in the new locale instead of a
-  // stale mix, then reload the shell on the same screen. Reading/writing
-  // localStorage directly (not React state) keeps this race-free right before
-  // the reload.
+  // TOP provider handles it. We relocalize the open workspace in React state
+  // (swap the /he ↔ /en prefix on every tab id/href, width key, solo/active id
+  // and parked-rail id) so iframe panes reload from their new href, then flip
+  // the shell locale with a SOFT router navigation — NOT window.location. A
+  // document-level navigation makes an installed PWA / in-app browser show its
+  // "you left the app" URL bar (× + origin); a client-side route change keeps
+  // everything in the same document, so no bar, and next-intl re-renders the
+  // shell + component panes in the new locale.
   useEffect(() => {
     if (typeof window === "undefined" || window.top !== window.self) return;
     const onMessage = (e: MessageEvent) => {
@@ -249,55 +252,46 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       if (!data || data.type !== "smrtesy:switch-locale") return;
       const loc = data.locale === "en" ? "en" : data.locale === "he" ? "he" : null;
       if (!loc) return;
+      // <html lang/dir> lives in the ROOT layout, above the [locale] segment, so
+      // a soft navigation never re-renders it — the text would flip to English
+      // while the document stayed dir="rtl" (mirrored layout/alignment). Set it
+      // imperatively here. Safe without a pane guard: this handler only runs in
+      // the top provider (window.top === self above), never inside a pane iframe.
+      document.documentElement.lang = loc;
+      document.documentElement.dir = loc === "he" ? "rtl" : "ltr";
       const swap = (s: string) => s.replace(/^\/(he|en)(?=\/|$)/, `/${loc}`);
-      // Reload the shell on the screen the operator is actually looking at (the
-      // active tab), so it dedupes onto an existing pane rather than adopting a
-      // stale top-window path as an extra tab. Falls back to the current path.
-      let reloadTarget: string | null = null;
+      // Navigate to the active tab's (relocalized) path so TabsArea dedupes onto
+      // that pane instead of adopting a stale top-window route as an extra tab.
+      // Read the active id from storage (the source of truth) before relocalizing.
+      let target: string | null = null;
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
         if (raw) {
-          const parsed = JSON.parse(raw) as {
-            tabs?: WorkspaceTab[];
-            activeId?: string | null;
-            widths?: PaneWidths;
-            soloId?: string | null;
-            collapsedIds?: string[];
-          };
-          const next = {
-            tabs: Array.isArray(parsed.tabs)
-              ? parsed.tabs.map((t) => ({ ...t, id: swap(t.id), href: swap(t.href) }))
-              : [],
-            activeId: parsed.activeId ? swap(parsed.activeId) : null,
-            widths:
-              parsed.widths && typeof parsed.widths === "object"
-                ? Object.fromEntries(
-                    Object.entries(parsed.widths).map(([k, v]) => [swap(k), v]),
-                  )
-                : {},
-            soloId: parsed.soloId ? swap(parsed.soloId) : null,
-            // main added parked "rail" tabs (collapsedIds) to the persisted
-            // shape — relocalize them too, or they'd dangle at the old-locale
-            // ids and every pane would un-park on the next load.
-            collapsedIds: Array.isArray(parsed.collapsedIds)
-              ? parsed.collapsedIds.map(swap)
-              : [],
-          };
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-          reloadTarget = next.activeId;
+          const parsed = JSON.parse(raw) as { activeId?: string | null };
+          if (parsed.activeId) target = swap(parsed.activeId);
         }
       } catch {
-        /* corrupt storage — the reload below still switches the shell locale */
+        /* corrupt storage — fall back to the current path below */
       }
-      if (!reloadTarget) {
+      if (!target) {
         const path = stripLocale(window.location.pathname);
-        reloadTarget = `/${loc}${path === "/" ? "/tasks" : path}`;
+        target = `/${loc}${path === "/" ? "/tasks" : path}`;
       }
-      window.location.assign(reloadTarget);
+      // Relocalize the live workspace state; the persist effect writes it to
+      // localStorage. Component panes follow the shell locale (below); iframe
+      // panes reload because their tab.href changed.
+      setTabs((prev) => prev.map((tab) => ({ ...tab, id: swap(tab.id), href: swap(tab.href) })));
+      setActiveId((cur) => (cur ? swap(cur) : cur));
+      setSoloId((cur) => (cur ? swap(cur) : cur));
+      setCollapsedIds((prev) => prev.map(swap));
+      setWidthsState((prev) =>
+        Object.fromEntries(Object.entries(prev).map(([k, v]) => [swap(k), v])),
+      );
+      router.push(target);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [router]);
 
   const setActive = useCallback((id: string) => setActiveId(id), []);
   const setWidths = useCallback((next: PaneWidths) => setWidthsState(next), []);
