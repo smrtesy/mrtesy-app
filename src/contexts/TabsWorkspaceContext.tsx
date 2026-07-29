@@ -101,34 +101,48 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
           soloId?: string | null;
           collapsedIds?: string[];
         };
+        // The stored workspace can carry the OTHER locale's prefixes: the
+        // middleware redirects an entry url to the saved language, so a
+        // workspace persisted under /he is restored into an /en shell (and vice
+        // versa). Iframe panes navigate to tab.href verbatim, so a stale prefix
+        // would render Hebrew panes inside an English shell. Normalize every
+        // stored id/href to the locale THIS document is actually on; the persist
+        // effect then writes the corrected set back.
+        const active = window.location.pathname.match(/^\/(he|en)(?=\/|$)/)?.[1];
+        const swap = (s: string) =>
+          active ? s.replace(/^\/(he|en)(?=\/|$)/, `/${active}`) : s;
         if (Array.isArray(parsed.tabs)) {
-          const valid = parsed.tabs.filter(
-            (t) => t && typeof t.id === "string" && typeof t.href === "string",
-          );
+          const valid = parsed.tabs
+            .filter((t) => t && typeof t.id === "string" && typeof t.href === "string")
+            .map((t) => ({ ...t, id: swap(t.id), href: swap(t.href) }));
           setTabs(valid);
           const openIds = new Set(valid.map((t) => t.id));
-          const stillOpen = valid.some((t) => t.id === parsed.activeId);
+          const storedActive = parsed.activeId ? swap(parsed.activeId) : null;
+          const stillOpen = valid.some((t) => t.id === storedActive);
           const resolvedActive = stillOpen
-            ? parsed.activeId!
+            ? storedActive!
             : valid[valid.length - 1]?.id ?? null;
           setActiveId(resolvedActive);
           // Maximized state survives a reload — scoring a panel spans reloads —
           // but only for a tab that is still open.
-          if (valid.some((t) => t.id === parsed.soloId)) setSoloId(parsed.soloId!);
+          const storedSolo = parsed.soloId ? swap(parsed.soloId) : null;
+          if (storedSolo && valid.some((t) => t.id === storedSolo)) setSoloId(storedSolo);
           // Parked (rail) tabs survive a reload too. Keep only those still open,
           // and never leave the active tab parked — the active pane must show at
           // full size, so removing it here also guarantees ≥1 expanded pane.
           if (Array.isArray(parsed.collapsedIds)) {
-            const collapsed = parsed.collapsedIds.filter(
-              (id) => typeof id === "string" && openIds.has(id) && id !== resolvedActive,
-            );
+            const collapsed = parsed.collapsedIds
+              .filter((id) => typeof id === "string")
+              .map(swap)
+              .filter((id) => openIds.has(id) && id !== resolvedActive);
             setCollapsedIds(collapsed);
           }
           if (parsed.widths && typeof parsed.widths === "object") {
             // Keep only widths for tabs that are still open.
             const pruned: PaneWidths = {};
             for (const [id, v] of Object.entries(parsed.widths)) {
-              if (openIds.has(id) && typeof v === "number" && v > 0) pruned[id] = v;
+              const key = swap(id);
+              if (openIds.has(key) && typeof v === "number" && v > 0) pruned[key] = v;
             }
             setWidthsState(pruned);
           }
