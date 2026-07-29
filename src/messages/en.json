@@ -233,6 +233,7 @@
     "timezone": "Time zone",
     "timezoneSaved": "Time zone saved",
     "timezoneSaveFailed": "Failed to save time zone",
+    "languageSaveFailed": "Failed to change language — please try again",
     "timezoneUseBrowser": "Use browser time zone ({tz})",
     "connectionSaveFailed": "Saving the connection failed — please reconnect"
   },

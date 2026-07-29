@@ -233,6 +233,7 @@
     "timezone": "אזור זמן",
     "timezoneSaved": "אזור הזמן נשמר",
     "timezoneSaveFailed": "שמירת אזור הזמן נכשלה",
+    "languageSaveFailed": "שינוי השפה נכשל — נסה שוב",
     "timezoneUseBrowser": "השתמש באזור הזמן של הדפדפן ({tz})",
     "connectionSaveFailed": "שמירת החיבור נכשלה — נסה להתחבר שוב"
   },
