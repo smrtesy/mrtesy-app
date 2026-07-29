@@ -231,8 +231,8 @@ const CSS = `
 .ss-stage.active{z-index:5}
 .ss-gnum{position:absolute;left:0;top:50%;transform:translateY(-50%);width:64px;text-align:right;font-family:var(--mono);font-weight:800;font-variant-numeric:tabular-nums;font-size:54px;line-height:1;letter-spacing:-.04em;color:hsl(var(--h) var(--sat) var(--lit));opacity:.18;z-index:0;user-select:none;pointer-events:none;white-space:nowrap}
 .ss-stage.active .ss-gnum{opacity:.26}
-.ss-tab{--h:200;position:relative;z-index:1;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
-.ss-tab:hover{border-color:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 55%,var(--line-strong))}
+.ss-tab{position:relative;z-index:1;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
+.ss-tab:hover{border-color:hsl(var(--h) var(--sat) var(--lit))}
 .ss-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .ss-tab .ic{width:34px;height:34px;border-radius:9px;flex:none;display:grid;place-items:center;color:hsl(var(--h) var(--sat) var(--lit));background:hsl(var(--h) var(--sat) var(--lit)/.13)}
 .ss-tab .ic svg{width:19px;height:19px}
