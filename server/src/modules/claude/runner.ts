@@ -388,11 +388,14 @@ async function executeRunBody(runId: string): Promise<void> {
   //
   // Held for the whole function, not just the clone: anything the run prints can
   // echo a tokenised remote URL, so the final error text has to be redacted too.
-  let ghToken: string | null = null;
+  // Fetched UNCONDITIONALLY (best-effort): even a turn with no repo pre-selected
+  // rides the git credential helper, so Claude can `git clone`/`push` any repo the
+  // token reaches on demand — the whole point of "it should just have access". Null
+  // when unconfigured, which degrades to no git auth exactly as before.
+  let ghToken: string | null = await getGitHubToken();
   const workDir = workspaceThreadId ? await threadWorkspace(workspaceThreadId) : null;
 
   if (run.repo) {
-    ghToken = await getGitHubToken();
     if (!ghToken) {
       await finish({
         status: "failed",

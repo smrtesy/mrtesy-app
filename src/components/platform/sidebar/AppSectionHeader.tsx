@@ -47,13 +47,6 @@ export function AppSectionHeader({
   const appName = `smrt${app.word}`;
   return (
     <div className={cn("flex items-center gap-2 px-3 pb-1 pt-4", className)}>
-      {/* Thin per-app accent bar — the category marker. Inline color so the
-          arbitrary hex from the registry survives Tailwind's purge. */}
-      <span
-        aria-hidden
-        className="h-4 w-1 shrink-0 rounded-full"
-        style={{ backgroundColor: app.color }}
-      />
       <Link
         href={`${base}${app.settingsHref}`}
         aria-label={`${app.slug} settings`}
@@ -62,10 +55,14 @@ export function AppSectionHeader({
       >
         <app.Icon className="h-4 w-4" />
       </Link>
+      {/* Category name tinted with the app's accent color — same color as the
+          continuous rail beside the section. Inline color so the arbitrary hex
+          from the registry survives Tailwind's purge. */}
       <Link
         href={`${base}${app.guideHref}`}
         onClick={openAsTab(`${base}${app.guideHref}`, appName)}
-        className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground/80 hover:text-foreground"
+        style={{ color: app.color }}
+        className="text-[12px] font-semibold uppercase tracking-wider hover:opacity-80"
       >
         <SmrtName word={app.word} />
       </Link>
