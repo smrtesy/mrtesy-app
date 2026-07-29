@@ -52,6 +52,8 @@ const ICON: Record<string, string> = {
     '<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M6 8.2v7.6M8.1 6.6h4.4A4 4 0 0 1 16 10.4M8.1 17.4h4.4A4 4 0 0 0 16 13.6"/>',
   market:
     '<path d="M4 10v4a1 1 0 0 0 1 1h3l5 4V5L8 9H5a1 1 0 0 0-1 1z"/><path d="M18 8.5a4 4 0 0 1 0 7"/>',
+  megaphone:
+    '<path d="m3 11 18-5v12L3 13"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/><path d="M18 8a3 3 0 0 1 0 6"/>',
   cdone: '<circle cx="12" cy="12" r="9"/><path d="M8.4 12.4l2.4 2.4 4.8-5.2"/>',
   cnow: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/>',
   ctodo: '<circle cx="12" cy="12" r="9"/>',
@@ -174,7 +176,7 @@ const CSS = `
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,sans-serif;
   --sat:42%; --lit:44%;
-  width:100%;min-height:100%;padding:22px 0 48px;direction:ltr;
+  width:100%;min-height:100vh;padding:22px 0 48px;direction:ltr;
   background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;
 }
 .ss-inner{max-width:1320px;margin-inline:auto;padding-inline:clamp(14px,3vw,30px)}
@@ -214,20 +216,20 @@ const CSS = `
 .ss-title{font-size:20px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .ss-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
 .ss-top-right{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.ss-overallchip{display:flex;align-items:center;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 8px 7px 15px;box-shadow:var(--shadow)}
-.ss-overallchip .lab{font-size:11px;color:var(--muted);font-weight:600}
-.ss-ring{--p:0;width:34px;height:34px;border-radius:50%;flex:none;background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-2) 0);display:grid;place-items:center}
-.ss-ring span{width:24px;height:24px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:9.5px;font-weight:800;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.ss-overallchip{display:flex;align-items:center;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:8px 10px 8px 18px;box-shadow:var(--shadow)}
+.ss-overallchip .lab{font-size:13px;color:var(--muted);font-weight:600}
+.ss-ring{--p:0;width:41px;height:41px;border-radius:50%;flex:none;background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-2) 0);display:grid;place-items:center}
+.ss-ring span{width:29px;height:29px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:11.5px;font-weight:800;font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-.ss-shell{display:grid;grid-template-columns:minmax(300px,336px) minmax(0,1fr);gap:72px;align-items:start;direction:ltr}
+.ss-shell{display:grid;grid-template-columns:minmax(300px,336px) minmax(0,1fr);gap:48px;align-items:start;direction:ltr}
 .ss-nav{display:flex;flex-direction:column;gap:8px;position:sticky;top:14px}
 .ss-nav-head{display:flex;align-items:baseline;justify-content:space-between;padding:2px 4px 4px}
 .ss-nav-head b{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .ss-nav-head .cnt{font-size:11px;color:var(--muted);font-family:var(--mono)}
 
-.ss-stage{position:relative;padding-left:62px}
+.ss-stage{position:relative;padding-left:56px}
 .ss-stage.active{z-index:5}
-.ss-gnum{position:absolute;left:0;top:50%;transform:translateY(-50%);width:64px;text-align:right;font-family:var(--mono);font-weight:800;font-variant-numeric:tabular-nums;font-size:54px;line-height:1;letter-spacing:-.04em;color:var(--muted);opacity:.18;z-index:0;user-select:none;pointer-events:none;white-space:nowrap}
+.ss-gnum{position:absolute;left:0;top:50%;transform:translateY(-50%);width:64px;text-align:right;font-family:var(--mono);font-weight:800;font-variant-numeric:tabular-nums;font-size:54px;line-height:1;letter-spacing:-.04em;color:hsl(var(--h) var(--sat) var(--lit));opacity:.18;z-index:0;user-select:none;pointer-events:none;white-space:nowrap}
 .ss-stage.active .ss-gnum{opacity:.26}
 .ss-tab{--h:200;position:relative;z-index:1;width:100%;text-align:start;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;color:var(--ink);box-shadow:var(--shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,padding .18s ease}
 .ss-tab:hover{border-color:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 55%,var(--line-strong))}
@@ -251,7 +253,7 @@ const CSS = `
 .ss-tab.active .bar{display:block;height:8px;margin-top:10px;box-shadow:inset 0 0 0 1px color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 16%,transparent)}
 .ss-tab.active .bar i{background:color-mix(in srgb,hsl(var(--h) var(--sat) var(--lit)) 66%,var(--muted))}
 
-.ss-content{min-height:60vh}
+.ss-content{min-height:60vh;border-inline-start:1px solid var(--line);padding-inline-start:24px}
 .ss-panel-head{margin-bottom:14px}
 .ss-panel-head .kick{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:hsl(var(--h) var(--sat) var(--lit));margin-bottom:5px}
 .ss-panel-head h2{margin:0;font-size:22px;font-weight:750;letter-spacing:-.02em;text-wrap:balance;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -351,6 +353,7 @@ const CSS = `
 
 @media (max-width:560px){
   .ss-shell{grid-template-columns:1fr}
+  .ss-content{border-inline-start:none;padding-inline-start:0}
   .ss-nav{position:static;flex-direction:row;overflow-x:auto;padding-bottom:6px;gap:10px}
   .ss-nav-head{display:none}
   .ss-gnum{display:none}
@@ -721,11 +724,10 @@ function Dashboard({ overview }: { overview: StudioOverview }) {
       sub: "How to drive each model",
     },
     {
-      ic: "motion",
-      cc: "var(--accent)",
-      fig: 100,
-      lab: "New programs",
-      sub: "Planned in the coming year",
+      ic: "megaphone",
+      cc: "#7a52c9",
+      fig: 3,
+      lab: "New audiences",
     },
     {
       ic: "coin",
@@ -735,10 +737,11 @@ function Dashboard({ overview }: { overview: StudioOverview }) {
       sub: "End-to-end, incl. marketing",
     },
     {
-      ic: "market",
-      cc: "#7a52c9",
-      fig: 3,
-      lab: "New audiences",
+      ic: "motion",
+      cc: "var(--accent)",
+      fig: 100,
+      lab: "New programs",
+      sub: "Planned in the coming year",
     },
   ];
   return (
@@ -903,6 +906,7 @@ export function StudioConsole() {
               <div
                 key={st.slug}
                 className={`ss-stage${isActive ? " active" : ""}`}
+                style={vars({ "--h": st.hue })}
               >
                 <span className="ss-gnum" aria-hidden="true">
                   {String(i + 1).padStart(2, "0")}
@@ -910,7 +914,6 @@ export function StudioConsole() {
                 <button
                   type="button"
                   className={`ss-tab${isActive ? " active" : ""}`}
-                  style={vars({ "--h": st.hue })}
                   data-complete={st.pct === 100 ? "1" : "0"}
                   onClick={() => setSelected(st.slug)}
                 >
@@ -925,7 +928,7 @@ export function StudioConsole() {
                       <span className="nm">{st.name}</span>
                     </span>
                     <span className="prog-txt">
-                      {st.done}/{st.total}
+                      {st.done}/{st.total} · {st.pct}%
                     </span>
                     <span className="bar">
                       <i style={isActive ? { width: `${st.pct}%` } : undefined} />
