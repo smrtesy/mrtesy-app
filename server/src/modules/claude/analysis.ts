@@ -16,7 +16,7 @@
  */
 
 import { db } from "../../db";
-import { runOneShot } from "./runner";
+import { runOneShot, AUTOMATION_ACCOUNT } from "./runner";
 
 /** A single topic the split analysis found inside a wandering thread. */
 export interface SplitTopic {
@@ -132,7 +132,7 @@ export async function runSplitAnalysis(
     transcriptOf(turns),
   ].join("\n");
 
-  const reply = await runOneShot(prompt, { timeoutMs: 120_000 });
+  const reply = await runOneShot(prompt, { timeoutMs: 120_000, account: AUTOMATION_ACCOUNT });
   const parsed = parseJsonReply(reply) as { topics?: unknown; confidence?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.topics)) {
     await advanceGate();
@@ -337,7 +337,7 @@ export async function runGroupAnalysis(orgId: string, userId: string | null): Pr
     list,
   ].join("\n");
 
-  const reply = await runOneShot(prompt, { timeoutMs: 120_000 });
+  const reply = await runOneShot(prompt, { timeoutMs: 120_000, account: AUTOMATION_ACCOUNT });
   const parsed = parseJsonReply(reply) as { topics?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.topics)) return { assigned: 0, topics: 0 };
 
@@ -457,7 +457,7 @@ export async function runDecomposeAnalysis(
     transcriptOf(turns),
   ].join("\n");
 
-  const reply = await runOneShot(prompt, { timeoutMs: 120_000 });
+  const reply = await runOneShot(prompt, { timeoutMs: 120_000, account: AUTOMATION_ACCOUNT });
   const parsed = parseJsonReply(reply) as { parts?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.parts)) return null;
 
