@@ -258,23 +258,54 @@ async function computeTasksSection(
   return out;
 }
 
-// ── delivery (Hebrew inbox item + run snapshot) ─────────────────────────────
+// ── delivery (bilingual inbox item + run snapshot) ──────────────────────────
+//
+// The report is delivered as a smrtTask inbox task, whose title/description
+// follow the SYSTEM display language like every other task: `title` /
+// `description` are the English/default slot, `title_he` / `description_he` the
+// Hebrew one, and the task views pick by locale. So we render BOTH languages
+// here and store each in its own slot. Only the fixed scaffolding is
+// translated — the question/answer labels are user content and stay exactly as
+// the user authored them (usually Hebrew) in both renderings.
 
 function fmtDateHe(ymd: string): string {
   const [y, m, d] = ymd.split("-");
   return `${d}/${m}/${y}`;
 }
-function fmtDuration(seconds: number): string {
+function fmtDurationHe(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.round((seconds % 3600) / 60);
   if (h && m) return `${h} שע׳ ${m} דק׳`;
   if (h) return `${h} שע׳`;
   return `${m} דק׳`;
 }
+function fmtDurationEn(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
+
+/** noon-UTC Date for a YYYY-MM-DD (so calendar math never drifts on DST). */
+function noonUtcDate(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+}
+/** English Gregorian range label, e.g. "Jul 21 – Jul 27, 2026" or, across a
+ *  year boundary, "Dec 30, 2025 – Jan 5, 2026". */
+function fmtRangeEn(startYmd: string, endYmd: string): string {
+  const md = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const mdy = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const s = noonUtcDate(startYmd);
+  const e = noonUtcDate(endYmd);
+  const sameYear = startYmd.slice(0, 4) === endYmd.slice(0, 4);
+  return sameYear ? `${md.format(s)} – ${mdy.format(e)}` : `${mdy.format(s)} – ${mdy.format(e)}`;
+}
 
 /** Render the report as a Hebrew inbox item title + description. Dual-calendar
  *  (Hebrew + Gregorian) date range, with the questions split by segment. */
-export function renderInbox(report: Report): { title: string; description: string } {
+export function renderInboxHe(report: Report): { title: string; description: string } {
   const periodLabel = report.period_type === "monthly" ? "חודשי" : "שבועי";
   const dates = rangeLabel(report.range_start, report.range_end) ||
     `${fmtDateHe(report.range_start)}–${fmtDateHe(report.range_end)}`;
@@ -309,7 +340,49 @@ export function renderInbox(report: Report): { title: string; description: strin
   lines.push(`  מהיר – ${tk.quick}`);
   lines.push(`  בינוני – ${tk.medium}`);
   lines.push(`  גדול – ${tk.big}`);
-  lines.push(`  זמן עבודה – ${fmtDuration(tk.worked_seconds)}`);
+  lines.push(`  זמן עבודה – ${fmtDurationHe(tk.worked_seconds)}`);
+
+  return { title, description: lines.join("\n").trim() };
+}
+
+/** Render the report as an English inbox item title + description. Gregorian
+ *  date range; question/answer labels stay as authored (user content). Mirrors
+ *  renderInboxHe line-for-line so the two languages stay structurally identical. */
+export function renderInboxEn(report: Report): { title: string; description: string } {
+  const periodLabel = report.period_type === "monthly" ? "Monthly" : "Weekly";
+  const dates = fmtRangeEn(report.range_start, report.range_end);
+  const title = `📊 ${periodLabel} report · ${dates}`;
+
+  const lines: string[] = [];
+  if (report.overall_score != null) {
+    lines.push(`Overall score: ${report.overall_score}`);
+    lines.push("");
+  }
+
+  const renderItem = (item: ReportItem) => {
+    lines.push(item.label);
+    for (const o of item.options) lines.push(`  ${o.label} – ${o.count}`);
+    if (item.avg_score != null) lines.push(`  Average: ${item.avg_score}`);
+    lines.push("");
+  };
+
+  const endItems = report.items.filter((i) => i.segment === "end");
+  const startItems = report.items.filter((i) => i.segment === "start");
+  if (endItems.length) {
+    lines.push("— End of day —");
+    endItems.forEach(renderItem);
+  }
+  if (startItems.length) {
+    lines.push("— Start of day —");
+    startItems.forEach(renderItem);
+  }
+
+  const tk = report.tasks;
+  lines.push("Completed tasks");
+  lines.push(`  Quick – ${tk.quick}`);
+  lines.push(`  Medium – ${tk.medium}`);
+  lines.push(`  Big – ${tk.big}`);
+  lines.push(`  Worked time – ${fmtDurationEn(tk.worked_seconds)}`);
 
   return { title, description: lines.join("\n").trim() };
 }
@@ -329,7 +402,11 @@ export async function generateAndDeliver(
   generatedBy: "schedule" | "manual",
 ): Promise<{ report: Report; run_id: string; task_id: string | null }> {
   const report = await computeReport(userId, tz, period, rangeStart, rangeEnd);
-  const { title, description } = renderInbox(report);
+  // Render both languages and store each in its slot; the task views pick by
+  // the viewer's locale (`title`/`description` = English/default slot,
+  // `title_he`/`description_he` = Hebrew).
+  const he = renderInboxHe(report);
+  const en = renderInboxEn(report);
   const dedupTag = `daily-report:${rangeStart}`;
 
   // Upsert the inbox task by dedup tag (same pattern as claude-session).
@@ -347,7 +424,13 @@ export async function generateAndDeliver(
   if (existingTask) {
     const { data: upd, error } = await db
       .from("tasks")
-      .update({ title, title_he: title, description, updated_at: new Date().toISOString() })
+      .update({
+        title: en.title,
+        title_he: he.title,
+        description: en.description,
+        description_he: he.description,
+        updated_at: new Date().toISOString(),
+      })
       .eq("organization_id", orgId)
       .eq("id", existingTask.id)
       .select("id")
@@ -364,9 +447,10 @@ export async function generateAndDeliver(
         status: "inbox",
         priority: "low",
         manually_verified: false,
-        title,
-        title_he: title,
-        description,
+        title: en.title,
+        title_he: he.title,
+        description: en.description,
+        description_he: he.description,
         tags: ["daily-report", dedupTag],
         ai_model_used: null,
       })
@@ -375,7 +459,7 @@ export async function generateAndDeliver(
     if (error) throw new Error(`task insert: ${error.message}`);
     taskId = created.id;
     await emitEvent(orgId, "smrttask", "task.created", "task", created.id, {
-      title,
+      title: he.title,
       priority: "low",
       source: "daily-report",
     });

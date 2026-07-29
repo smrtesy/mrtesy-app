@@ -48,7 +48,9 @@ export function PlanEditDialog({
     title_he: "",
     title_en: "",
     goal: "",
+    goal_en: "",
     group_label: "",
+    group_label_en: "",
     color: COLORS[0],
     kind: "effort" as PlanKind,
     stage: "active" as PlanStage,
@@ -91,7 +93,9 @@ export function PlanEditDialog({
       title_he: plan?.title_he ?? "",
       title_en: plan?.title_en ?? "",
       goal: plan?.goal ?? "",
+      goal_en: plan?.goal_en ?? "",
       group_label: plan?.group_label ?? "",
+      group_label_en: plan?.group_label_en ?? "",
       color: plan?.color ?? COLORS[0],
       kind: plan?.kind ?? "effort",
       stage: plan?.stage ?? "active",
@@ -163,7 +167,9 @@ export function PlanEditDialog({
       title_he: form.title_he.trim(),
       title_en: form.title_en.trim() || null,
       goal: form.goal.trim() || null,
+      goal_en: form.goal_en.trim() || null,
       group_label: form.group_label.trim() || null,
+      group_label_en: form.group_label_en.trim() || null,
       color: form.color,
       kind: form.kind,
       stage: form.stage,
@@ -288,23 +294,27 @@ export function PlanEditDialog({
           <Field label={te("goal")}>
             <Textarea value={form.goal} onChange={(e) => set("goal", e.target.value)} rows={2} />
           </Field>
+          <Field label={te("goalEn")}>
+            <Textarea value={form.goal_en} onChange={(e) => set("goal_en", e.target.value)} rows={2} dir="ltr" />
+          </Field>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label={te("group")}>
               <Input value={form.group_label} onChange={(e) => set("group_label", e.target.value)} />
             </Field>
-            {plan?.id ? (
-              <Field label={te("kind")}>
-                <select className={fieldCls} value={form.kind} onChange={(e) => set("kind", e.target.value as PlanKind)}>
-                  <option value="effort">{t("kind.effort")}</option>
-                  <option value="stream">{t("kind.stream")}</option>
-                  <option value="roster">{t("kind.roster")}</option>
-                </select>
-              </Field>
-            ) : (
-              <span />
-            )}
+            <Field label={te("groupEn")}>
+              <Input value={form.group_label_en} onChange={(e) => set("group_label_en", e.target.value)} dir="ltr" />
+            </Field>
           </div>
+          {plan?.id && (
+            <Field label={te("kind")}>
+              <select className={fieldCls} value={form.kind} onChange={(e) => set("kind", e.target.value as PlanKind)}>
+                <option value="effort">{t("kind.effort")}</option>
+                <option value="stream">{t("kind.stream")}</option>
+                <option value="roster">{t("kind.roster")}</option>
+              </select>
+            </Field>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <Field label={te("start")}>

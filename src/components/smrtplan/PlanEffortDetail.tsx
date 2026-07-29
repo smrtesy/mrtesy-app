@@ -20,7 +20,7 @@ import { DailyPulse } from "./DailyPulse";
 
 type PlanTask = Pick<
   Task,
-  "id" | "title" | "title_he" | "description" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist" | "requires_debrief"
+  "id" | "title" | "title_he" | "description" | "description_he" | "status" | "due_date" | "latest_finish" | "duration_days" | "duration_manual" | "estimated_hours" | "is_critical" | "assigned_to_user_id" | "stage_id" | "checklist" | "requires_debrief"
 > & { needs: TaskNeed[]; handoff: TaskHandoff[] };
 
 type Member = OrgMember;
@@ -257,6 +257,7 @@ export function PlanEffortDetail({
         planId={plan.id}
         members={members}
         te={te}
+        locale={locale}
         onClose={() => setEditingId(null)}
         onChanged={afterMutation}
       />
@@ -323,7 +324,7 @@ export function PlanEffortDetail({
         {open && (
           <div className="ms-2 border-s ps-3">
             {isAdding && (
-              <NewTaskRow planId={plan.id} stageId={stageId} members={members} te={te} onDone={async () => { setAdding(null); await afterMutation(); }} />
+              <NewTaskRow planId={plan.id} stageId={stageId} members={members} te={te} locale={locale} onDone={async () => { setAdding(null); await afterMutation(); }} />
             )}
             {visibleTasks.length === 0 && !isAdding ? (
               <p className="py-2 text-[12px] text-muted-foreground">
@@ -347,7 +348,7 @@ export function PlanEffortDetail({
             {title}
           </h2>
           <p className="mb-1 mt-0.5 text-[12.5px] text-muted-foreground">
-            {plan.goal ? `${plan.goal} · ` : ""}
+            {(() => { const g = locale === "en" ? plan.goal_en || plan.goal : plan.goal; return g ? `${g} · ` : ""; })()}
             {plan.start_date && plan.end_date
               ? `${gregShort(parseISO(plan.start_date))}–${gregShort(parseISO(plan.end_date))} · `
               : ""}
@@ -422,7 +423,7 @@ export function PlanEffortDetail({
       ) : (
         <>
           {adding && canEdit && (
-            <NewTaskRow planId={plan.id} stageId={adding.stageId} members={members} te={te} onDone={async () => { setAdding(null); await afterMutation(); }} />
+            <NewTaskRow planId={plan.id} stageId={adding.stageId} members={members} te={te} locale={locale} onDone={async () => { setAdding(null); await afterMutation(); }} />
           )}
           <div className="divide-y">{(hideDone ? tasks.filter((tk) => zoneOf(tk) !== "done") : tasks).map(renderRow)}</div>
         </>
@@ -687,12 +688,14 @@ function NewTaskRow({
   stageId = null,
   members,
   te,
+  locale,
   onDone,
 }: {
   planId: string;
   stageId?: string | null;
   members: Member[];
   te: ReturnType<typeof useTranslations>;
+  locale: string;
   onDone: () => void;
 }) {
   const [title, setTitle] = useState("");
@@ -711,7 +714,9 @@ function NewTaskRow({
       await api(`/api/plans/${planId}/tasks`, {
         method: "POST",
         body: {
-          title_he: title.trim(),
+          // Fill the locale-appropriate title slot so a task created in English
+          // isn't blank under English display (base `title` stays populated).
+          ...(locale === "en" ? { title: title.trim() } : { title_he: title.trim() }),
           due_date: due || null,
           duration_days: dur ? Number(dur) : null,
           estimated_hours: estHours ? Number(estHours) : null,
@@ -732,7 +737,7 @@ function NewTaskRow({
   return (
     <div className="my-2 flex flex-wrap items-center gap-2 rounded-lg border bg-secondary/40 p-2">
       <input className={`${fieldCls} flex-1`} placeholder={te("taskTitle")} value={title}
-        onChange={(e) => setTitle(e.target.value)} dir="rtl" autoFocus />
+        onChange={(e) => setTitle(e.target.value)} dir={locale === "en" ? "ltr" : "rtl"} autoFocus />
       <select className={fieldCls} value={assignee} onChange={(e) => setAssignee(e.target.value)} title={te("assignee")}>
         <option value="">{te("unassigned")}</option>
         {members.map((m) => (
@@ -771,6 +776,7 @@ function EditTaskRow({
   planId,
   members,
   te,
+  locale,
   onClose,
   onChanged,
 }: {
@@ -778,15 +784,16 @@ function EditTaskRow({
   planId: string;
   members: Member[];
   te: ReturnType<typeof useTranslations>;
+  locale: string;
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [title, setTitle] = useState(task.title_he || task.title);
+  const [title, setTitle] = useState(locale === "en" ? task.title : task.title_he || task.title);
   const [due, setDue] = useState(task.due_date ?? "");
   // dur is the MANUAL override only — blank means "let the engine compute it".
   const [dur, setDur] = useState(task.duration_manual && task.duration_days != null ? String(task.duration_days) : "");
   const [estHours, setEstHours] = useState(task.estimated_hours != null ? String(task.estimated_hours) : "");
-  const [fDescription, setFDescription] = useState(task.description ?? "");
+  const [fDescription, setFDescription] = useState(locale === "en" ? task.description ?? "" : task.description_he || task.description || "");
   const [status, setStatus] = useState(task.status);
   const [assignee, setAssignee] = useState(task.assigned_to_user_id ?? "");
   // Dependency picker value is typed: "task:<id>" or "plan:<id>" (a capability).
@@ -817,17 +824,21 @@ function EditTaskRow({
   async function save() {
     setBusy(true);
     try {
+      // Write only the locale-appropriate title/description slot, so editing in
+      // one language never clobbers the other language's text (mirrors the
+      // TaskDetailDialog rule).
+      const localePatch = locale === "en"
+        ? { title: title.trim(), description: fDescription.trim() || null }
+        : { title_he: title.trim(), description_he: fDescription.trim() || null };
       await api(`/api/plan-tasks/${task.id}`, {
         method: "PATCH",
         body: {
-          title_he: title.trim(),
-          title: title.trim(),
+          ...localePatch,
           due_date: due || null,
           // a filled manual duration pins it; otherwise the engine owns it.
           duration_days: dur ? Number(dur) : null,
           duration_manual: !!dur,
           estimated_hours: estHours ? Number(estHours) : null,
-          description: fDescription.trim() || null,
           status,
           assigned_to_user_id: assignee || null,
         },
@@ -889,7 +900,7 @@ function EditTaskRow({
   return (
     <div className="my-2 space-y-2 rounded-lg border bg-secondary/40 p-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <input className={`${fieldCls} flex-1`} value={title} onChange={(e) => setTitle(e.target.value)} dir="rtl" />
+        <input className={`${fieldCls} flex-1`} value={title} onChange={(e) => setTitle(e.target.value)} dir={locale === "en" ? "ltr" : "rtl"} />
         <DatePicker className="h-8 w-auto px-2 py-1 text-[12.5px]" value={due} onChange={setDue} />
         <select className={fieldCls} value={status} onChange={(e) => setStatus(e.target.value as PlanTask["status"])}>
           <option value="inbox">{te("statusInbox")}</option>
@@ -960,7 +971,7 @@ function EditTaskRow({
             {samePlanTasks.length > 0 && (
               <optgroup label={te("samePlan")}>
                 {samePlanTasks.map((o) => (
-                  <option key={o.id} value={`task:${o.id}`}>{o.title_he || o.title}</option>
+                  <option key={o.id} value={`task:${o.id}`}>{locale === "en" ? o.title : o.title_he || o.title}</option>
                 ))}
               </optgroup>
             )}
@@ -968,7 +979,7 @@ function EditTaskRow({
               <optgroup label={te("otherPlans")}>
                 {otherPlanTasks.map((o) => (
                   <option key={o.id} value={`task:${o.id}`}>
-                    {(o.title_he || o.title)}{o.plan_title_he ? ` · ${o.plan_title_he}` : ""}
+                    {(locale === "en" ? o.title : o.title_he || o.title)}{(locale === "en" ? o.plan_title_en || o.plan_title_he : o.plan_title_he) ? ` · ${locale === "en" ? o.plan_title_en || o.plan_title_he : o.plan_title_he}` : ""}
                   </option>
                 ))}
               </optgroup>

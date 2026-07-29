@@ -308,12 +308,12 @@ function requireFull(req: Request, res: Response, next: NextFunction) {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const PLAN_FIELDS =
-  "id, org_id, parent_id, project_id, title_he, title_en, goal, kind, group_label, " +
+  "id, org_id, parent_id, project_id, title_he, title_en, goal, goal_en, kind, group_label, group_label_en, " +
   "start_date, end_date, stage, status, is_capability, is_available, progress, progress_manual, is_critical, color, " +
   "is_private, owner_user_id, manager_user_id, cost_approval_threshold_usd, created_by, created_at, updated_at";
 
 const PLAN_WRITABLE = new Set([
-  "parent_id", "project_id", "title_he", "title_en", "goal", "kind", "group_label",
+  "parent_id", "project_id", "title_he", "title_en", "goal", "goal_en", "kind", "group_label", "group_label_en",
   "start_date", "end_date", "stage", "status", "is_capability", "is_available",
   "progress_manual", "color", "is_private", "owner_user_id", "manager_user_id",
   "cost_approval_threshold_usd",
@@ -580,7 +580,7 @@ router.get("/plans/:id/tasks", async (req: Request, res: Response) => {
 
   const select =
     "id, title, title_he, status, assigned_to_user_id, due_date, latest_finish, latest_start, " +
-    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, checklist, description, assignment_status";
+    "earliest_start, is_critical, duration_days, duration_manual, estimated_hours, parent_task_id, plan_id, stage_id, checklist, description, description_he, assignment_status";
 
   let query = db.from("tasks").select(select).eq("organization_id", req.org!.id);
   if (plan?.kind === "roster") {
@@ -749,7 +749,7 @@ router.get("/plans/:id/review", async (req: Request, res: Response) => {
   const { data: taskRows, error } = await db
     .from("tasks")
     .select(
-      "id, title, title_he, assigned_to_user_id, due_date, is_decision, description, checklist, definition_of_done, created_at",
+      "id, title, title_he, assigned_to_user_id, due_date, is_decision, description, description_he, checklist, definition_of_done, definition_of_done_he, created_at",
     )
     .eq("organization_id", orgId)
     .eq("plan_id", planId)
@@ -803,8 +803,10 @@ router.get("/plans/:id/review", async (req: Request, res: Response) => {
       due_date: t.due_date,
       is_decision: t.is_decision,
       description: t.description,
+      description_he: t.description_he,
       checklist: t.checklist,
       definition_of_done: t.definition_of_done,
+      definition_of_done_he: t.definition_of_done_he,
       note: noteByTask.get(t.id as string) ?? "",
     })),
   });
@@ -921,7 +923,7 @@ const MY_TASK_FIELDS =
   // planned_for = the daily-method "picked for today" flag: the desk shows a
   // plan task only when it's set to today, and the inbox filters picked ones out.
   "size, context, planned_for, today_position, woke_from_snooze_at, last_interaction_at, created_at, priority, " +
-  "description, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since, " +
+  "description, description_he, has_unread_update, recurrence_rule, is_decision, requires_debrief, claude_waiting_since, " +
   // serial = the table-wide insert counter (one sequence for all tasks, across
   // orgs), monotonic per insert — the plan-order key (see myPlanTasks).
   // ai_tier/ai_prompt = how this task gets done + its ready-to-run opening
@@ -1335,7 +1337,7 @@ router.post("/plans/:id/tasks", requireFull, async (req: Request, res: Response)
 });
 
 const PLAN_TASK_WRITABLE = new Set([
-  "title", "title_he", "description", "due_date", "duration_days", "duration_manual",
+  "title", "title_he", "description", "description_he", "due_date", "duration_days", "duration_manual",
   "estimated_hours", "status", "assigned_to_user_id", "parent_task_id", "role_id",
   "task_materials", "stage_id", "requires_debrief",
 ]);

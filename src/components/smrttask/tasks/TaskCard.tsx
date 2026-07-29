@@ -96,6 +96,9 @@ export function TaskCard({
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
+  // Description follows the display language too: `description` is the
+  // English/default slot, `description_he` the Hebrew one (mirrors title/title_he).
+  const description = locale === "en" ? task.description : task.description_he || task.description;
   const isNew = !task.seen_at;
   const links = taskActionNuggets(task, { includeAttachments: true });
   const source = task.source_messages ?? null;
@@ -211,9 +214,9 @@ export function TaskCard({
       </div>
 
       {/* Description preview */}
-      {task.description && (
+      {description && (
         <p className="mt-1 text-xs md:text-sm text-muted-foreground line-clamp-1 md:line-clamp-2" dir={locale === "he" ? "rtl" : "ltr"}>
-          <LinkifiedText>{task.description}</LinkifiedText>
+          <LinkifiedText>{description}</LinkifiedText>
         </p>
       )}
 

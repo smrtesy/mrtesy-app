@@ -26,7 +26,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { fileLastCommitDate, blobUrl, getGitHubToken } from "./github";
+import { fileLastCommitDate, blobUrl, getGitHubToken, isValidRepo } from "./github";
 
 const router = Router();
 
@@ -198,6 +198,11 @@ router.post("/claude/playbooks", async (req: Request, res: Response) => {
   const docUrl = parseUrl(body.doc_url);
   if (docUrl === false) return res.status(400).json({ error: URL_ERROR });
 
+  // Validated on write, not just when a run uses it: the repo string flows into the
+  // environment preamble (composePrompt), so a malformed value must never be stored.
+  const repo = str(body.repo, 200) || null;
+  if (repo && !isValidRepo(repo)) return res.status(400).json({ error: "repo must be owner/name" });
+
   const { data, error } = await db
     .from("claude_playbooks")
     .insert({
@@ -207,7 +212,7 @@ router.post("/claude/playbooks", async (req: Request, res: Response) => {
       name,
       doc_url: docUrl,
       doc_path: str(body.doc_path, 500) || null,
-      repo: str(body.repo, 200) || null,
+      repo,
       instructions: str(body.instructions, MAX_BODY) || null,
       source: "db",
       sort_order: Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : 100,
@@ -247,7 +252,11 @@ router.patch("/claude/playbooks/:id", async (req: Request, res: Response) => {
     patch.doc_url = docUrl;
   }
   if (body.doc_path !== undefined) patch.doc_path = str(body.doc_path, 500) || null;
-  if (body.repo !== undefined) patch.repo = str(body.repo, 200) || null;
+  if (body.repo !== undefined) {
+    const repo = str(body.repo, 200) || null;
+    if (repo && !isValidRepo(repo)) return res.status(400).json({ error: "repo must be owner/name" });
+    patch.repo = repo;
+  }
   if (body.instructions !== undefined) patch.instructions = str(body.instructions, MAX_BODY) || null;
   if (body.is_active !== undefined) patch.is_active = !!body.is_active;
   if (body.sort_order !== undefined && Number.isFinite(Number(body.sort_order))) {
@@ -479,6 +488,65 @@ export async function composePrompt(
   // for to make room for boilerplate would be the wrong way round.
   const taskBytes = byteLen(userPrompt);
   const contextBudget = Math.max(0, MAX_COMPOSED_BYTES - taskBytes - 200);
+
+  // ── environment preamble ──────────────────────────────────────────────────
+  // Grounding the run in WHERE it lives. Without this the engine wakes in an empty
+  // temp directory with no idea it is inside smrtesy or that it can reach GitHub —
+  // so it tells the user "I have no repo access", which is false: a token IS
+  // configured and the run carries git credentials. Short and fixed (not subject to
+  // the context trim), because it is orientation the whole conversation needs.
+  //
+  // The repo NAMES come from this org's own playbooks (org-scoped DB), never a
+  // hardcoded list — so it stays correct per tenant. isValidRepo filters any
+  // malformed value so only real owner/name strings reach the prompt.
+  const { data: repoRows, error: rErr } = await db
+    .from("claude_playbooks")
+    .select("repo")
+    .eq("org_id", orgId)
+    .eq("is_active", true)
+    .not("repo", "is", null);
+  if (rErr) console.error("[claude/compose] repo list fetch failed:", rErr.message);
+  const orgRepos = Array.from(
+    new Set((repoRows ?? []).map((r) => (r.repo ?? "").trim()).filter((v) => v && isValidRepo(v))),
+  );
+
+  // Whether GitHub access is REALLY available decides what the preamble may claim.
+  // Telling the model "you can clone any repo" when no token is set is the exact
+  // inverse of the bug this fixes — it would confidently promise access it lacks.
+  const hasGitHub = Boolean(await getGitHubToken());
+
+  const envLines = [
+    "# איפה אתה רץ",
+    "",
+    "אתה קלוד, ורץ **בתוך פלטפורמת smrtesy** — בסביבת ה-backend שלה, לא על מחשב המשתמש. " +
+      "זו הסביבה שבה צוות smrtesy עובד מול הפלטפורמה עצמה, והמקום הטבעי שמדברים איתך עליה.",
+    "",
+  ];
+  if (hasGitHub) {
+    envLines.push(
+      "- **גישה ל-GitHub:** מוגדר טוקן עם הרשאת repo. אתה יכול לשכפל כל ריפו שהטוקן מגיע אליו " +
+        "ולעבוד עליו כאן — `git clone https://github.com/<owner>/<repo>` — ולדחוף חזרה. " +
+        "אין צורך שהמשתמש ייתן לך כתובת או טוקן; ההרשאה כבר בסביבה.",
+    );
+    if (orgRepos.length > 0) {
+      envLines.push(`- **הריפו-ים של הארגון:** ${orgRepos.join(", ")}.`);
+    }
+    envLines.push(
+      "- אם נבחר ריפו לצ'אט הזה (בהגדרות), הוא כבר משוכפל לתיקיית העבודה שלך. אם לא — שכפל בעצמך " +
+        "את הריפו הרלוונטי, או הצע למשתמש לבחור אותו בהגדרות הצ'אט.",
+    );
+  } else {
+    // No token: say so plainly and point at where to set it, instead of promising
+    // access. This is the honest state, and it tells the user how to enable it.
+    envLines.push(
+      "- **גישה ל-GitHub לא מוגדרת עדיין.** כדי לאפשר לך לעבוד על ריפו-ים, יש לשמור טוקן GitHub " +
+        "עם הרשאת repo תחת /admin/apps/smrttask/secrets (מפתח GITHUB_TOKEN). עד אז אין לך גישה לקוד.",
+    );
+  }
+  envLines.push(
+    "- תיקיית העבודה שלך נשמרת לאורך כל השיחה — לכן קובץ ששכפלת או ערכת בתור אחד קיים בתור הבא.",
+  );
+  parts.push(envLines.join("\n"));
 
   const { data: standing, error: sErr } = await db
     .from("claude_instructions")

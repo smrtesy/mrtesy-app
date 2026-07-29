@@ -175,7 +175,11 @@
     "paneError": "Something went wrong in this tab",
     "paneReload": "Reload",
     "maximizePane": "Full width",
-    "restorePane": "Back to split view (Esc)"
+    "restorePane": "Back to split view (Esc)",
+    "collapsePane": "Collapse to side rail",
+    "expandPaneNamed": "Expand {label}",
+    "emptyTitle": "No open tabs",
+    "emptyHint": "Pick a screen from the menu to open a tab"
   },
   "nav": {
     "account": "Account",
@@ -233,6 +237,7 @@
     "timezone": "Time zone",
     "timezoneSaved": "Time zone saved",
     "timezoneSaveFailed": "Failed to save time zone",
+    "languageSaveFailed": "Failed to change language — please try again",
     "timezoneUseBrowser": "Use browser time zone ({tz})",
     "connectionSaveFailed": "Saving the connection failed — please reconnect"
   },
@@ -3373,7 +3378,9 @@
       "titleHe": "Name (Hebrew)",
       "titleEn": "Name (English)",
       "goal": "Goal / description",
+      "goalEn": "Goal / description (English)",
       "group": "Group",
+      "groupEn": "Group (English)",
       "color": "Color",
       "kind": "Kind",
       "start": "Start",
@@ -4463,6 +4470,45 @@
       "now": "Group now",
       "done": "Grouping updated",
       "none": "No topic"
+    },
+    "decompose": {
+      "title": "Break into parts",
+      "intro": "Each part opens its own chat, starting with the briefing shown here. This conversation stays whole — nothing moves. Edit a name or briefing, or drop a part.",
+      "titlePlaceholder": "Part name",
+      "scopeLabel": "Opening briefing for the part's chat",
+      "scopePlaceholder": "What this part covers, what's already settled that it needs, and its goal…",
+      "willKeep": "The main plan stays as it is — only new chats open for the parts.",
+      "cancel": "Cancel",
+      "apply": "Open {count} parts",
+      "done": "Opened {count} parts",
+      "created": "Opened {count} new parts"
+    },
+    "project": {
+      "button": "Project",
+      "title": "Project",
+      "backToPlan": "Back to the plan: {title}",
+      "partsTitle": "Parts",
+      "noParts": "No parts yet. Let Claude propose a breakdown, or open a part by hand.",
+      "untitledPart": "Untitled",
+      "decompose": "Let Claude propose a breakdown",
+      "decomposeNone": "Claude found nothing to break up — there aren't several clear parts yet",
+      "newChildPlaceholder": "Name for a new part",
+      "addChild": "Open part",
+      "childCreated": "New part opened",
+      "boardTitle": "Project board",
+      "boardEdit": "Edit",
+      "boardPreview": "Preview",
+      "boardPlaceholder": "Decisions and progress shared across all parts…",
+      "boardEmpty": "The board is empty. Each part can record decisions and progress here.",
+      "boardSave": "Save board",
+      "boardSaved": "Board saved",
+      "summarize": "Summarize this chat onto the board",
+      "summarized": "Summary added to the board",
+      "boardUpdatedAt": "Updated {when}",
+      "attachBoard": "Attach the project board to the next message",
+      "attachBoardHint": "Once: the next message is sent with the board so Claude knows what's happening in the other parts.",
+      "boardArmed": "The project board will be attached to the next message",
+      "boardDisarm": "Cancel"
     }
   },
   "markdown": {

@@ -29,7 +29,15 @@ import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS } from "./attachments";
 import { removeThreadWorkspace, sweepWorkspaces } from "./workspace";
-import { runSplitAnalysis, applySplit, runGroupAnalysis, shouldAnalyzeSplit } from "./analysis";
+import {
+  runSplitAnalysis,
+  applySplit,
+  runGroupAnalysis,
+  shouldAnalyzeSplit,
+  runDecomposeAnalysis,
+  applyDecompose,
+  type DecomposePart,
+} from "./analysis";
 
 const router = Router();
 
@@ -55,6 +63,48 @@ function str(v: unknown, max: number): string {
 /** Cap on the rehydrated history, in characters — enough for a real conversation,
  *  bounded so a long thread cannot blow the engine's prompt budget. */
 const MAX_HISTORY_CHARS = 12_000;
+
+/** The shared project board, in characters. Big enough for a working note; bounded
+ *  so injecting it into a turn cannot blow the prompt budget. */
+const MAX_BOARD_CHARS = 20_000;
+
+/**
+ * Resolve the PROJECT ROOT of a thread — the top-most ancestor reached by walking
+ * parent_thread_id up. The shared project board lives on that row.
+ *
+ * Bounded to 10 hops so a corrupt cycle (a child pointing back at an ancestor) can
+ * never loop forever; it just stops and returns the deepest row it reached, which is
+ * still a real thread. Org-scoped at every hop, so a parent pointer that crosses
+ * tenants (it never should) is ignored rather than followed.
+ *
+ * Returns the root's id, title and board — the caller reads/writes the board there.
+ */
+async function resolveProjectRoot(
+  threadId: string,
+  orgId: string,
+): Promise<{ id: string; title: string | null; project_board: string | null; project_board_updated_at: string | null } | null> {
+  let currentId = threadId;
+  let root: { id: string; title: string | null; parent_thread_id: string | null; project_board: string | null; project_board_updated_at: string | null } | null = null;
+  for (let hop = 0; hop < 10; hop++) {
+    const { data, error } = await db
+      .from("claude_threads")
+      .select("id, title, parent_thread_id, project_board, project_board_updated_at")
+      .eq("id", currentId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (error || !data) break;
+    root = data;
+    if (!data.parent_thread_id) break; // reached the top
+    currentId = data.parent_thread_id;
+  }
+  if (!root) return null;
+  return {
+    id: root.id,
+    title: root.title,
+    project_board: root.project_board,
+    project_board_updated_at: root.project_board_updated_at,
+  };
+}
 
 /**
  * Rebuild the conversation so far from OUR database, for the case where there is no
@@ -239,14 +289,33 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
     .limit(1)
     .maybeSingle();
 
-  // Child threads this one was split into — shown as links so a moved-turns fold can
-  // point at where the turns went.
+  // Child threads (from a split OR a decomposition) — shown as links so a moved-turns
+  // fold can point where turns went, and so a project's parts are reachable.
   const { data: children } = await db
     .from("claude_threads")
     .select("id, title")
     .eq("parent_thread_id", thread.id)
     .eq("org_id", req.org!.id)
     .order("created_at", { ascending: true });
+
+  // The parent, if this thread is a child — so the UI can offer "back to the plan".
+  // parent_thread_id is not in THREAD_COLS, so read it here.
+  const { data: lineage } = await db
+    .from("claude_threads")
+    .select("parent_thread_id")
+    .eq("id", thread.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  let parent: { id: string; title: string } | null = null;
+  if (lineage?.parent_thread_id) {
+    const { data: p } = await db
+      .from("claude_threads")
+      .select("id, title")
+      .eq("id", lineage.parent_thread_id)
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+    if (p) parent = { id: p.id, title: p.title };
+  }
 
   return res.json({
     thread,
@@ -257,6 +326,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
     })),
     split_proposal: splitProposal ?? null,
     children: children ?? [],
+    parent,
   });
 });
 
@@ -475,6 +545,20 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   if (isFirst && turnIndex > 1) {
     const history = await buildHistoryPreamble(thread.id, turnIndex);
     if (history) composed.prompt = `${history}\n\n---\n\n${composed.prompt}`;
+  }
+
+  // On-demand shared board: the user chose to attach the project board to THIS turn
+  // (the deliberate "read the board" action — never automatic, per the user's design
+  // choice). Resolve the project root and prepend its board to the prompt for this
+  // turn only. A thread not in a project, or a project with no board yet, is a no-op.
+  if (body.include_board === true) {
+    const root = await resolveProjectRoot(thread.id, orgId);
+    const board = root?.project_board?.trim();
+    if (board) {
+      const clipped = board.length > MAX_BOARD_CHARS ? board.slice(0, MAX_BOARD_CHARS) : board;
+      composed.prompt =
+        `# לוח הפרויקט המשותף (המצב הנוכחי של שאר החלקים)\n\n${clipped}\n\n---\n\n${composed.prompt}`;
+    }
   }
 
   const { data: run, error } = await db
@@ -773,6 +857,251 @@ router.post("/claude/analyses/:id/dismiss", async (req: Request, res: Response) 
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "not found" });
   return res.json({ ok: true });
+});
+
+// ── decompose (forward: plan → parts) ───────────────────────────────────────────
+
+/**
+ * POST /claude/threads/:id/analyze-decompose — the "פרק לחלקים" button.
+ *
+ * Reads the plan conversation and proposes parts to spin into child chats. A
+ * subscription run (no paid API tokens); deliberate, not automatic.
+ */
+router.post("/claude/threads/:id/analyze-decompose", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  if (!(await ownThread(req.params.id, req.org!.id))) {
+    return res.status(404).json({ error: "thread not found" });
+  }
+  try {
+    const analysis = await runDecomposeAnalysis(req.params.id, req.org!.id, req.user!.id);
+    return res.json({ analysis: analysis ?? null, decompose: Boolean(analysis) });
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * POST /claude/threads/:id/decompose — apply an approved decomposition.
+ *
+ * Body: { analysis_id?, parts: [{ title, scope }] }. The parts are what the user
+ * approved (possibly edited), so the briefing each child starts with is exactly what
+ * the user read. Nothing is moved off the plan chat.
+ */
+router.post("/claude/threads/:id/decompose", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  if (!(await ownThread(req.params.id, req.org!.id))) {
+    return res.status(404).json({ error: "thread not found" });
+  }
+  const body = req.body ?? {};
+  const rawParts = Array.isArray(body.parts) ? body.parts : [];
+  const parts: DecomposePart[] = rawParts
+    .map((p: Record<string, unknown>) => ({
+      title: str(p?.title, 200),
+      scope: typeof p?.scope === "string" ? p.scope.slice(0, 8000) : "",
+    }))
+    .filter((p: DecomposePart) => p.title);
+  if (parts.length === 0) return res.status(400).json({ error: "no valid parts" });
+
+  const analysisId = str(body.analysis_id, 64) || null;
+  if (analysisId && !UUID_RE.test(analysisId)) return res.status(400).json({ error: "invalid analysis_id" });
+
+  try {
+    const { children } = await applyDecompose({
+      parentThreadId: req.params.id,
+      orgId: req.org!.id,
+      userId: req.user!.id,
+      analysisId,
+      parts,
+    });
+
+    // Seed the shared board once — on the project ROOT (the top ancestor), and only
+    // if it has no board yet, so a re-run or a second decomposition never clobbers an
+    // existing board. Best-effort: a failure here just means the board starts empty.
+    if (children.length > 0) {
+      const root = await resolveProjectRoot(req.params.id, req.org!.id);
+      if (root && !root.project_board?.trim()) {
+        const seededBoard = [
+          `# לוח הפרויקט: ${root.title?.trim() || "ללא כותרת"}`,
+          "",
+          "## חלקים",
+          ...children.map((c) => `- **${c.title}** — (טרם התחיל)`),
+          "",
+          "## החלטות משותפות",
+          "_(כל חלק רושם כאן החלטות שנוגעות לאחרים)_",
+        ].join("\n");
+        const now = new Date().toISOString();
+        const { error: bErr } = await db
+          .from("claude_threads")
+          .update({ project_board: seededBoard, project_board_updated_at: now, updated_at: now })
+          .eq("id", root.id)
+          .eq("org_id", req.org!.id);
+        if (bErr) console.error("[claude/threads] board seed failed:", bErr.message);
+      }
+    }
+
+    return res.status(201).json({ children });
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * POST /claude/threads/:id/children — open a child chat under this one by hand.
+ *
+ * The "צ'אט-ילד חדש" button: the user names it, and it is linked to this thread as its
+ * parent. It inherits the parent's model/effort/repo/branch/playbook and gets a light
+ * briefing so it knows it is part of the project and that a shared board exists.
+ */
+router.post("/claude/threads/:id/children", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  const orgId = req.org!.id;
+  const { data: parent, error: pErr } = await db
+    .from("claude_threads")
+    .select("id, title, model, effort, repo, git_branch, playbook_id")
+    .eq("id", req.params.id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (pErr) return res.status(500).json({ error: "could not fetch thread" });
+  if (!parent) return res.status(404).json({ error: "thread not found" });
+
+  const title = str(req.body?.title, MAX_TITLE);
+  const briefing = [
+    `אתה חלק מפרויקט שהתחיל בשיחה "${parent.title?.trim() || "ללא כותרת"}".`,
+    "יש לפרויקט לוח משותף שבו כל חלק רושם החלטות והתקדמות; הוא נטען אליך רק כשהמשתמש מבקש במפורש.",
+  ].join("\n");
+
+  const { data: child, error } = await db
+    .from("claude_threads")
+    .insert({
+      org_id: orgId,
+      created_by: req.user!.id,
+      title,
+      title_source: title ? "user" : "auto",
+      model: parent.model,
+      effort: parent.effort,
+      repo: parent.repo,
+      git_branch: parent.git_branch,
+      playbook_id: parent.playbook_id,
+      parent_thread_id: parent.id,
+      seed_context: briefing,
+    })
+    .select(THREAD_COLS)
+    .single();
+  if (error) {
+    console.error("[claude/threads] child insert failed:", error.message);
+    return res.status(500).json({ error: "could not create child" });
+  }
+  return res.status(201).json({ thread: child });
+});
+
+// ── shared project board ─────────────────────────────────────────────────────────
+
+/** GET /claude/threads/:id/board — the shared board, resolved to the project root. */
+router.get("/claude/threads/:id/board", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  const root = await resolveProjectRoot(req.params.id, req.org!.id);
+  if (!root) return res.status(404).json({ error: "thread not found" });
+  return res.json({
+    root_thread_id: root.id,
+    root_title: root.title,
+    body: root.project_board ?? "",
+    updated_at: root.project_board_updated_at,
+  });
+});
+
+/** PUT /claude/threads/:id/board — write the shared board (on the project root). */
+router.put("/claude/threads/:id/board", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  const orgId = req.org!.id;
+  const root = await resolveProjectRoot(req.params.id, orgId);
+  if (!root) return res.status(404).json({ error: "thread not found" });
+
+  const boardBody = typeof req.body?.body === "string" ? req.body.body.slice(0, MAX_BOARD_CHARS) : "";
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from("claude_threads")
+    .update({ project_board: boardBody, project_board_updated_at: now, updated_at: now })
+    .eq("id", root.id)
+    .eq("org_id", orgId)
+    .select("project_board, project_board_updated_at")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "thread not found" });
+  return res.json({ body: data.project_board ?? "", updated_at: data.project_board_updated_at });
+});
+
+/**
+ * POST /claude/threads/:id/board/summarize — append a summary of THIS chat to the
+ * shared board. A subscription run (no paid API tokens): it reads this thread's turns
+ * and writes a short "what this part decided / where it stands" entry, appended under
+ * the board so the other parts can read it on demand.
+ */
+router.post("/claude/threads/:id/board/summarize", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  const orgId = req.org!.id;
+
+  const { data: thread, error: tErr } = await db
+    .from("claude_threads")
+    .select("id, title")
+    .eq("id", req.params.id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (tErr) return res.status(500).json({ error: "could not fetch thread" });
+  if (!thread) return res.status(404).json({ error: "thread not found" });
+
+  const root = await resolveProjectRoot(req.params.id, orgId);
+  if (!root) return res.status(404).json({ error: "thread not found" });
+
+  const { data: turns } = await db
+    .from("claude_runs")
+    .select("turn_index, user_prompt, result_summary")
+    .eq("thread_id", thread.id)
+    .order("turn_index", { ascending: true })
+    .limit(40);
+  const transcript = (turns ?? [])
+    .map((t) => `## תור ${t.turn_index}\nמשתמש: ${(t.user_prompt ?? "").slice(0, 800)}\nקלוד: ${(t.result_summary ?? "").slice(0, 800)}`)
+    .join("\n\n");
+  if (!transcript.trim()) return res.status(400).json({ error: "nothing to summarize yet" });
+
+  const prompt = [
+    "להלן תמליל של שיחה שהיא חלק מפרויקט גדול יותר.",
+    "כתוב סיכום קצר (2-5 שורות) של מה שהחלק הזה החליט ואיפה הוא עומד, כדי שחלקים אחרים",
+    "בפרויקט ידעו את המצב. עברית, ענייני, בלי הקדמה.",
+    "- שמור על קישורים (URL) כלשונם.",
+    "- בלי טקסט חופשי מיותר — רק הסיכום.",
+    "",
+    transcript,
+  ].join("\n");
+
+  let summary = "";
+  try {
+    const raw = await runOneShot(prompt, { timeoutMs: 90_000 });
+    summary = (raw ?? "").trim();
+  } catch (e) {
+    return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+  if (!summary) return res.status(502).json({ error: "no summary produced" });
+
+  // Append under a dated, titled heading so the board reads as a log the other parts
+  // can scan. New York time per CLAUDE.md.
+  const stamp = new Date().toLocaleString("he-IL", {
+    timeZone: "America/New_York",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const entry = `\n\n### ${thread.title?.trim() || "חלק"} — ${stamp}\n${summary}`;
+  const existing = root.project_board ?? "";
+  const next = `${existing}${entry}`.slice(0, MAX_BOARD_CHARS);
+  const now = new Date().toISOString();
+  const { error: uErr } = await db
+    .from("claude_threads")
+    .update({ project_board: next, project_board_updated_at: now, updated_at: now })
+    .eq("id", root.id)
+    .eq("org_id", orgId);
+  if (uErr) return res.status(500).json({ error: uErr.message });
+  return res.json({ body: next, updated_at: now, appended: summary });
 });
 
 // ── topics (grouping) ─────────────────────────────────────────────────────────
