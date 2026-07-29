@@ -187,8 +187,10 @@ export default async function AppLayout({
             </>
           )}
           {/* Inspect mode for the Claude chat ("סמן מקום באפליקציה") — renders
-              nothing until armed, so it is zero chrome and zero cost while idle. */}
-          <ClaudeInspector />
+              nothing until armed, so it is zero chrome and zero cost while idle.
+              Admin-only, matching the /claude routes' requireSuperAdmin gate: for
+              anyone else the capture would land on a screen whose every call 403s. */}
+          {isAdmin && <ClaudeInspector />}
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
       </QueryProvider>

@@ -64,3 +64,25 @@ export async function mintAppAccess(userId: string): Promise<AppAccess | null> {
     return null;
   }
 }
+
+/**
+ * Revoke a minted session once its run ended, so long conversations don't
+ * accumulate live auth sessions (one per turn, each valid ~1h).
+ *
+ * Scope 'local' — ONLY the session behind this JWT. The default ('global') would
+ * revoke every session the user has, logging them out of their own browser
+ * because a chat turn finished. Best-effort: an unrevoked session just expires.
+ */
+export async function revokeAppAccess(token: string): Promise<void> {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceKey) return;
+  try {
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    await admin.auth.admin.signOut(token, "local");
+  } catch {
+    // Expires on its own.
+  }
+}

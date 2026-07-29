@@ -76,7 +76,19 @@ export function ClaudeInspector() {
   useEffect(() => {
     const arm = () => setArmed(true);
     const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && e.shiftKey && (e.code === "KeyC" || e.key.toLowerCase() === "c")) {
+      // Not while typing: on macOS Alt+Shift+C is a real character ("Ç"), and
+      // stealing it from an input would eat the keystroke.
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.isContentEditable ||
+          el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT")
+      ) {
+        return;
+      }
+      if (e.altKey && e.shiftKey && e.code === "KeyC") {
         e.preventDefault();
         setArmed((v) => !v);
       }

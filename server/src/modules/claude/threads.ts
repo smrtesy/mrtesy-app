@@ -519,12 +519,16 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   // But a live turn no longer REFUSES a new message (the old 409): the message is
   // accepted as a 'waiting' turn that sits in line and runs the moment the live
   // turn finishes — typing while Claude works, like Claude Code.
+  // 'waiting' counts as live here on purpose: after a backend restart a waiting
+  // turn can briefly have nothing executing ahead of it, and a new message that
+  // ran immediately would jump the line — the older turn would then resume a
+  // session that already contains the newer exchange, out of order.
   const liveScope = await workspaceScope(thread.id, thread.workspace_thread_id, orgId);
   const { data: live, error: lErr } = await db
     .from("claude_runs")
     .select("id")
     .in("thread_id", liveScope)
-    .in("status", ["queued", "running"])
+    .in("status", ["queued", "running", "waiting"])
     .limit(1);
   if (lErr) return res.status(500).json({ error: "could not check thread state" });
   const hasLive = Boolean(live && live.length > 0);
@@ -684,7 +688,7 @@ export async function dispatchNextWaiting(threadId: string, orgId: string): Prom
     // Oldest waiting turn across the group, by arrival time.
     const { data: next } = await db
       .from("claude_runs")
-      .select("id, thread_id")
+      .select("id, thread_id, turn_index, user_prompt, prompt, created_at")
       .in("thread_id", scope)
       .eq("status", "waiting")
       .order("created_at", { ascending: true })
@@ -692,7 +696,7 @@ export async function dispatchNextWaiting(threadId: string, orgId: string): Prom
       .maybeSingle();
     if (!next) return;
 
-    // The claim. Guarded on status so two dispatchers cannot both execute it.
+    // The claim. Guarded on status so two dispatchers cannot both execute IT.
     const { data: claimed, error: cErr } = await db
       .from("claude_runs")
       .update({ status: "queued", updated_at: new Date().toISOString() })
@@ -700,10 +704,71 @@ export async function dispatchNextWaiting(threadId: string, orgId: string): Prom
       .eq("status", "waiting")
       .select("id")
       .maybeSingle();
-    if (cErr || !claimed) return;
+    if (cErr) return;
+    if (!claimed) {
+      // Lost the row (canceled, or another dispatcher took it) — the queue may
+      // still hold more; try the next one instead of abandoning the line.
+      await dispatchNextWaiting(threadId, orgId);
+      return;
+    }
+
+    // The claim protects the ROW; the invariant is "≤1 live per group". Re-check
+    // now that we hold it: a concurrent dispatcher or sender can have gone live in
+    // the gap between our live check and the claim. Survival is by AGE — the older
+    // run proceeds, the newer one steps back in line — so when two dispatchers
+    // each claim a turn, both apply the same rule and exactly one survives (a
+    // genuinely running turn is always older than a fresh claim, so it always wins).
+    const { data: rivals } = await db
+      .from("claude_runs")
+      .select("id, created_at")
+      .in("thread_id", scope)
+      .in("status", ["queued", "running"])
+      .neq("id", next.id);
+    const olderRival = (rivals ?? []).some(
+      (r) =>
+        r.created_at < next.created_at ||
+        (r.created_at === next.created_at && r.id < next.id),
+    );
+    if (olderRival) {
+      // Guarded on 'queued' so a cancel that landed meanwhile is not resurrected.
+      await db
+        .from("claude_runs")
+        .update({ status: "waiting", updated_at: new Date().toISOString() })
+        .eq("id", next.id)
+        .eq("status", "queued");
+      return;
+    }
+
+    // The turn was composed assuming the run ahead of it would create the engine
+    // session (isFirst=false at insert). If that run died sessionless (spawn
+    // failure, missing token, Stop) THIS is really the thread's first engine turn
+    // — recompose so the standing instructions and the environment preamble ride
+    // along instead of being silently lost. The stored prompt (message + any
+    // board attach) becomes the task text, and the DB history rehydrates what the
+    // dead turn(s) said.
+    const { data: tRow } = await db
+      .from("claude_threads")
+      .select("session_id, playbook_id")
+      .eq("id", next.thread_id)
+      .maybeSingle();
+    if (tRow && !tRow.session_id) {
+      const base = next.prompt?.trim() || next.user_prompt?.trim() || "(ראה את הקבצים המצורפים)";
+      const composed = await composePrompt(orgId, base, tRow.playbook_id);
+      let promptText = composed.prompt;
+      if (next.turn_index > 1) {
+        const history = await buildHistoryPreamble(next.thread_id, next.turn_index);
+        if (history) promptText = `${history}\n\n---\n\n${promptText}`;
+      }
+      const { error: pErr } = await db
+        .from("claude_runs")
+        .update({ prompt: promptText, playbook_id: tRow.playbook_id })
+        .eq("id", next.id);
+      if (pErr) console.error("[claude/threads] recompose failed:", pErr.message);
+    }
 
     await executeRun(next.id);
     await maybeTitle(next.thread_id, orgId).catch(() => {});
+    await maybeAutoSplit(next.thread_id, orgId);
     // Keep draining until the queue is empty.
     await dispatchNextWaiting(next.thread_id, orgId);
   } catch (e) {

@@ -28,7 +28,7 @@ import { db, getAppSecret } from "../../db";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
-import { mintAppAccess } from "./app-access";
+import { mintAppAccess, revokeAppAccess } from "./app-access";
 
 /**
  * Where the subscription token is stored.
@@ -779,6 +779,10 @@ async function executeRunBody(runId: string): Promise<void> {
           4000,
         ),
   });
+
+  // The minted session's run is over — revoke it rather than letting turns pile
+  // up live sessions. Fire-and-forget: the thread update below must not wait on it.
+  if (appAccess) void revokeAppAccess(appAccess.token);
 
   // Carry the engine session onto the THREAD. This is what the next turn resumes
   // into, so without it every message would start a fresh session and the chat
