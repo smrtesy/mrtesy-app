@@ -68,6 +68,15 @@ const ICON: Record<string, string> = {
   img: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="10" r="1.8"/><path d="M21 16l-5-4.5L7 20"/>',
   aud: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/>',
   tool: '<path d="M14.5 5.5a3.5 3.5 0 0 0-4.9 4.4L3 16.5 5.5 19l6.6-6.6a3.5 3.5 0 0 0 4.4-4.9l-2.2 2.2-2-2z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/>',
+  users:
+    '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3.2 2.5-5.3 5.5-5.3s5.5 2.1 5.5 5.3"/><path d="M16 5.1a3.2 3.2 0 0 1 0 6M17.5 20c0-2.7-1.2-4.6-3-5.1"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>',
+  rocket:
+    '<path d="M12 15l-3-3c1-5 4-8 9-9-1 5-4 8-9 9z"/><path d="M9 12H5s.5-2.8 2-3.8c1.3-.9 3.5 0 3.5 0"/><path d="M12 15v4s2.8-.5 3.8-2c.9-1.3 0-3.5 0-3.5"/><path d="M5 16c-1 .8-1.3 3.3-1.3 3.3s2.5-.3 3.3-1.3"/>',
+  flask: '<path d="M9 3h6M10 3v6l-5.2 9A2 2 0 0 0 6.6 21h10.8a2 2 0 0 0 1.8-3L14 9V3"/><path d="M7 15h10"/>',
+  coin:
+    '<circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M14.6 9.3c-.6-.8-1.6-1.3-2.6-1.3-1.5 0-2.6 1-2.6 2.1s1.1 1.8 2.6 2.1 2.6 1 2.6 2.1-1.1 2.1-2.6 2.1c-1 0-2-.5-2.6-1.3"/>',
 };
 
 const ST_META: Record<StudioStatus, { ic: string; tag: string }> = {
@@ -637,86 +646,103 @@ function FocusView({
 }
 
 function Dashboard({ overview }: { overview: StudioOverview }) {
-  const s = computeStats(overview);
-  const cards: { ic: string; cc: string; fig: ReactNode; lab: string; sub: string }[] = [
+  // Headline numbers for the Smart Studio dashboard, per the approved spec
+  // (docs/smart-studio-dashboard-stats.md): one flat grid, two conceptual
+  // groups — what we've invested/built so far, then the plan for the year
+  // ahead. "X / Y" wherever there is a real denominator.
+  //
+  // Data sources: "Models scanned" is LIVE (overview.models_total — the fal
+  // catalog row count). "Research completed" (23) and "Methods built" (30) are
+  // the counts verified against video-lab's research-index.md, kept as
+  // constants until the overview endpoint exposes them. The seven project
+  // figures (hours, team, months, programs, cost, audiences) are hand-set and
+  // have no live source yet — edit them here.
+  const cards: { ic: string; cc: string; fig: ReactNode; lab: string; sub?: string }[] = [
     {
-      ic: "shield",
-      cc: "var(--ok)",
-      fig: (
-        <>
-          {s.complete}
-          <small> / {s.stageCount}</small>
-        </>
-      ),
-      lab: "Stages complete",
-      sub: "Fully settled and locked",
-    },
-    {
-      ic: "trend",
+      ic: "clock",
       cc: "var(--accent)",
       fig: (
         <>
-          {s.overallPct}
-          <small>%</small>
+          {(1360).toLocaleString("en-US")}
+          <small> / {(3400).toLocaleString("en-US")}</small>
         </>
       ),
-      lab: "Overall progress",
-      sub: "Across every build stage",
+      lab: "Hours logged",
+      sub: "Of the full-project estimate",
     },
     {
-      ic: "checklist",
+      ic: "users",
       cc: "#3a63c9",
       fig: (
         <>
-          {s.sumDone}
-          <small> / {s.sumTotal}</small>
+          3<small> / 7</small>
         </>
       ),
-      lab: "Sub-tasks done",
-      sub: "Across all stages",
+      lab: "Team hired",
     },
     {
-      ic: "check",
-      cc: "var(--ok)",
-      fig: (
-        <>
-          {s.chalSolved}
-          <small> / {s.chalTotal}</small>
-        </>
-      ),
-      lab: "Challenges solved",
-      sub: "Mapped problems with an answer",
-    },
-    {
-      ic: "play",
+      ic: "calendar",
       cc: "hsl(44 var(--sat) var(--lit))",
-      fig: s.active,
-      lab: "Active stage",
-      sub: "Where the work is now",
+      fig: 3,
+      lab: "Months in",
+      sub: "Invested so far",
+    },
+    {
+      ic: "rocket",
+      cc: "var(--warn)",
+      fig: "~4",
+      lab: "Months to launch",
+      sub: "Est. until production starts",
     },
     {
       ic: "db",
       cc: "#7a52c9",
       fig: overview.models_total.toLocaleString("en-US"),
-      lab: "Models researched",
-      sub: "AI endpoints indexed",
+      lab: "Models scanned",
+    },
+    {
+      ic: "flask",
+      cc: "var(--ok)",
+      fig: 23,
+      lab: "Research completed",
+      sub: "Across all pipeline stages",
     },
     {
       ic: "tool",
+      cc: "#3a63c9",
+      fig: 30,
+      lab: "Methods built",
+      sub: "How to drive each model",
+    },
+    {
+      ic: "motion",
+      cc: "var(--accent)",
+      fig: 100,
+      lab: "New programs",
+      sub: "Planned in the coming year",
+    },
+    {
+      ic: "coin",
       cc: "var(--warn)",
-      fig: String(s.toolsCount),
-      lab: "Tools in build",
-      sub: s.toolsSub,
+      fig: "$2,000",
+      lab: "Cost per program",
+      sub: "End-to-end, incl. marketing",
+    },
+    {
+      ic: "market",
+      cc: "#7a52c9",
+      fig: 3,
+      lab: "New audiences",
     },
   ];
   return (
     <>
       <div className="ss-panel-head">
         <div className="kick">Dashboard</div>
-        <h2>Pipeline build at a glance</h2>
+        <h2>Smart Studio at a glance</h2>
         <p>
-          How far along we are in planning and building the production pipeline. Pick a stage on the
-          left to open its tasks, challenges and outputs.
+          What we&rsquo;ve invested and built so far, and the plan for the year ahead. Pick a stage
+          on the left to open its tasks, challenges and outputs.
         </p>
       </div>
       <div className="ss-stats">
@@ -727,7 +753,7 @@ function Dashboard({ overview }: { overview: StudioOverview }) {
             </div>
             <div className="fig">{c.fig}</div>
             <div className="lab">{c.lab}</div>
-            <div className="sub">{c.sub}</div>
+            {c.sub && <div className="sub">{c.sub}</div>}
           </div>
         ))}
       </div>
