@@ -376,83 +376,75 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
         <nav className="flex-1 overflow-y-auto p-3">
           {hasSmrtTask && (
-            <>
-              <AppSectionHeader app={APPS.smrttask} />
+            <AppNavGroup app={APPS.smrttask}>
               {visibleSmrtTaskItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtPlan && (
-            <>
-              <AppSectionHeader app={APPS.smrtplan} />
+            <AppNavGroup app={APPS.smrtplan}>
               {smrtPlanItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtStudio && (
-            <>
-              <AppSectionHeader app={APPS.smrtstudio} />
+            <AppNavGroup app={APPS.smrtstudio}>
               {smrtStudioItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtCrm && (
-            <>
-              <AppSectionHeader app={APPS.smrtcrm} />
+            <AppNavGroup app={APPS.smrtcrm}>
               {smrtCrmItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtReach && (
-            <>
-              <AppSectionHeader app={APPS.smrtreach} />
+            <AppNavGroup app={APPS.smrtreach}>
               {smrtReachItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtBot && (
-            <>
-              <AppSectionHeader app={APPS.smrtbot} />
+            <AppNavGroup app={APPS.smrtbot}>
               {smrtBotItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtVault && (
-            <>
-              <AppSectionHeader app={APPS.smrtvault} />
+            <AppNavGroup app={APPS.smrtvault}>
               {smrtVaultItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           {hasSmrtInfo && (
-            <>
-              <AppSectionHeader app={APPS.smrtinfo} />
+            <AppNavGroup app={APPS.smrtinfo}>
               {smrtInfoItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
-            </>
+            </AppNavGroup>
           )}
 
           <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
@@ -659,6 +651,21 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
         }}
       />
     </>
+  );
+}
+
+/** Wraps one app's section (header + its nav items) with a continuous thin
+ *  accent rail down the inline-start edge, tinted with the app's color. The
+ *  rail runs the full height of the group so every item reads as part of the
+ *  category; the inter-section gap is a `mt-4` margin OUTSIDE the rail so
+ *  adjacent categories stay visually separate. `first:mt-0` drops the gap on
+ *  whichever group renders first. */
+function AppNavGroup({ app, children }: { app: AppDef; children: React.ReactNode }) {
+  return (
+    <div className="mt-4 border-s-2 ps-1 first:mt-0" style={{ borderColor: app.color }}>
+      <AppSectionHeader app={app} className="!pt-1" />
+      {children}
+    </div>
   );
 }
 
