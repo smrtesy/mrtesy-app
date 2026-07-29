@@ -348,7 +348,7 @@ export function PlanEffortDetail({
             {title}
           </h2>
           <p className="mb-1 mt-0.5 text-[12.5px] text-muted-foreground">
-            {plan.goal ? `${plan.goal} · ` : ""}
+            {(() => { const g = locale === "en" ? plan.goal_en || plan.goal : plan.goal; return g ? `${g} · ` : ""; })()}
             {plan.start_date && plan.end_date
               ? `${gregShort(parseISO(plan.start_date))}–${gregShort(parseISO(plan.end_date))} · `
               : ""}

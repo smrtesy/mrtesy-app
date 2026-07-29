@@ -52,6 +52,17 @@ function planTitle(p: Plan, locale: string): string {
   return locale === "en" ? p.title_en || p.title_he : p.title_he;
 }
 
+function planGoal(p: Plan, locale: string): string | null {
+  return locale === "en" ? p.goal_en || p.goal : p.goal;
+}
+
+/** Localized board section header. The grouping key stays `group_label`; this
+ *  only picks the English header when one is set on any plan in the group. */
+function sectionLabel(rows: Plan[], fallback: string, locale: string): string {
+  if (locale !== "en") return fallback;
+  return rows.find((r) => r.group_label_en)?.group_label_en || fallback;
+}
+
 /** Interim health fallback when the engine hasn't filled plan.health yet. */
 function fallbackHealth(p: Plan, today: Date): Health {
   if (p.start_date && today < parseISO(p.start_date)) return "waiting";
@@ -894,7 +905,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
           <div className="space-y-4 md:hidden">
             {groups.map(([label, rows]) => (
               <div key={label}>
-                <p className="mb-1.5 px-1 text-[12px] font-bold text-foreground/80">{label}</p>
+                <p className="mb-1.5 px-1 text-[12px] font-bold text-foreground/80">{sectionLabel(rows, label, locale)}</p>
                 <div className="space-y-2">
                   {rows.map((p) => {
                     const h = healthOf(p, today);
@@ -931,7 +942,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                           </div>
                         )}
                         <div className="mt-1.5 flex items-center justify-between gap-2 text-[11.5px] text-muted-foreground">
-                          <span className="truncate">{p.goal}</span>
+                          <span className="truncate">{planGoal(p, locale)}</span>
                           {due && (
                             <span className="whitespace-nowrap">
                               {countdownText(due, t, today)} · {gregShort(parseISO(due))} · {hebDate(parseISO(due))}
@@ -986,7 +997,7 @@ export function PlanBoardClient({ locale }: { locale: string }) {
             {groups.map(([label, rows]) => (
               <div key={label}>
                 <div className="flex h-[30px] items-center bg-secondary px-3 text-[12px] font-bold text-foreground/80">
-                  {label}
+                  {sectionLabel(rows, label, locale)}
                 </div>
                 {rows.map((p) => {
                   const h = healthOf(p, today);
@@ -1320,9 +1331,10 @@ export function PlanBoardClient({ locale }: { locale: string }) {
                               className="pointer-events-none absolute top-[22px] flex h-[18px] items-center whitespace-nowrap px-2 text-[11px] font-medium"
                               style={{ insetInlineStart: barStart, color: p.color || "#534AB7" }}
                             >
-                              {isStream
-                                ? p.goal || ""
-                                : `${p.goal || ""}${p.goal ? "  ·  " : ""}${Math.round(progress * 100)}%`}
+                              {(() => {
+                                const g = planGoal(p, locale) || "";
+                                return isStream ? g : `${g}${g ? "  ·  " : ""}${Math.round(progress * 100)}%`;
+                              })()}
                             </div>
                           </>
                         )}

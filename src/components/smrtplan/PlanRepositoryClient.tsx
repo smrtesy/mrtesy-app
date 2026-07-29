@@ -116,7 +116,7 @@ export function PlanRepositoryClient({ locale }: { locale: string }) {
                       {t(`kind.${p.kind}`)}
                     </span>
                   </div>
-                  {p.goal && <p className="mt-1 text-[12.5px] text-muted-foreground">{p.goal}</p>}
+                  {(() => { const g = locale === "en" ? p.goal_en || p.goal : p.goal; return g ? <p className="mt-1 text-[12.5px] text-muted-foreground">{g}</p> : null; })()}
                 </div>
                 {/* Quiet icon + one action, per the compact-UI rule: settings for
                     configuring in place, promote for putting it on the board. */}

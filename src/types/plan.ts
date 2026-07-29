@@ -21,8 +21,13 @@ export interface Plan {
   title_he: string;
   title_en: string | null;
   goal: string | null;
+  /** English goal (display slot). Falls back to `goal` when null. */
+  goal_en: string | null;
   kind: PlanKind;
   group_label: string | null;
+  /** English section-header label. `group_label` stays the grouping key;
+   *  this only localizes the displayed header (falls back to group_label). */
+  group_label_en: string | null;
   /** ISO date. null => the plan lives in the repository (off the timeline). */
   start_date: string | null;
   end_date: string | null;
