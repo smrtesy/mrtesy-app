@@ -203,8 +203,13 @@ function gitAuthEnv(token: string): NodeJS.ProcessEnv {
     SMRTESY_GH_TOKEN: token,
     // !f(){...};f is git's own convention for an inline shell credential helper.
     // It prints the credential on stdout; git never stores it.
+    //
+    // Scoped to github.com, NOT a bare `credential.helper`: a global helper hands the
+    // token to git for ANY https host, so a turn that cloned `https://elsewhere/…`
+    // would leak it. Every turn now carries this env (a turn can clone on demand), so
+    // the scope matters — a per-host key presents the token only to github.com.
     GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
     GIT_CONFIG_VALUE_0:
       '!f() { echo username=x-access-token; echo "password=$SMRTESY_GH_TOKEN"; }; f',
   };
