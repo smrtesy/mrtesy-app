@@ -4418,6 +4418,7 @@
   "claudeChat": {
     "placeholder": "Describe a task or ask a question",
     "send": "Send",
+    "queueSend": "Send — queues and runs when the current turn finishes",
     "stop": "Stop",
     "stopped": "Turn stopped",
     "attach": "Attach a file",
@@ -4477,6 +4478,27 @@
       "now": "Group now",
       "done": "Grouping updated",
       "none": "No topic"
+    },
+    "usage": {
+      "tokens": "tokens",
+      "tooltip": "Tokens in this conversation — input: {input} · output: {output}"
+    },
+    "queue": {
+      "waiting": "Waiting in line — runs when the current turn finishes",
+      "remove": "Remove from queue"
+    },
+    "inspect": {
+      "arm": "Mark a place in the app (Alt+Shift+C)",
+      "banner": "Inspect mode: click the problem component — Esc to cancel",
+      "cancel": "Cancel inspect",
+      "seedHeader": "I marked a place in the app (inspect mode). Captured details:",
+      "seedRoute": "Screen (route)",
+      "seedElement": "Element",
+      "seedText": "Visible text",
+      "seedFrame": "Embedded screen URL (iframe)",
+      "seedChain": "Component chain",
+      "seedTask": "Locate this component in the app's code (the repo is already selected for this chat), understand what happens there, and address the problem I describe.",
+      "seedProblem": "The problem:"
     },
     "decompose": {
       "title": "Break into parts",

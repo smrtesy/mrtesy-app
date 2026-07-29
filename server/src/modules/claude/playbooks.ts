@@ -546,6 +546,31 @@ export async function composePrompt(
   envLines.push(
     "- תיקיית העבודה שלך נשמרת לאורך כל השיחה — לכן קובץ ששכפלת או ערכת בתור אחד קיים בתור הבא.",
   );
+
+  // App API access — whether the run will actually carry a token is decided at
+  // spawn time (runner.ts mints one per turn, best-effort), so the instruction is
+  // phrased against the environment variables themselves: present means usable.
+  envLines.push(
+    "",
+    "## גישה לאפליקציה עצמה (שימוש רגיל, כמו משתמש)",
+    "",
+    "- אם מוגדרים בסביבה `SMRTESY_API_URL` + `SMRTESY_API_TOKEN` (בדוק עם `env | grep SMRTESY`), " +
+      "יש לך סשן אמיתי וקצר-מועד של המשתמש שפתח את הצ'אט. אתה יכול לקרוא ל-API של הפלטפורמה " +
+      "בדיוק כמו שהפרונטאנד קורא לו:",
+    "  `curl -sS \"$SMRTESY_API_URL/api/<route>\" -H \"Authorization: Bearer $SMRTESY_API_TOKEN\" -H \"X-Org-Id: $SMRTESY_ORG_ID\"`",
+    "- זה מיועד לבדיקה אמיתית של התנהגות: לקרוא נתונים, להריץ פעולה, ולראות מה באמת חוזר — " +
+      "במקום להסיק מהקוד בלבד. הטוקן מתחדש בכל תור, אז הוא תמיד בתוקף בזמן שאתה רץ.",
+    "- זהירות: הקריאות פועלות על נתוני אמת של המשתמש. פעולות קריאה — חופשי; פעולות שכותבות או " +
+      "מוחקות — רק אם המשתמש ביקש זאת במפורש בצ'אט.",
+    "",
+    "## כשהמשתמש מסמן מקום באפליקציה",
+    "",
+    "- למשתמש יש 'מצב סימון': הוא לוחץ על רכיב במסך, וההודעה שתקבל תכיל את הנתיב (route), " +
+      "תיאור הרכיב (תגית, מחלקות CSS, טקסט) ושרשרת האבות שלו.",
+    "- כשמגיעה הודעה כזו: שכפל את ריפו האפליקציה (אם לא משוכפל), אתר את הקומפוננטה לפי " +
+      "הטקסט/המחלקות/הנתיב (חיפוש בקוד — המסכים תחת `src/app` והקומפוננטות תחת `src/components`), " +
+      "הבן מה קורה שם, ותקן או הסבר לפי מה שהמשתמש ביקש.",
+  );
   parts.push(envLines.join("\n"));
 
   const { data: standing, error: sErr } = await db
