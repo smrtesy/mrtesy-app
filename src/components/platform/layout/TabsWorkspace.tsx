@@ -263,7 +263,7 @@ export function TabsWorkspace() {
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
                 <div className="flex rotate-90 items-center gap-2 whitespace-nowrap">
                   {RailIcon && <RailIcon className="h-4 w-4 flex-none" />}
-                  <span className="select-none text-2xl font-medium">{tab.label}</span>
+                  <span className="select-none text-lg font-medium">{tab.label}</span>
                 </div>
               </div>
             </div>
