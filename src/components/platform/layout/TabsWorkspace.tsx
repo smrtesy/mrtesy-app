@@ -9,6 +9,8 @@ import {
   type PaneWidths,
   type WorkspaceTab,
 } from "@/contexts/TabsWorkspaceContext";
+import { stripLocale } from "@/lib/panes/nav";
+import { navIconFor } from "@/lib/panes/route-label";
 
 import { PaneHost } from "./PaneHost";
 
@@ -219,8 +221,11 @@ export function TabsWorkspace() {
   return (
     <div className="flex h-[calc(100dvh_-_var(--wc-bar-h,0px))] w-full overflow-x-auto">
       {visibleTabs.map((tab, i) => {
-        // A parked tab renders as a narrow rail: title only, click to expand.
+        // A parked tab renders as a narrow rail: a vertical title (with the
+        // section icon at the start of the line), click to expand.
         if (isRail(tab)) {
+          const path = tab.href.split("?")[0].split("#")[0];
+          const RailIcon = navIconFor(stripLocale(path));
           return (
             <div
               key={tab.id}
@@ -240,20 +245,27 @@ export function TabsWorkspace() {
               title={tab.label}
               aria-label={t("expandPaneNamed", { label: tab.label })}
               style={{ flex: `0 0 ${RAIL_PX}px`, width: RAIL_PX }}
-              className="group/rail relative flex h-full cursor-pointer flex-col items-center border-e bg-muted/30 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+              className="group/rail relative flex h-full cursor-pointer flex-col items-stretch border-e bg-muted/30 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
             >
+              {/* Close — hidden until the rail is hovered (always on touch). */}
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
                 aria-label={t("close")}
                 title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
-                className="mt-1 inline-flex h-6 w-6 flex-none items-center justify-center rounded-md text-muted-foreground/70 opacity-100 transition-opacity hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover/rail:opacity-100"
+                className="absolute inset-x-0 top-1 z-10 mx-auto inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/70 opacity-100 transition-opacity hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover/rail:opacity-100"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
-              <span className="mt-1 min-h-0 flex-1 select-none overflow-hidden text-ellipsis whitespace-nowrap text-xs font-medium [writing-mode:vertical-rl]">
-                {tab.label}
-              </span>
+              {/* Icon + title rotated 90° clockwise: English reads top-to-bottom,
+                  Hebrew bottom-to-top, and the leading icon lands at the start of
+                  the line in both (the flex row follows the page direction). */}
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+                <div className="flex rotate-90 items-center gap-2 whitespace-nowrap">
+                  {RailIcon && <RailIcon className="h-4 w-4 flex-none" />}
+                  <span className="select-none text-2xl font-medium">{tab.label}</span>
+                </div>
+              </div>
             </div>
           );
         }
@@ -276,7 +288,7 @@ export function TabsWorkspace() {
               {/* No header row — the tab name is dropped (redundant) and closing
                   is a floating X on the pane itself. min-h-0 lets the body scroll
                   internally (iframes are never pushed back). */}
-              <div className="group relative min-h-0 flex-1">
+              <div className="relative min-h-0 flex-1">
                 <PaneHost tab={tab} />
                 {/* Inactive panes are previews: an overlay swallows clicks and
                     focuses the pane instead of interacting with the iframe. */}
@@ -288,16 +300,18 @@ export function TabsWorkspace() {
                     className="absolute inset-0 z-[60] cursor-pointer bg-transparent"
                   />
                 )}
-                {/* Floating controls — top-left, above the focus overlay (z-70) so
-                    they work on inactive panes too; hover-reveal on desktop, always
-                    on touch. Maximize stays visible while solo: it is the way back. */}
-                <div className="absolute left-2 top-2 z-[70] flex items-center gap-1">
+                {/* Floating controls — top-start corner, above the focus overlay
+                    (z-70) so they work on inactive panes too. Hidden even on the
+                    active pane; revealed only when the pointer enters this corner
+                    zone (group/ctl). Always visible on touch, where there is no
+                    hover. Maximize stays visible while solo: it is the way back. */}
+                <div className="group/ctl absolute left-0 top-0 z-[70] flex items-center gap-1 p-2">
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
                     aria-label={t("close")}
                     title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover/ctl:opacity-100"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -309,7 +323,7 @@ export function TabsWorkspace() {
                       onClick={(e) => { e.stopPropagation(); collapseTab(tab.id); }}
                       aria-label={t("collapsePane")}
                       title={t("collapsePane")}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover/ctl:opacity-100"
                     >
                       <CollapseIcon className="h-4 w-4" />
                     </button>
@@ -324,7 +338,7 @@ export function TabsWorkspace() {
                     title={solo ? t("restorePane") : t("maximizePane")}
                     className={cn(
                       "inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground",
-                      solo ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100",
+                      solo ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover/ctl:opacity-100",
                     )}
                   >
                     {solo ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
