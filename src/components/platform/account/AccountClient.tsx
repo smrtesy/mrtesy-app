@@ -147,14 +147,34 @@ export function AccountClient() {
 
   async function switchLanguage() {
     const newLocale = locale === "he" ? "en" : "he";
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase
-        .from("user_settings")
-        .update({ preferred_language: newLocale })
-        .eq("user_id", user.id);
+    // Persist through the backend (service-role) so the write can't be silently
+    // dropped by RLS, and surface a failure instead of navigating on a no-op.
+    try {
+      await api("/api/me/settings", {
+        method: "PATCH",
+        body: { preferred_language: newLocale },
+        noOrg: true,
+      });
+    } catch (e) {
+      // On an expired session api() already redirects to login; don't flash a
+      // failure toast on top of that redirect.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        toast.error(t("languageSaveFailed"));
+      }
+      return;
     }
-    router.push(`/${newLocale}/account`);
+    // Keep the middleware's fast-path cookie in sync with the saved preference.
+    // The middleware trusts smrt_lang_pref for prefix-less entry URLs and skips
+    // the DB lookup whenever it's present (src/middleware.ts:118-130), so a stale
+    // value would keep bouncing the user back to the old language for up to 24h.
+    document.cookie = `smrt_lang_pref=${newLocale}; path=/; max-age=${60 * 60 * 24}; SameSite=Lax`;
+    // The account screen is not in the panes registry, so it renders inside the
+    // tabs-workspace iframe pane. A next/navigation router.push would re-locale
+    // only that inner iframe — the app shell and the address bar stay on the old
+    // locale, so nothing visibly changes and a refresh (which reloads the TOP
+    // window) reverts. Drive the TOP window so the whole app reloads in the new
+    // locale.
+    navigateTop(`/${newLocale}/account`);
   }
 
   return (
