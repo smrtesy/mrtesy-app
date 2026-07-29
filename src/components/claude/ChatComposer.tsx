@@ -62,6 +62,8 @@ export function ChatComposer({
   threadId,
   ensureThread,
   busy,
+  running,
+  seedText,
   onSend,
   onStop,
   models,
@@ -80,8 +82,17 @@ export function ChatComposer({
    *  would mean you cannot open a conversation WITH a screenshot, which is one of
    *  the most common ways to start one. */
   ensureThread: () => Promise<string | null>;
-  /** A turn is in flight — Send becomes Stop. */
+  /** A send round-trip is in flight — the ONLY state that blocks sending (it
+   *  prevents a double-submit of the same text). */
   busy: boolean;
+  /** A turn is actually executing. Sending stays OPEN (the message queues behind
+   *  the live turn, like typing in Claude Code mid-run) — this only adds the Stop
+   *  button beside Send. */
+  running: boolean;
+  /** Prefills the input once (the inspect-mode seed). The user completes the
+   *  message and sends; typing afterwards is theirs, so it is applied only while
+   *  the input is empty. */
+  seedText?: string | null;
   onSend: (message: string, attachmentIds: string[]) => Promise<void> | void;
   onStop: () => void;
   /** Model + effort live in the toolbar under the input, like Claude Code, so the
@@ -102,6 +113,14 @@ export function ChatComposer({
   const [uploading, setUploading] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  // The inspect-mode seed lands in the input ready to complete. Only while the
+  // input is empty — a seed must never overwrite something the user typed.
+  useEffect(() => {
+    if (!seedText) return;
+    setText((current) => current.trim() ? current : seedText);
+    areaRef.current?.focus();
+  }, [seedText]);
 
   // Grow with the content between a tall floor and a ceiling, then scroll — so
   // everything typed stays visible, but the box can't push the conversation off the
@@ -296,7 +315,10 @@ export function ChatComposer({
               onText={(v) => setText((p) => (p.trim() ? `${p.trim()} ${v}` : v))}
             />
 
-            {busy ? (
+            {/* Stop appears BESIDE Send while a turn runs — it does not replace it.
+                Sending mid-run queues the message behind the live turn (like typing
+                in Claude Code), so both actions stay one click away. */}
+            {running && (
               <Button
                 type="button"
                 size="sm"
@@ -308,19 +330,18 @@ export function ChatComposer({
               >
                 <Square className="size-4" />
               </Button>
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                className={cn("h-8 w-8 p-0")}
-                disabled={!canSend}
-                onClick={() => void send()}
-                aria-label={t("send")}
-                title={t("send")}
-              >
-                <Send className="size-4" />
-              </Button>
             )}
+            <Button
+              type="button"
+              size="sm"
+              className={cn("h-8 w-8 p-0")}
+              disabled={!canSend}
+              onClick={() => void send()}
+              aria-label={running ? t("queueSend") : t("send")}
+              title={running ? t("queueSend") : t("send")}
+            >
+              <Send className="size-4" />
+            </Button>
           </div>
         </div>
       </div>

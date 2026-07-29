@@ -16,6 +16,7 @@ import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 import { PullToRefresh } from "@/components/platform/pwa/PullToRefresh";
+import { ClaudeInspector } from "@/components/claude/ClaudeInspector";
 
 export default async function AppLayout({
   children,
@@ -185,6 +186,9 @@ export default async function AppLayout({
               <WhatsAppPanelFab />
             </>
           )}
+          {/* Inspect mode for the Claude chat ("סמן מקום באפליקציה") — renders
+              nothing until armed, so it is zero chrome and zero cost while idle. */}
+          <ClaudeInspector />
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
       </QueryProvider>

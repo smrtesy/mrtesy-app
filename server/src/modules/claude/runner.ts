@@ -28,6 +28,7 @@ import { db, getAppSecret } from "../../db";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
+import { mintAppAccess } from "./app-access";
 
 /**
  * Where the subscription token is stored.
@@ -298,7 +299,7 @@ export async function executeRun(runId: string): Promise<void> {
 async function executeRunBody(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id")
+    .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id, created_by, org_id")
     .eq("id", runId)
     .maybeSingle();
 
@@ -457,6 +458,17 @@ async function executeRunBody(runId: string): Promise<void> {
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
+  // App access — a real short-lived session for the launching user, minted fresh
+  // per turn, so the run can call the platform's own API the way the frontend does
+  // (the env preamble in composePrompt tells it how). Best-effort: a mint failure
+  // just leaves the variables unset, and the run works as before.
+  const appAccess = run.created_by ? await mintAppAccess(run.created_by) : null;
+  if (appAccess) {
+    env.SMRTESY_API_URL = appAccess.url;
+    env.SMRTESY_API_TOKEN = appAccess.token;
+    if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
+  }
+
   // Attachments: downloaded into the working directory, then named in the prompt.
   // The engine reads files by path (its Read tool handles images too) — the CLI's
   // --file flag is for Anthropic Files API ids, NOT local paths, so pointing at
@@ -542,10 +554,13 @@ async function executeRunBody(runId: string): Promise<void> {
     // this on a failed push), and these rows are the permanent transcript — so the
     // token is scrubbed from text AND payload before anything is stored. Done on
     // the serialized batch because the token is alphanumeric and cannot survive
-    // JSON escaping in a different form.
-    if (ghToken) {
+    // JSON escaping in a different form. The app-access token gets the same
+    // treatment: a run that echoes its environment must not persist a live session.
+    if (ghToken || appAccess) {
       try {
-        batch = JSON.parse(redact(JSON.stringify(batch), ghToken)) as unknown[];
+        batch = JSON.parse(
+          redact(redact(JSON.stringify(batch), ghToken), appAccess?.token ?? null),
+        ) as unknown[];
       } catch {
         // Unserializable batch: fall through with the mapped rows rather than
         // dropping the events entirely.
@@ -745,7 +760,9 @@ async function executeRunBody(runId: string): Promise<void> {
     // Corrected here rather than trusting the value written before the spawn: if the
     // fallback fired, this turn resumed nothing, and the row must say so.
     resumed_session: effectiveResume,
-    result_summary: truncate(lastResult === null ? null : redact(lastResult, ghToken)),
+    result_summary: truncate(
+      lastResult === null ? null : redact(redact(lastResult, ghToken), appAccess?.token ?? null),
+    ),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
@@ -753,8 +770,11 @@ async function executeRunBody(runId: string): Promise<void> {
       ? null
       : truncate(
           redact(
-            `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
-            ghToken,
+            redact(
+              `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
+              ghToken,
+            ),
+            appAccess?.token ?? null,
           ),
           4000,
         ),
