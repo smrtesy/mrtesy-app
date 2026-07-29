@@ -8,10 +8,14 @@
  * The runner clones the chosen repo into a temporary workspace, so the run reads
  * and edits real files.
  *
- * The list is fetched on demand (first open), not on mount: it is a GitHub API call
- * and most runs don't need a repo at all. When no token is configured the component
- * says exactly where to put one — the key name and the screen — instead of failing
- * with "not connected".
+ * The full list is shown OPEN by default (the user's request: "כברירת מחדל כל
+ * הריפו מופיעים" — like picking a repo in Claude Code on the web): the moment the
+ * settings panel renders this component and a token is connected, every repo the
+ * token reaches is listed, newest push first, with the search box to narrow. The
+ * component itself only mounts when the settings panel opens, so the GitHub API
+ * call still happens on demand, not on every screen load. When no token is
+ * configured the component says exactly where to put one — the key name and the
+ * screen — instead of failing with "not connected".
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -44,7 +48,7 @@ export function RepoPicker({
   onChange: (next: { repo: string | null; branch: string | null }) => void;
 }) {
   const t = useTranslations("claudeRuns.github");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [secretLocation, setSecretLocation] = useState("/admin/apps/smrttask/secrets");
   const [repos, setRepos] = useState<Repo[] | null>(null);
@@ -76,6 +80,14 @@ export function RepoPicker({
       setLoading(false);
     }
   }, []);
+
+  // All repos appear by default: as soon as the token is confirmed connected,
+  // fetch the list once — no extra click needed to see what can be picked.
+  useEffect(() => {
+    // Re-entry safe: `loading` blocks a second call mid-fetch, and loadRepos
+    // always leaves `repos` non-null (an error sets []), so it fires once.
+    if (connected && repos === null && !loading) void loadRepos();
+  }, [connected, repos, loading, loadRepos]);
 
   function toggle() {
     const next = !open;
