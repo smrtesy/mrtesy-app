@@ -245,7 +245,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
             <input
               type="file"
               multiple
-              accept="audio/wav,audio/mpeg,audio/mp4"
+              accept="audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/m4a,audio/aac,audio/ogg,audio/flac,.wav,.mp3,.m4a,.aac,.ogg,.flac"
               onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
               disabled={running}
               className="block w-full text-sm file:me-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-secondary file:text-secondary-foreground"
