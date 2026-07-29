@@ -41,7 +41,6 @@ const NAV_LABEL_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["/studio", "studio"],
   ["/studio/models", "studioModels"],
   ["/studio/research", "studioResearch"],
-  ["/studio/investor", "studioInvestor"],
   ["/claude", "claude"],
   ["/settings", "settings"],
   ["/transcription-experiment", "transcriptionExperiment"],

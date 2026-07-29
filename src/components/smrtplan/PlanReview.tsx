@@ -17,8 +17,10 @@ interface ReviewTask {
   due_date: string | null;
   is_decision: boolean;
   description: string | null;
+  description_he: string | null;
   checklist: ChecklistItem[] | null;
   definition_of_done: string | null;
+  definition_of_done_he: string | null;
   note: string;
 }
 
@@ -28,8 +30,16 @@ interface ReviewTask {
 function hasHebrew(s: string | null | undefined): boolean {
   return !!s && /[֐-׿]/.test(s);
 }
-function displayTitle(t: ReviewTask): string {
-  return t.title_he || t.title || "";
+/** Locale-driven pickers, mirroring the title rule elsewhere in smrtPlan:
+ *  English shows the base column, Hebrew shows the `_he` slot (falling back). */
+function displayTitle(t: ReviewTask, locale: string): string {
+  return (locale === "en" ? t.title : t.title_he || t.title) || "";
+}
+function displayDesc(t: ReviewTask, locale: string): string | null {
+  return locale === "en" ? t.description : t.description_he || t.description;
+}
+function displayDod(t: ReviewTask, locale: string): string | null {
+  return locale === "en" ? t.definition_of_done : t.definition_of_done_he || t.definition_of_done;
 }
 function csvCell(v: string): string {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -92,7 +102,7 @@ export function PlanReview({
     const header = [t("csvNum"), t("csvTask"), t("csvAssignee"), t("csvDue"), t("csvNote"), "task_id"];
     const rows = tasks.map((task, i) => [
       String(i + 1),
-      displayTitle(task),
+      displayTitle(task, locale),
       task.assignee_name ?? "",
       task.due_date ? gregShort(parseISO(task.due_date)) : "",
       task.note ?? "",
@@ -141,7 +151,9 @@ export function PlanReview({
         <div className="space-y-1.5">
           {tasks.map((task, i) => {
             const open = openId === task.id;
-            const he = hasHebrew(task.description) || hasHebrew(displayTitle(task));
+            const desc = displayDesc(task, locale);
+            const dod = displayDod(task, locale);
+            const he = hasHebrew(desc) || hasHebrew(displayTitle(task, locale));
             const dirCls = he ? "text-right" : "text-left";
             const dir = he ? "rtl" : "ltr";
             const editing = editId === task.id;
@@ -155,7 +167,7 @@ export function PlanReview({
                   <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-secondary text-[10.5px] font-bold text-muted-foreground">
                     {i + 1}
                   </span>
-                  <span className="flex-1 truncate text-[12.5px] font-medium">{displayTitle(task)}</span>
+                  <span className="flex-1 truncate text-[12.5px] font-medium">{displayTitle(task, locale)}</span>
                   {task.note.trim() && (
                     <span className="whitespace-nowrap rounded bg-status-warn-bg px-1.5 py-px text-[10px] font-bold text-status-warn">
                       {t("hasNote")}
@@ -178,8 +190,8 @@ export function PlanReview({
                 {/* ── expanded: full text + note ── */}
                 {open && (
                   <div className="border-t px-3 py-3" dir={dir}>
-                    {task.description && (
-                      <p className={`whitespace-pre-wrap text-[12.5px] leading-relaxed ${dirCls}`}>{task.description}</p>
+                    {desc && (
+                      <p className={`whitespace-pre-wrap text-[12.5px] leading-relaxed ${dirCls}`}>{desc}</p>
                     )}
 
                     {Array.isArray(task.checklist) && task.checklist.length > 0 && (
@@ -195,10 +207,10 @@ export function PlanReview({
                       </ul>
                     )}
 
-                    {task.definition_of_done && (
+                    {dod && (
                       <div className="mt-3 rounded-md bg-status-ok-bg px-2.5 py-2 text-[11.5px] leading-relaxed">
                         <span className="font-bold text-status-ok">{t("doneWhen")}: </span>
-                        {task.definition_of_done}
+                        {dod}
                       </div>
                     )}
 
