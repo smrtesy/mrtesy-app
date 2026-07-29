@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { OrgSwitcher } from "@/components/platform/layout/OrgSwitcher";
 import { NotificationSettings } from "@/components/pwa/NotificationSettings";
 import {
-  LogOut, Mail, FolderOpen, MessageCircle, Calendar,
+  LogOut, Mail, FolderOpen, MessageCircle, Calendar, Smartphone,
   CheckCircle2, XCircle, RefreshCw, Globe,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ interface ConnectionStatus {
   drive: boolean;
   calendar: boolean;
   whatsapp: boolean;
+  sms: boolean;
 }
 
 const connections = [
@@ -37,6 +38,7 @@ const connections = [
   { key: "drive" as keyof ConnectionStatus, label: "Google Drive", icon: FolderOpen, color: "text-status-ok" },
   { key: "calendar" as keyof ConnectionStatus, label: "Calendar", icon: Calendar, color: "text-primary" },
   { key: "whatsapp" as keyof ConnectionStatus, label: "WhatsApp", icon: MessageCircle, color: "text-status-ok" },
+  { key: "sms" as keyof ConnectionStatus, label: "SMS", icon: Smartphone, color: "text-primary" },
 ] as const;
 
 export function AccountClient() {
@@ -58,7 +60,7 @@ export function AccountClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>({
-    gmail: false, drive: false, calendar: false, whatsapp: false,
+    gmail: false, drive: false, calendar: false, whatsapp: false, sms: false,
   });
   const [userEmail, setUserEmail] = useState<string>("");
   const [userName, setUserName] = useState<string>("");
@@ -109,11 +111,25 @@ export function AccountClient() {
         }
       }
 
+      // SMS is "connected" when at least one registered device has no
+      // disconnected_at — mirrors SmsDeviceManager's active-device filter.
+      // Best-effort: a failure here must not blank out the other indicators.
+      let smsConnected = false;
+      try {
+        const sms = await api<{ connections: { disconnected_at: string | null }[] }>(
+          "/api/sms/connections",
+        );
+        smsConnected = (sms.connections ?? []).some((c) => !c.disconnected_at);
+      } catch {
+        /* leave sms=false when the probe fails (no org / 401 / network) */
+      }
+
       setConnStatus({
         gmail: serviceTypes.includes("gmail"),
         drive: serviceTypes.includes("google_drive"),
         calendar: serviceTypes.includes("google_calendar"),
         whatsapp: data?.whatsapp_connected ?? false,
+        sms: smsConnected,
       });
     }
     load();
@@ -252,10 +268,15 @@ export function AccountClient() {
                               drive: "drive",
                               calendar: "gmail_calendar",
                               whatsapp: "",
+                              sms: "",
                             };
                             const svc = serviceMap[conn.key];
                             if (conn.key === "whatsapp") {
                               navigateTop(`/${locale}/onboarding/whatsapp?redirect=account`);
+                            } else if (conn.key === "sms") {
+                              // SMS has no OAuth — the user registers a phone/device on
+                              // the SMS devices settings screen (SmsDeviceManager).
+                              navigateTop(`/${locale}/settings/apps/smrttask/sms`);
                             } else if (svc) {
                               navigateTop(`/api/auth/google?service=${svc}&redirect=account`);
                             }
