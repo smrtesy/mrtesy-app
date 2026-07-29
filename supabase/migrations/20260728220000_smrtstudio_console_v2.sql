@@ -316,6 +316,7 @@ cross join (values
  ('voice',0,'audio','Voice panel','blind takes','https://github.com/smrtesy/video-lab/blob/main/docs/panels/voice-panel-01-readback.md'),
  ('voice',1,'text','Voice-model memo','done','https://github.com/smrtesy/video-lab/blob/main/docs/models/voice-memo.md'),
  ('voice',2,'text','Havara playbook','draft','https://github.com/smrtesy/video-lab/blob/main/docs/models/havara-playbook.md'),
+ ('voice',3,'audio','Voice projects','listen to samples','/voice'),
  -- sets
  ('sets',0,'text','Shot grammar','set section','https://github.com/smrtesy/video-lab/blob/main/docs/models/shot-grammar.json'),
  -- motion
