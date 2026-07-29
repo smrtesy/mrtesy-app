@@ -178,6 +178,14 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
   }, [tasks, plans, canEdit, stagesByPlan, hideDone]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+  // English section-header label per group_label — scan ALL plans so a section
+  // shows English even if only some of its plans carry group_label_en (mirrors
+  // PlanBoardClient.sectionLabel). Grouping itself stays keyed on group_label.
+  const sectionEnLabel = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of plans) if (p.group_label && p.group_label_en && !m.has(p.group_label)) m.set(p.group_label, p.group_label_en);
+    return m;
+  }, [plans]);
   const flatIndexById = useMemo(() => {
     const m = new Map<string, number>();
     flat.forEach((tk, i) => m.set(tk.id, i));
@@ -633,7 +641,7 @@ export function PlanTableView({ locale, canEdit, onChanged }: { locale: string; 
                   showSections && section !== lastSection ? (
                     <tr key={`sec-${section ?? "none"}`} className="bg-secondary">
                       <td colSpan={7} className="border-b px-2 py-1 text-[12.5px] font-bold text-foreground/80">
-                        {section || t("table.noSection")}
+                        {(locale === "en" ? (section ? sectionEnLabel.get(section) : null) || section : section) || t("table.noSection")}
                       </td>
                     </tr>
                   ) : null;
