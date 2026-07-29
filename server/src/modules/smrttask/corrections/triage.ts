@@ -36,7 +36,7 @@
  */
 
 import { db } from "../../../db";
-import { runOneShot } from "../../claude/runner";
+import { runOneShot, AUTOMATION_ACCOUNT } from "../../claude/runner";
 import { notify } from "../../../lib/platform/notify";
 import { validateRuleAgainstGoldenSet, type GoldenCheck } from "./golden";
 
@@ -280,7 +280,11 @@ async function runTriage(correctionId: string): Promise<void> {
     const orgId = correction.organization_id as string;
 
     const evidence = await gatherEvidence(correction as Record<string, unknown>);
-    const raw = await runOneShot(buildPrompt(note, evidence), { timeoutMs: 120_000 });
+    const raw = await runOneShot(buildPrompt(note, evidence), {
+      timeoutMs: 120_000,
+      // Automated classification check — route to the second subscription account.
+      account: AUTOMATION_ACCOUNT,
+    });
     const verdict = raw ? parseVerdict(raw) : null;
 
     // Two downgrades that keep the approval step honest: a "prompt" verdict with
