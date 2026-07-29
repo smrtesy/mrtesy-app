@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
-import { navigateTop } from "@/lib/navigate";
+import { navigateTop, requestLocaleSwitch } from "@/lib/navigate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -184,13 +184,18 @@ export function AccountClient() {
     // the DB lookup whenever it's present (src/middleware.ts:118-130), so a stale
     // value would keep bouncing the user back to the old language for up to 24h.
     document.cookie = `smrt_lang_pref=${newLocale}; path=/; max-age=${60 * 60 * 24}; SameSite=Lax`;
-    // The account screen is not in the panes registry, so it renders inside the
-    // tabs-workspace iframe pane. A next/navigation router.push would re-locale
-    // only that inner iframe — the app shell and the address bar stay on the old
-    // locale, so nothing visibly changes and a refresh (which reloads the TOP
-    // window) reverts. Drive the TOP window so the whole app reloads in the new
-    // locale.
-    navigateTop(`/${newLocale}/account`);
+    // The account screen renders inside a tabs-workspace pane (iframe). Ask the
+    // top-level workspace to switch locale in place — it relocalizes the open
+    // tabs and reloads the shell from the top context (see requestLocaleSwitch).
+    // A previous fix drove window.top directly from here, which reopened the
+    // whole workspace as a nested layer / popped out to an in-app browser. The
+    // TabsWorkspaceProvider that handles the message wraps the layout in every
+    // case (embedded pane AND full-page, incl. mobile), so this normally always
+    // succeeds; assign() is only a defensive fallback for when postMessage
+    // itself can't be sent.
+    if (!requestLocaleSwitch(newLocale)) {
+      window.location.assign(`/${newLocale}/account`);
+    }
   }
 
   return (

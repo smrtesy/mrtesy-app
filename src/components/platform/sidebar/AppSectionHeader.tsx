@@ -51,7 +51,8 @@ export function AppSectionHeader({
         href={`${base}${app.settingsHref}`}
         aria-label={`${app.slug} settings`}
         onClick={openAsTab(`${base}${app.settingsHref}`, `${appName} · ${t("settings")}`)}
-        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+        style={{ color: app.color }}
+        className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-accent hover:opacity-80"
       >
         <app.Icon className="h-4 w-4" />
       </Link>
@@ -62,7 +63,7 @@ export function AppSectionHeader({
         href={`${base}${app.guideHref}`}
         onClick={openAsTab(`${base}${app.guideHref}`, appName)}
         style={{ color: app.color }}
-        className="text-[12px] font-semibold uppercase tracking-wider hover:opacity-80"
+        className="text-[14px] font-bold uppercase tracking-wider hover:opacity-80"
       >
         <SmrtName word={app.word} />
       </Link>
