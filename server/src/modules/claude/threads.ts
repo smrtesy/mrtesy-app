@@ -157,6 +157,38 @@ function maybeSweep(): void {
   void sweepWorkspaces().catch(() => {});
 }
 
+/**
+ * The org's primary repo — the one a new chat auto-connects to.
+ *
+ * Derived from the org's own active playbooks (claude_playbooks.repo), never a
+ * hardcoded name, so it stays correct per tenant: the most-referenced repo wins,
+ * which for a typical org is the platform repo. Null when the org configured none —
+ * then a new chat simply has no repo, exactly as before.
+ */
+async function primaryRepoForOrg(orgId: string): Promise<string | null> {
+  const { data, error } = await db
+    .from("claude_playbooks")
+    .select("repo")
+    .eq("org_id", orgId)
+    .eq("is_active", true)
+    .not("repo", "is", null);
+  if (error || !data || data.length === 0) return null;
+  const freq = new Map<string, number>();
+  for (const row of data) {
+    const r = (row.repo ?? "").trim();
+    if (r && isValidRepo(r)) freq.set(r, (freq.get(r) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [r, n] of freq) {
+    if (n > bestN) {
+      best = r;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
 // ── list / create ─────────────────────────────────────────────────────────────
 
 router.get("/claude/threads", async (req: Request, res: Response) => {
@@ -192,6 +224,12 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   const playbookId = str(body.playbook_id, 64) || null;
   if (playbookId && !UUID_RE.test(playbookId)) return res.status(400).json({ error: "invalid playbook_id" });
 
+  // Auto-connect the repo: when the caller didn't pick one, default to the org's
+  // primary repo so the workspace has real code from turn one — the backend clones
+  // it (ensureClone), NOT Claude via a shell command that a headless run can't
+  // approve. `null` when the org has no repos, which just leaves the workspace bare.
+  const finalRepo = repo || (await primaryRepoForOrg(req.org!.id));
+
   const { data, error } = await db
     .from("claude_threads")
     .insert({
@@ -204,7 +242,7 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
       title_source: str(body.title, MAX_TITLE) ? "user" : "auto",
       model: model || null,
       effort: effort || null,
-      repo: repo || null,
+      repo: finalRepo || null,
       git_branch: gitBranch || null,
       playbook_id: playbookId,
     })

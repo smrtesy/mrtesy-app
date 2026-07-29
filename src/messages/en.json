@@ -4333,8 +4333,14 @@
       "cacheWrite": "Cache write",
       "turns": "Turns",
       "duration": "Duration",
-      "costEquivalent": "Equivalent value",
-      "byModel": "By model"
+      "costEquivalent": "Equivalent value (not billed)",
+      "byModel": "By model",
+      "disclaimer": {
+        "separateAccount": "Separate account: these figures are NOT part of the daily/monthly total on “AI Usage & Cost”, which counts only money a provider actually invoices (Anthropic API, Google, Resemble, fal).",
+        "billing": "Runs execute on the Claude subscription and are not billed per token. The cost figure is the engine's equivalent-API estimate, used here as a consumption measure only.",
+        "remaining": "Remaining subscription quota and reset time are not exposed programmatically on a Team plan. See the plan usage screens at claude.ai for those.",
+        "scope": "Covers only runs launched from this console, not other Claude usage."
+      }
     },
     "taskRouter": "Free-text task update",
     "dictation": {
