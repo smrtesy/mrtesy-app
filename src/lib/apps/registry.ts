@@ -65,7 +65,14 @@ export const APPS: Record<string, AppDef> = {
     homeHref: "/voice",
     guideHref: "/voice/guide",
     settingsHref: "/settings/apps/smrtvoice",
-    color: "#8b5cf6",
+    // Lime, not the violet it used to carry: that violet (hue 258°) sat 12° from
+    // smrtStudio's purple below (hue 271°) — the closest pair in this table — so
+    // the two sections read as the same category in the sidebar. Hue 85° is the
+    // middle of the only wide gap left (smrtReach 38° → smrtCRM 160°), 47° clear
+    // of its nearest neighbour. The 600 shade, not 500: `color` is also the
+    // section-name TEXT color in AppSectionHeader, and lime-500 (#84cc16) is
+    // 1.98:1 on white — below every other app here; this is 3.09:1, mid-range.
+    color: "#65a30d",
   },
   smrtcrm: {
     slug: "smrtcrm",
