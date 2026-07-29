@@ -175,7 +175,9 @@
     "paneError": "Something went wrong in this tab",
     "paneReload": "Reload",
     "maximizePane": "Full width",
-    "restorePane": "Back to split view (Esc)"
+    "restorePane": "Back to split view (Esc)",
+    "collapsePane": "Collapse to side rail",
+    "expandPaneNamed": "Expand {label}"
   },
   "nav": {
     "account": "Account",
