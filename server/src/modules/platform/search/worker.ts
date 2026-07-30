@@ -33,7 +33,7 @@ export interface DrainResult {
 
 // Texts per Voyage request. 100 × ~a few hundred tokens stays well under
 // Voyage's per-request token ceiling.
-const EMBED_BATCH = 100;
+const EMBED_BATCH = 32;
 
 // In-process guard against overlapping drains. pg_cron's net.http_post is
 // fire-and-forget, so the next minute's tick can fire while this drain is still
