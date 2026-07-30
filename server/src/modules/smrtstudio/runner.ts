@@ -69,7 +69,14 @@ export function estimateRunCost(
     return { usd: null, basis: "per_second_unknown_duration" };
   }
   if (PER_CALL_UNITS.some((u) => unit.includes(u))) {
-    return { usd, basis: `per_${unit}` };
+    // A per-image price is per OUTPUT image — multiply by the requested batch
+    // (num_images: 4 at $0.15 is $0.60, not $0.15). Sister of the video-lab
+    // quantity bug, which only covered duration.
+    const batch = ["num_images", "num_outputs", "num_videos"]
+      .map((k) => args[k])
+      .find((v) => typeof v === "number" && Number.isFinite(v) && v >= 1) as number | undefined;
+    const n = batch ? Math.floor(batch) : 1;
+    return { usd: Math.round(usd * n * 1000) / 1000, basis: n > 1 ? `per_${unit}×${n}` : `per_${unit}` };
   }
   return { usd: null, basis: `unit_price_only:${unit}` };
 }
@@ -158,7 +165,7 @@ function extFromUrl(url: string, kind: string): string {
  */
 export async function downloadOutputs(
   orgId: string,
-  code: string,
+  runId: string,
   urls: { url: string; kind: string }[],
 ): Promise<{ storage_paths: string[]; output_url: string | null; download_errors: string[] }> {
   const paths: string[] = [];
@@ -169,7 +176,10 @@ export async function downloadOutputs(
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const bytes = Buffer.from(await res.arrayBuffer());
-      const path = `${orgId}/${code}/${i}.${extFromUrl(url, kind)}`;
+      // Keyed by run UUID, never by the short display code: 4-char codes
+      // collide (~40% by 1,000 runs) and upsert:true would overwrite a PAID
+      // artifact of an older run with a same-coded newer one.
+      const path = `${orgId}/${runId}/${i}.${extFromUrl(url, kind)}`;
       const { error } = await db.storage
         .from("studio-media")
         .upload(path, bytes, { contentType: res.headers.get("content-type") ?? undefined, upsert: true });
@@ -222,7 +232,7 @@ export async function settleRun(runId: string): Promise<void> {
   }
 
   const urls = extractOutputUrls(outcome.result);
-  const dl = await downloadOutputs(run.org_id as string, run.code as string, urls);
+  const dl = await downloadOutputs(run.org_id as string, run.id as string, urls);
   const meta = { ...((run.meta as Row) ?? {}) } as Row;
   meta.storage_paths = dl.storage_paths;
   if (dl.download_errors.length) meta.download_errors = dl.download_errors;
@@ -248,13 +258,40 @@ export async function pollSubmittedRuns(olderThanMinutes = 2): Promise<number> {
     .limit(50);
   if (error || !data) return 0;
   for (const r of data) await settleRun(r.id as string);
-  return data.length;
+
+  // Paid-but-stuck rescue: a crash between queueSubmit and the submitted
+  // update leaves a PAID run in `pending`. One with a request id settles like
+  // a submitted run; one without (older than 15m) is failed loudly — never
+  // left to rot past fal's 24h link expiry.
+  const stale = new Date(Date.now() - 15 * 60_000).toISOString();
+  const { data: pend } = await db.from("experiment_runs")
+    .select("id, fal_request_id")
+    .eq("run_status", "pending")
+    .lt("created_at", stale)
+    .limit(50);
+  for (const p of pend ?? []) {
+    if (p.fal_request_id) {
+      await db.from("experiment_runs")
+        .update({ run_status: "submitted" })
+        .eq("id", p.id).eq("run_status", "pending");
+      await settleRun(p.id as string);
+    } else {
+      const { error: failErr } = await db.from("experiment_runs")
+        .update({ run_status: "failed", error: "submit was never confirmed (no fal_request_id after 15m)" })
+        .eq("id", p.id).eq("run_status", "pending");
+      if (failErr) console.error("[studio poll] failed to mark stale pending run", p.id, failErr.message);
+    }
+  }
+  return data.length + (pend?.length ?? 0);
 }
 
 export function newRunCode(): string {
+  // 6 chars over a 31-letter alphabet (~887M combos): collision odds stay
+  // negligible for this project's lifetime. Storage is keyed by run UUID
+  // anyway — the code is a human label, not an identity.
   const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   let code = "";
-  for (const byte of crypto.randomBytes(4)) code += alphabet[byte % alphabet.length];
+  for (const byte of crypto.randomBytes(6)) code += alphabet[byte % alphabet.length];
   return code;
 }
 

@@ -771,7 +771,17 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
   // ack — the client shows "cannot be estimated up front" and the user
   // approves running on real billing.
   const est = estimateRunCost(model.data, args);
-  if (req.body?.cost_approved !== true) {
+  // The approval is FOR A NUMBER, not a blank cheque: the client echoes back
+  // the estimate it displayed (approved_usd), and any drift — args edited
+  // after the 402, price changed — re-gates with a fresh estimate instead of
+  // spending an amount the user never saw.
+  const approvedUsd = req.body?.approved_usd as number | null | undefined;
+  const approvalMatches =
+    approvedUsd !== undefined &&
+    ((est.usd == null && approvedUsd == null) ||
+      (est.usd != null && typeof approvedUsd === "number" &&
+        Math.abs(est.usd - approvedUsd) < 0.0005));
+  if (req.body?.cost_approved !== true || !approvalMatches) {
     return res.status(402).json({ error: "cost approval required", estimate: est });
   }
 

@@ -14,6 +14,7 @@
  * endpoints, never an inference endpoint — so running it on a schedule costs
  * nothing and needs no cost approval.
  */
+import { timingSafeEqual as cryptoTimingSafeEqual } from "crypto";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { db } from "../../db";
@@ -38,7 +39,11 @@ router.post("/api/studio/jobs/fal-webhook", async (req: Request, res: Response) 
   const { data: run } = await db.from("experiment_runs")
     .select("id, meta").eq("id", runId).maybeSingle();
   const expected = (run?.meta as Record<string, unknown> | null)?.webhook_token;
-  if (!run || !expected || expected !== token) {
+  const tokenOk =
+    typeof expected === "string" && expected.length > 0 &&
+    expected.length === token.length &&
+    cryptoTimingSafeEqual(Buffer.from(expected), Buffer.from(token));
+  if (!run || !tokenOk) {
     return res.status(404).json({ error: "unknown run" });
   }
   await settleRun(runId);

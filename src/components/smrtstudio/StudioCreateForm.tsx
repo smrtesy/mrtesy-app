@@ -1,17 +1,18 @@
 "use client";
 
 /**
- * smrtStudio — the creation form (stage B of docs/studio-build-plan.md).
+ * smrtStudio — the creation form (stages B+C of docs/studio-build-plan.md).
  *
  * Deterministic recommendation, zero LLM: GET /studio/recommendation returns
  * ranked catalog candidates, the recommended model's written recipe (synced
- * from video-lab) and its LIVE fal schema fields. The form arrives pre-filled
- * and everything is editable. The run button ships DISABLED by design — it
- * turns on in stage C behind the cost gate (rule 2), and the label says so
- * instead of pretending.
+ * from video-lab) and its LIVE fal schema fields. Running is a two-click cost
+ * gate (rule 2): the first click POSTs without approval and the server's 402
+ * carries the estimate; the inputs then LOCK, and only the explicit
+ * "approve & run" — echoing the displayed number back as approved_usd —
+ * actually submits. Any drift between the two clicks re-gates.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
@@ -73,6 +74,13 @@ export function StudioCreateForm({
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submittedCode, setSubmittedCode] = useState<string | null>(null);
+  // Synchronous double-click guard: state updates are async, a second click
+  // can land before the re-render disables the button — and this button
+  // spends money.
+  const inFlight = useRef(false);
+  // Once the estimate is on screen the inputs LOCK: the number the user
+  // approves must be the number that runs (review finding, 30/07).
+  const locked = estimate != null || submitting || submittedCode != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -144,12 +152,14 @@ export function StudioCreateForm({
   }, [buildPayload]);
 
   const confirmRun = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSubmitting(true);
     setError(null);
     try {
       const { run } = await api<{ run: { code: string } }>("/api/studio/runs", {
         method: "POST",
-        body: { ...buildPayload(), cost_approved: true },
+        body: { ...buildPayload(), cost_approved: true, approved_usd: estimate?.usd ?? null },
       });
       setSubmittedCode(run.code);
       setEstimate(null);
@@ -157,9 +167,10 @@ export function StudioCreateForm({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
-  }, [buildPayload, onSubmitted]);
+  }, [buildPayload, onSubmitted, estimate]);
 
   const renderField = (f: SchemaField) => {
     const value = values[f.name] ?? f.default ?? "";
@@ -173,6 +184,7 @@ export function StudioCreateForm({
           <select
             className="w-full h-8 rounded-md border bg-background px-2"
             value={value}
+            disabled={locked}
             onChange={(e) => setValue(f.name, e.target.value)}
           >
             {!f.default && <option value="" />}
@@ -185,6 +197,7 @@ export function StudioCreateForm({
             className="h-8"
             value={value}
             placeholder={f.type}
+            disabled={locked}
             onChange={(e) => setValue(f.name, e.target.value)}
           />
         )}
@@ -257,7 +270,7 @@ export function StudioCreateForm({
 
           <label className="block text-xs space-y-1">
             <span className="font-medium">{t("createPrompt")}</span>
-            <Textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+            <Textarea rows={4} value={prompt} disabled={locked} onChange={(e) => setPrompt(e.target.value)} />
           </label>
 
           {rec.recommended.schema_error && (
