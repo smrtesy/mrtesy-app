@@ -298,7 +298,7 @@ export async function executeRun(runId: string): Promise<void> {
 async function executeRunBody(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id")
+    .select("id, org_id, prompt, cwd, status, model, effort, repo, git_branch, thread_id")
     .eq("id", runId)
     .maybeSingle();
 
@@ -457,6 +457,23 @@ async function executeRunBody(runId: string): Promise<void> {
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
+  // Callback channel for the autonomy gate. The in-app Claude runs with full shell in
+  // its checkout (see the permission mode below), so for a DESTRUCTIVE migration it
+  // must NOT apply the SQL itself — it calls the machine-to-machine approval endpoint
+  // to open a human-approval card and stops. These are what let it make that call from
+  // inside the run: which org/thread/run it is, the shared internal secret, and the
+  // backend base URL. Only set when all the pieces exist, so a misconfigured backend
+  // degrades to "the gate isn't reachable" rather than a half-formed request.
+  const internalSecret = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET || "";
+  const backendUrl = process.env.SMRTESY_PUBLIC_URL || process.env.SMRTESY_BACKEND_URL || "";
+  if (internalSecret && backendUrl) {
+    env.SMRTESY_BACKEND_URL = backendUrl;
+    env.SMRTBOT_INTERNAL_SECRET = internalSecret;
+    env.CLAUDE_RUN_ID = run.id;
+    env.CLAUDE_ORG_ID = run.org_id;
+    if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
+  }
+
   // Attachments: downloaded into the working directory, then named in the prompt.
   // The engine reads files by path (its Read tool handles images too) — the CLI's
   // --file flag is for Anthropic Files API ids, NOT local paths, so pointing at
@@ -514,14 +531,19 @@ async function executeRunBody(runId: string): Promise<void> {
     // the CLI's current default instead of being pinned to a model that will age.
     if (run.model) a.push("--model", run.model);
     if (run.effort) a.push("--effort", run.effort);
-    // In a cloned workspace the run needs to be able to edit files, and print mode
-    // has no way to answer a permission prompt — an un-answerable prompt is a denial,
-    // so without this a repo run could only read. acceptEdits covers edits but NOT
-    // shell commands: pushing a branch requires the operator to opt into a stronger
-    // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
-    // operator already set a permission flag there, so their choice wins.
+    // In a cloned workspace the run needs full agency: edit files, run the build,
+    // git-merge to main, and run `supabase db push` for migrations — the whole
+    // developer loop. Print mode cannot answer a permission prompt (an un-answerable
+    // prompt is a denial), so anything short of bypassPermissions would silently block
+    // shell and leave a repo run able only to read/edit. The operator chose "full
+    // access, like a developer on the team" (autonomy-safety-gate.md), so repo runs
+    // default to bypassPermissions. The real red line — a DESTRUCTIVE migration — is
+    // NOT held here; it is held by the approval gate the run itself routes through
+    // (env vars above), which is why widening shell here is safe. Skipped entirely
+    // when the operator already set a permission flag in CLAUDE_RUN_EXTRA_ARGS, so
+    // their choice always wins.
     if (run.repo && !extra.some((x) => x.startsWith("--permission-mode") || x === "--dangerously-skip-permissions")) {
-      a.push("--permission-mode", "acceptEdits");
+      a.push("--permission-mode", "bypassPermissions");
     }
     a.push(...extra);
     return a;

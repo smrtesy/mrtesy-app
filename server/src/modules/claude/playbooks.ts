@@ -515,6 +515,15 @@ export async function composePrompt(
   // inverse of the bug this fixes — it would confidently promise access it lacks.
   const hasGitHub = Boolean(await getGitHubToken());
 
+  // Whether the destructive-migration approval gate is actually reachable from a run.
+  // Same env the runner injects into the child (runner.ts): without both the internal
+  // secret and the backend URL, the m2m endpoint can't be called, so the preamble must
+  // NOT tell the run to use it — it should fall back to asking the human instead.
+  const gateReachable = Boolean(
+    (process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET) &&
+      (process.env.SMRTESY_PUBLIC_URL || process.env.SMRTESY_BACKEND_URL),
+  );
+
   const envLines = [
     "# איפה אתה רץ",
     "",
@@ -526,15 +535,42 @@ export async function composePrompt(
     envLines.push(
       "- **הריפו כבר אצלך:** אם מחובר ריפו לצ'אט הזה (וכברירת מחדל מחובר הריפו הראשי), " +
         "**המערכת כבר שכפלה אותו לתיקיית העבודה שלך** — אתה יכול לקרוא ולערוך את הקבצים ישירות, בלי פעולה מקדימה.",
-      "- **אל תריץ `git clone` או פקודות מעטפת בעצמך.** זו סביבה חסרת-ראש (headless): אין מי שיאשר חלון " +
-        "הרשאה לפקודת מעטפת, אז clone/shell פשוט ייתקעו על כלום. השכפול נעשה על-ידי המערכת, לא על-ידך. " +
-        "אתה יכול לקרוא ולערוך קבצים; הרצת פקודות (git/בדיקות/דחיפה) עדיין לא זמינה מכאן.",
+      "- **יש לך מעטפת (shell) מלאה בתוך העותק הזה** — git, npm, בדיקות, בנייה, דחיפה, ו-`supabase` CLI. " +
+        "אתה עובד כמו מפתח בצוות: קורא, עורך, מריץ ומוסר. אל תאמר למשתמש שאין לך גישה להרצת פקודות — יש.",
       "- כדי לעבוד על ריפו **אחר**, בקש מהמשתמש לבחור אותו בהגדרות הצ'אט (כפתור ההגדרות ← בחירת ריפו), " +
         "והמערכת תשכפל אותו עבורך בתור הבא. אל תבקש מהמשתמש כתובת או טוקן — ההרשאה כבר בסביבה.",
     );
     if (orgRepos.length > 0) {
       envLines.push(`- **הריפו-ים של הארגון:** ${orgRepos.join(", ")}.`);
     }
+    // The autonomy protocol — the operational half of docs/claude-console/
+    // autonomy-safety-gate.md, stated where the run will actually read it. The rule
+    // in one line: reversible → do it yourself; irreversible → route through a human.
+    envLines.push(
+      "",
+      "## מה מותר לך לעשות לבד (ומה לא)",
+      "הכלל: **פעולה הפיכה — עשה לבד; פעולה בלתי-הפיכה — עצור לאישור אנושי.**",
+      "- **סיום שינוי → הבאה ל-main (הפיך, לבד):** כשסיימת שינוי שאמור לעלות לאוויר, הרץ קודם את " +
+        "פרוטוקול לפני-הדחיפה (`npm install --no-audit --no-fund && npm run build`, ותקן כל שגיאה חדשה בקבצים שנגעת בהם), " +
+        "ואז מזג ל-main עם `--no-ff` כך ש-main מקבל commit משלו (לא fast-forward), דחוף, ואמת שהדיפלוי התקדם. " +
+        "אל תבקש אישור למיזוג עצמו — הבנייה שעברה היא השער, ודחיפה הפיכה (revert / חזרה לגרסה ב-Vercel).",
+      "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
+        "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` והרץ `supabase db push`.",
+      gateReachable
+        ? "- **מיגרציה הרסנית** (DROP, DELETE, UPDATE שמשנה נתונים, TRUNCATE, ALTER COLUMN TYPE/SET NOT NULL): " +
+          "**אל תחיל בעצמך.** קודם הרץ `SELECT` שקול כדי לראות מה ייפגע (ספירה + דגימה), ואז פתח כרטיס-אישור אנושי:\n" +
+          "  ```\n" +
+          "  curl -sS -X POST \"$SMRTESY_BACKEND_URL/api/claude-action/request-approval\" \\\n" +
+          "    -H \"content-type: application/json\" -H \"x-cron-secret: $SMRTBOT_INTERNAL_SECRET\" \\\n" +
+          "    -d '{\"org_id\":\"'\"$CLAUDE_ORG_ID\"'\",\"run_id\":\"'\"$CLAUDE_RUN_ID\"'\",\"repo\":\"<owner/name>\",\"git_branch\":\"<branch>\",\"migration_path\":\"supabase/migrations/<file>.sql\",\"sql\":\"<ה-SQL המלא>\",\"affected_count\":<מספר>,\"sample_rows\":[…]}'\n" +
+          "  ```\n" +
+          "  ה-backend מסווג את ה-SQL בעצמו: אם יתברר תוספתי תקבל `\"decision\":\"additive\"` (החל בעצמך); אם הרסני " +
+          "תקבל `\"decision\":\"needs_approval\"` — **עצור ואמור למשתמש שהמיגרציה ממתינה לאישורו במסך האישורים.** " +
+          "אחרי שיאשר, המערכת תריץ את ההחלה אוטומטית. אל תעקוף את זה ואל תמחק/תשנה נתונים ידנית."
+        : "- **מיגרציה הרסנית** (DROP, DELETE, UPDATE שמשנה נתונים, TRUNCATE): **אל תחיל בעצמך ואל תמחק נתונים.** " +
+          "שער-האישור אינו מוגדר בסביבה הזו (חסר SMRTBOT_INTERNAL_SECRET או SMRTESY_BACKEND_URL) — כתוב את קובץ המיגרציה, " +
+          "ובקש מהמשתמש להריץ אותו ידנית ב-Supabase CLI אחרי שבדק אותו.",
+    );
   } else {
     // No token: say so plainly and point at where to set it, instead of promising
     // access. This is the honest state, and it tells the user how to enable it.
