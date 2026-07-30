@@ -22,6 +22,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { db, getAppSecret } from "../../db";
@@ -102,6 +103,78 @@ function resolveCli(): string {
   if (existsSync(local)) return local;
   return "claude";
 }
+
+/**
+ * Pre-accept the workspace trust dialog for a directory.
+ *
+ * Claude Code refuses to honor a project's .claude/settings.json — its
+ * permissions.allow entries AND its hooks — until the workspace is "trusted".
+ * Interactively that is a one-time dialog; in non-interactive `-p` mode the
+ * dialog never shows, so the CLI prints "this workspace has not been trusted"
+ * and IGNORES the settings. The remedy the warning itself names is to set
+ * projects["<dir>"].hasTrustDialogAccepted in the home ~/.claude.json — verified
+ * against the CLI binary (the exact keys are `hasTrustDialogAccepted` and
+ * `hasCompletedProjectOnboarding`). There is no env var or flag that trusts a
+ * directory, so this file edit is the only path.
+ *
+ * Best-effort and merge-only: the home file also holds the oauth account and
+ * other state, so we read-modify-write it and never overwrite. An atomic rename
+ * keeps a concurrent reader from ever seeing a half-written file; the only race
+ * is two brand-new workspaces trusted at the same instant losing one entry, which
+ * self-heals on that thread's next turn (the warning is merely cosmetic under
+ * bypassPermissions anyway). Any failure is swallowed — trust is a quality-of-life
+ * fix, never a reason to fail a run.
+ */
+async function trustWorkspace(dir: string): Promise<void> {
+  try {
+    const file = path.join(os.homedir(), ".claude.json");
+    let cfg: Record<string, unknown> = {};
+    try {
+      cfg = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    } catch {
+      // Missing or unreadable — start from an empty config rather than give up.
+    }
+    const projects =
+      cfg.projects && typeof cfg.projects === "object"
+        ? (cfg.projects as Record<string, Record<string, unknown>>)
+        : {};
+    const existing =
+      projects[dir] && typeof projects[dir] === "object" ? projects[dir] : {};
+    // Already trusted → no write, so the steady state does zero disk I/O.
+    if (existing.hasTrustDialogAccepted === true) return;
+    projects[dir] = {
+      ...existing,
+      hasTrustDialogAccepted: true,
+      hasCompletedProjectOnboarding: true,
+    };
+    cfg.projects = projects;
+    const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    await writeFile(tmp, JSON.stringify(cfg, null, 2), "utf8");
+    await rename(tmp, file);
+  } catch (e) {
+    console.error(
+      "[claude/runner] could not trust workspace:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+}
+
+/**
+ * Appended to every conversation turn's system prompt.
+ *
+ * The console must answer the user in Hebrew regardless of what language the
+ * repo, the code, or the incoming message is in — the platform-wide standing
+ * preference (see the repo CLAUDE.md). A CLAUDE.md line alone drifted to English
+ * mid-conversation, and it only loads at all for a run that clones this repo;
+ * a plain chat thread with no repo never sees it. Passing the rule as an
+ * `--append-system-prompt` on EVERY invocation makes it hold for every thread,
+ * repo-backed or not, on the first turn and each resumed one. Timezone is pinned
+ * here for the same reason (the user is in New York).
+ */
+const HEBREW_DIRECTIVE =
+  "השב תמיד למשתמש בעברית, בכל תשובה, ללא קשר לשפת ההודעה, הקוד או ההוראות. " +
+  "קוד, מזהים, נתיבים ופקודות נשארים באנגלית — רק הטקסט המופנה למשתמש הוא בעברית. " +
+  "הצג כל תאריך ושעה למשתמש באזור הזמן America/New_York.";
 
 /**
  * Live children, keyed by run id — what makes a turn cancellable.
@@ -498,6 +571,16 @@ async function executeRunBody(runId: string): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...gitEnvForRun(ghToken), CLAUDE_CODE_OAUTH_TOKEN: token };
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
+  // Railway runs this backend as root inside an isolated, ephemeral container.
+  // Claude Code refuses bypassPermissions (and the equivalent
+  // --dangerously-skip-permissions) when running as root unless it sees a sandbox
+  // marker — verified against the CLI binary, whose guard is exactly
+  // `getuid()===0 && IS_SANDBOX!=="1" && !CLAUDE_CODE_BUBBLEWRAP`. Without this,
+  // every repo run dies on start with "--dangerously-skip-permissions cannot be
+  // used with root/sudo privileges for security reasons". The container IS the
+  // sandbox (nothing else shares it, and it is torn down after the run), so we
+  // declare it. Scoped to this child's env only — the backend process is untouched.
+  env.IS_SANDBOX = "1";
 
   // Callback channel for the autonomy gate. The in-app Claude runs with full shell in
   // its checkout (see the permission mode below), so for a DESTRUCTIVE migration it
@@ -572,6 +655,13 @@ async function executeRunBody(runId: string): Promise<void> {
     }
   }
 
+  // Trust the directory the turn runs in, so the CLI loads the repo's
+  // .claude/settings.json (permissions + hooks) instead of printing
+  // "workspace has not been trusted" and ignoring it. Non-interactive -p mode
+  // never shows the dialog, so we pre-accept it — exactly what that warning asks
+  // the operator to do by hand.
+  if (cwd) await trustWorkspace(cwd);
+
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
@@ -623,6 +713,18 @@ async function executeRunBody(runId: string): Promise<void> {
       a.push("--allowedTools", `Bash(node ${BROWSER_HELPER_PATH}:*)`);
       a.push("--allowedTools", `Bash(node "${BROWSER_HELPER_PATH}":*)`);
     }
+    // Open, unscoped web access on EVERY run — regular fetch/search for research,
+    // plus the real browser (the helper above) when app-access minted one. A
+    // repo run already has these under bypassPermissions, so this is redundant
+    // there but harmless (--allowedTools is additive); the ones it actually
+    // unblocks are the plain chat threads with no repo, which otherwise get the
+    // CLI's default mode where an un-answerable -p prompt silently denies web
+    // tools. Bare tool names (no domain filter) = allow all sites, which is the
+    // "full browsing + full research" the operator asked for.
+    a.push("--allowedTools", "WebSearch");
+    a.push("--allowedTools", "WebFetch");
+    // Force Hebrew (and New York time) on every turn — see HEBREW_DIRECTIVE.
+    a.push("--append-system-prompt", HEBREW_DIRECTIVE);
     a.push(...extra);
     return a;
   };
