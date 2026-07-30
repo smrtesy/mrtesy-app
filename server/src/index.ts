@@ -23,6 +23,7 @@ import quickActionRouter from "./routes/quick-action";
 import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
 import platformRouter, { searchCronRouter } from "./modules/platform";
+import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
 import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
@@ -278,6 +279,12 @@ function ensureChromium(): void {
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
   ensureChromium();
+  // Seed the global-search navigation destinations so settings/pages search
+  // works immediately after a deploy. Best-effort, non-blocking; skips when
+  // already seeded (see ensureDestinationsIndexed).
+  void ensureDestinationsIndexed().catch((e) =>
+    console.error("[startup] ensureDestinationsIndexed failed:", e),
+  );
   // Resume any unofficial WhatsApp (Baileys) connections that were already
   // paired. Best-effort — a failure here must never crash boot. Assumes a
   // single replica (two sockets on one number get logged out by WhatsApp).

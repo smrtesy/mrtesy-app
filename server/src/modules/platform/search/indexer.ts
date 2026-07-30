@@ -351,3 +351,80 @@ export async function reindexForCaller(
   const claudeThreads = await indexClaudeThreadsForOrg(orgId, cap);
   return { destinations, tasks, info, claudeThreads };
 }
+
+/**
+ * Seed the navigation destinations at boot, so settings/pages search works
+ * immediately after a deploy without a manual reindex. Idempotent and cheap
+ * (~30 rows); skipped when already seeded (row count >= DESTINATIONS.length) so
+ * a normal restart re-embeds nothing. Fire-and-forget — never blocks startup.
+ */
+export async function ensureDestinationsIndexed(): Promise<void> {
+  const { count, error } = await db
+    .from("search_documents")
+    .select("id", { count: "exact", head: true })
+    .eq("source_type", "destination");
+  if (error) {
+    console.error("[search/indexer] destination count failed:", error.message);
+    return;
+  }
+  if ((count ?? 0) >= DESTINATIONS.length) return; // already seeded
+  const n = await indexDestinations();
+  console.log(`[search/indexer] seeded ${n} navigation destinations.`);
+}
+
+export interface BackfillResult {
+  destinations: number;
+  users: number;
+  orgs: number;
+  tasks: number;
+  info: number;
+  claudeThreads: number;
+}
+
+/**
+ * One-time history seed for the WHOLE instance (machine-triggered, cron-secret):
+ * destinations + every user's tasks/info + every org's Claude threads. Bounded
+ * per corpus by `cap`. After this, the DB triggers keep everything fresh, so
+ * this only needs running once (or after raising the cap).
+ */
+export async function backfillAll(cap = DEFAULT_CAP): Promise<BackfillResult> {
+  const result: BackfillResult = {
+    destinations: 0,
+    users: 0,
+    orgs: 0,
+    tasks: 0,
+    info: 0,
+    claudeThreads: 0,
+  };
+
+  result.destinations = await indexDestinations();
+
+  // Users → their tasks/info. listUsers is the repo's proven enumeration.
+  try {
+    const { data, error } = await db.auth.admin.listUsers({ perPage: 1000 });
+    if (error) {
+      console.error("[search/indexer] backfill listUsers failed:", error.message);
+    } else {
+      for (const u of data.users) {
+        result.users++;
+        result.tasks += await indexTasksForUser(u.id, cap);
+        result.info += await indexInfoForUser(u.id, cap);
+      }
+    }
+  } catch (e) {
+    console.error("[search/indexer] backfill users failed:", (e as Error).message);
+  }
+
+  // Orgs → their Claude threads.
+  const { data: orgs, error: orgErr } = await db.from("organizations").select("id");
+  if (orgErr) {
+    console.error("[search/indexer] backfill load orgs failed:", orgErr.message);
+  } else {
+    for (const o of (orgs ?? []) as { id: string }[]) {
+      result.orgs++;
+      result.claudeThreads += await indexClaudeThreadsForOrg(o.id, cap);
+    }
+  }
+
+  return result;
+}
