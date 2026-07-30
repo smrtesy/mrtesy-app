@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 
-import { api } from "@/lib/api/client";
+import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -57,11 +57,43 @@ type Run = {
   created_at: string;
 };
 
+type ConsultSolution = {
+  title?: string;
+  changes?: Record<string, unknown> | null;
+  evidence?: string;
+  est_cost?: string;
+  risk?: string;
+  move?: string;
+};
+
+type Consultation = {
+  id: string;
+  run_id: string;
+  run_code: string | null;
+  status: string;
+  problem: string;
+  answer: {
+    diagnosis?: string;
+    solutions?: ConsultSolution[];
+    rejected?: { title?: string; reason?: string }[];
+  } | null;
+  executed_run_ids: string[];
+  created_at: string;
+  answered_at: string | null;
+};
+
+type ConsultEstimate = {
+  items: { index: number; title: string; endpoint_id: string; usd: number | null; basis: string }[];
+  total_usd: number | null;
+  unestimated: number;
+};
+
 type Detail = {
   project: Project;
   voice_projects: VoiceProject[];
   image_runs: Run[];
   video_runs: Run[];
+  consultations: Consultation[];
   vlm_qc_enabled: boolean;
 };
 
@@ -235,6 +267,275 @@ function QcCell({ run, vlmEnabled, onChanged }: { run: Run; vlmEnabled: boolean;
   );
 }
 
+/**
+ * Stage F — "יש לי בעיה" on one artifact. Compact by the house rule: a quiet
+ * link that expands into a one-line problem box; submitting files a
+ * consultation (full provenance frozen server-side) + a smrtTask pickup task.
+ */
+function ConsultButton({ run, onFiled }: { run: Run; onFiled: () => void }) {
+  const t = useTranslations("studioProjects");
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [filed, setFiled] = useState(false);
+  const inFlight = useRef(false);
+
+  // A failed run is exactly what "יש לי בעיה" exists for — the button hides
+  // only while nothing has happened yet (still running / no result at all).
+  if (!run.output_url && run.run_status !== "failed") return null;
+  if (filed) return <div className="text-emerald-600">{t("consultFiled")}</div>;
+
+  const send = async () => {
+    const problem = text.trim();
+    if (!problem || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api(`/api/studio/runs/${run.id}/consult`, { method: "POST", body: { problem } });
+      setFiled(true);
+      setOpen(false);
+      onFiled();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      {open ? (
+        <div className="space-y-1">
+          <textarea
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={t("consultPlaceholder")}
+            rows={2}
+            className="w-full rounded border bg-background p-1.5 text-xs"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy || !text.trim()}
+              onClick={() => void send()}
+              className="text-primary underline disabled:opacity-50"
+            >
+              {busy ? t("consultSending") : t("consultSend")}
+            </button>
+            {!busy && (
+              <button
+                type="button"
+                onClick={() => { setOpen(false); setText(""); }}
+                className="text-muted-foreground underline"
+              >
+                {t("cancel")}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-muted-foreground underline hover:text-foreground"
+        >
+          {t("consultButton")}
+        </button>
+      )}
+      {err && <p className="text-red-600 break-words">{err}</p>}
+    </div>
+  );
+}
+
+/**
+ * Stage F — one answered consultation: diagnosis, then the solutions as
+ * CHECKBOXES → the first "אשר והרץ" click fetches the 402 estimate (nothing
+ * is spent), shows per-solution + total, and only the explicit second click
+ * echoes the displayed total and runs. The exact UX the user defined.
+ */
+function ConsultationCard({ c, onChanged }: { c: Consultation; onChanged: () => void }) {
+  const t = useTranslations("studioProjects");
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [estimate, setEstimate] = useState<ConsultEstimate | null>(null);
+  // The selection the estimate was computed FOR — the approval echoes exactly
+  // this, so a checkbox changed after the estimate can never ride an old ack.
+  const [estimateFor, setEstimateFor] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const inFlight = useRef(false);
+
+  // A re-answer replaces the solutions array — index N now means something
+  // else, so the selection and any on-screen estimate are void.
+  useEffect(() => {
+    setChecked(new Set());
+    setEstimate(null);
+    setEstimateFor([]);
+  }, [c.answered_at]);
+
+  const solutions = c.answer?.solutions ?? [];
+  const statusKey =
+    c.status === "open" ? "consultOpen"
+    : c.status === "answered" ? "consultAnswered"
+    : c.status === "executed" ? "consultExecuted" : "consultClosed";
+
+  const toggle = (i: number) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+    // A changed selection invalidates the estimate on screen — the approval
+    // is FOR a number, and the number just changed.
+    setEstimate(null);
+  };
+
+  const execute = async (approve: boolean) => {
+    if (inFlight.current || checked.size === 0) return;
+    inFlight.current = true;
+    setBusy(true);
+    setErr(null);
+    // The approval runs EXACTLY what was estimated, not the live checkboxes.
+    const selection = approve ? estimateFor : [...checked].sort((a, b) => a - b);
+    try {
+      const resp = await api<{ results: { index: number; code?: string; error?: string }[] }>(
+        `/api/studio/consultations/${c.id}/execute`,
+        {
+          method: "POST",
+          body: approve
+            ? {
+                selected: selection,
+                approved_selection: selection,
+                cost_approved: true,
+                approved_usd: estimate?.total_usd ?? null,
+                accept_unestimated: true,
+              }
+            : { selected: selection },
+        },
+      );
+      // Spent state must not survive a success — a second click on a stale
+      // "אשר והרץ" would pay again.
+      setChecked(new Set());
+      setEstimate(null);
+      setEstimateFor([]);
+      const failed = (resp.results ?? []).filter((r) => r.error);
+      if (failed.length) {
+        setErr(`${t("consultPartialFail")}: ${failed.map((f) => f.error).join(" · ")}`);
+      }
+      onChanged();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        const est = (e.body as { estimate?: ConsultEstimate } | undefined)?.estimate;
+        if (est) {
+          setEstimate(est);
+          setEstimateFor(selection);
+        } else setErr(e.message);
+      } else {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <li className="rounded-lg border p-3 text-xs space-y-2">
+      <div className="flex items-center gap-2">
+        {c.run_code && <span className="font-mono">{c.run_code}</span>}
+        <span className="text-muted-foreground">{t(statusKey)}</span>
+      </div>
+      <p className="whitespace-pre-wrap">{c.problem}</p>
+
+      {c.answer?.diagnosis && (
+        <p className="whitespace-pre-wrap border-s-2 ps-2 text-muted-foreground">
+          {c.answer.diagnosis}
+        </p>
+      )}
+
+      {solutions.length > 0 && (
+        <div className="space-y-1.5">
+          {solutions.map((s, i) => (
+            <label key={i} className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={checked.has(i)}
+                onChange={() => toggle(i)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">{s.title ?? `${i + 1}`}</span>
+                {s.risk && <span className="text-muted-foreground"> · {t("consultRisk")}: {s.risk}</span>}
+                {s.est_cost && <span className="text-muted-foreground"> · {s.est_cost}</span>}
+                {s.evidence && (
+                  <span className="block text-muted-foreground">{s.evidence}</span>
+                )}
+              </span>
+            </label>
+          ))}
+
+          {estimate && (
+            <div className="rounded border bg-muted/40 p-2 space-y-0.5">
+              {estimate.items.map((it) => (
+                <p key={it.index} className="flex justify-between gap-2">
+                  <span className="truncate">{it.title}</span>
+                  <span className="shrink-0">{it.usd != null ? `$${it.usd.toFixed(3)}` : t("consultNoEstimate")}</span>
+                </p>
+              ))}
+              <p className="flex justify-between gap-2 font-medium border-t pt-0.5">
+                <span>{t("consultEstimateTotal")}</span>
+                <span>
+                  {estimate.total_usd != null ? `$${estimate.total_usd.toFixed(3)}` : t("consultNoEstimate")}
+                  {estimate.unestimated > 0 ? ` (+${estimate.unestimated} ${t("consultNoEstimate")})` : ""}
+                </span>
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {estimate ? (
+              <button
+                type="button"
+                disabled={busy || checked.size === 0}
+                onClick={() => void execute(true)}
+                className="text-primary underline disabled:opacity-50"
+              >
+                {busy ? t("consultRunning") : t("consultApproveRun")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={busy || checked.size === 0}
+                onClick={() => void execute(false)}
+                className="text-primary underline disabled:opacity-50"
+              >
+                {busy ? t("consultRunning") : t("consultEstimateBtn")}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {(c.answer?.rejected?.length ?? 0) > 0 && (
+        <details>
+          <summary className="cursor-pointer text-muted-foreground">{t("consultRejected")}</summary>
+          <ul className="ms-3 mt-1 space-y-0.5 text-muted-foreground">
+            {c.answer!.rejected!.map((r, i) => (
+              <li key={i}>{r.title}{r.reason ? ` — ${r.reason}` : ""}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {err && <p className="text-red-600 break-words">{err}</p>}
+    </li>
+  );
+}
+
 function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
   runs: Run[]; empty: string; vlmEnabled: boolean; onChanged: () => void;
 }) {
@@ -267,6 +568,7 @@ function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
                   ` ${t("qcCostSuffix", { usd: `$${Number(r.qc_cost_usd).toFixed(3)}` })}`}
               </div>
               <QcCell run={r} vlmEnabled={vlmEnabled} onChanged={onChanged} />
+              <ConsultButton run={r} onFiled={onChanged} />
             </div>
           </li>
         );
@@ -374,6 +676,17 @@ export function StudioProject({ projectId }: { projectId: string }) {
           />
         </TabsContent>
       </Tabs>
+
+      {detail.consultations.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-medium">{t("consultTitle")}</h2>
+          <ul className="space-y-2">
+            {detail.consultations.map((c) => (
+              <ConsultationCard key={c.id} c={c} onChanged={() => void load()} />
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

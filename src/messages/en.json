@@ -4635,6 +4635,24 @@
     "runInProgress": "Running…",
     "qcBorderline": "Borderline",
     "qcVlmFailed": "Previous check failed",
-    "qcCostSuffix": "+ {usd} QC checks"
+    "qcCostSuffix": "+ {usd} QC checks",
+    "consultButton": "I have a problem",
+    "consultPlaceholder": "What's wrong with this output? Describe it in your own words — the full run details are attached automatically.",
+    "consultSend": "Send to expert",
+    "consultSending": "Sending…",
+    "consultFiled": "Sent to expert ✓",
+    "consultTitle": "Expert consultations",
+    "consultOpen": "Waiting for expert",
+    "consultAnswered": "Answered — pick solutions",
+    "consultExecuted": "Executed",
+    "consultClosed": "Closed",
+    "consultRisk": "Risk",
+    "consultRejected": "Ruled-out directions",
+    "consultEstimateBtn": "Estimate cost",
+    "consultEstimateTotal": "Estimated total",
+    "consultNoEstimate": "Cannot estimate",
+    "consultApproveRun": "Approve & run",
+    "consultRunning": "Running…",
+    "consultPartialFail": "Some runs failed"
   }
 }
