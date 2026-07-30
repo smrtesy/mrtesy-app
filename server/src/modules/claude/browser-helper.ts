@@ -44,6 +44,18 @@ interface HelperCtx {
  *  verification run also reports what the browser itself complained about. */
 const pageProblems: string[] = [];
 
+/** The launched browser, module-level so EVERY exit path can close it — the
+ *  watchdog and main().catch fire outside the scope that launched it, and a
+ *  process.exit that skips close leaves a zombie Chromium on the host. */
+let activeBrowser: Browser | null = null;
+
+async function closeBrowser(): Promise<void> {
+  if (activeBrowser) {
+    await activeBrowser.close().catch(() => {});
+    activeBrowser = null;
+  }
+}
+
 function usage(): never {
   console.error(
     [
@@ -162,17 +174,26 @@ async function openSession(): Promise<{ browser: Browser; context: BrowserContex
     throw e;
   }
 
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const cookies = JSON.parse(cookiesJson) as { name: string; value: string }[];
-  await context.addCookies(cookies.map((c) => ({ ...c, url: appUrl })));
+  activeBrowser = browser;
 
-  const page = await context.newPage();
-  page.on("console", (msg) => {
-    if (msg.type() === "error") pageProblems.push(`console.error: ${msg.text().slice(0, 500)}`);
-  });
-  page.on("pageerror", (err) => pageProblems.push(`pageerror: ${String(err).slice(0, 500)}`));
+  // From here on the browser is live: any setup failure (bad cookies JSON,
+  // context/page creation) must close it on the way out or it outlives us.
+  try {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const cookies = JSON.parse(cookiesJson) as { name: string; value: string }[];
+    await context.addCookies(cookies.map((c) => ({ ...c, url: appUrl })));
 
-  return { browser, context, page, appUrl };
+    const page = await context.newPage();
+    page.on("console", (msg) => {
+      if (msg.type() === "error") pageProblems.push(`console.error: ${msg.text().slice(0, 500)}`);
+    });
+    page.on("pageerror", (err) => pageProblems.push(`pageerror: ${String(err).slice(0, 500)}`));
+
+    return { browser, context, page, appUrl };
+  } catch (e) {
+    await closeBrowser();
+    throw e;
+  }
 }
 
 async function gotoTarget(page: Page, appUrl: string, target: string): Promise<void> {
@@ -201,14 +222,19 @@ async function main(): Promise<void> {
   const timeoutSec = Number(opt(args, "--timeout")) || 120;
   const killer = setTimeout(() => {
     console.error(`browser helper timed out after ${timeoutSec}s`);
-    process.exit(124);
+    // A wedged browser can hang close() too — the second timer guarantees the
+    // exit; process death reaps the child either way.
+    setTimeout(() => process.exit(124), 5_000).unref();
+    void closeBrowser().finally(() => process.exit(124));
   }, timeoutSec * 1000);
   killer.unref();
 
   const { browser, context, page, appUrl } = await openSession();
 
   const shot = async (name?: string, o?: { full?: boolean; attach?: boolean }): Promise<string> => {
-    const file = path.resolve(name || "screenshot.png");
+    // basename() confines the file to the working directory — the run may write
+    // there anyway, but --out must not become an arbitrary-path write primitive.
+    const file = path.resolve(path.basename(name || "screenshot.png"));
     await page.screenshot({ path: file, fullPage: o?.full ?? false });
     console.log(`screenshot saved: ${file}`);
     if (o?.attach) await attachToChat(file, "image/png");
@@ -263,16 +289,19 @@ async function main(): Promise<void> {
   } catch (e) {
     reportProblems(page);
     console.error("browser helper failed:", e instanceof Error ? e.message : String(e));
-    await browser.close().catch(() => {});
+    await closeBrowser();
     process.exit(1);
   }
 
-  await browser.close().catch(() => {});
+  await closeBrowser();
 }
 
 if (require.main === module) {
-  void main().catch((e) => {
+  void main().catch(async (e) => {
     console.error("browser helper failed:", e instanceof Error ? e.message : String(e));
+    // Covers failures between launch and the command try/catch (e.g. cookie
+    // setup) — without this close a crashed helper strands its Chromium.
+    await closeBrowser();
     process.exit(1);
   });
 }

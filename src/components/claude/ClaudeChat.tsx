@@ -1126,7 +1126,11 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
   // as inline images with the reply. `source` is absent on rows created before
   // the column existed; those are all user uploads.
   const userAttachments = turn.attachments.filter((a) => a.source !== "run");
-  const screenshots = turn.attachments.filter((a) => a.source === "run" && a.signed_url);
+  const runAttachments = turn.attachments.filter((a) => a.source === "run");
+  const screenshots = runAttachments.filter((a) => a.signed_url);
+  // A run file whose signed URL failed to mint still gets named — invisible
+  // evidence is worse than an unclickable filename.
+  const unsignedRunFiles = runAttachments.filter((a) => !a.signed_url);
 
   return (
     <div className="flex flex-col gap-2">
@@ -1206,6 +1210,12 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
                 className="mt-0.5 shrink-0"
               />
             </div>
+          )}
+
+          {unsignedRunFiles.length > 0 && (
+            <p className="text-[11px] text-muted-foreground" dir="auto">
+              {unsignedRunFiles.map((a) => a.filename).join(" · ")}
+            </p>
           )}
 
           {screenshots.length > 0 && (
