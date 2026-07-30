@@ -217,6 +217,23 @@ export function ClaudeChat() {
   // must be able to claim it BEFORE the auto-open effect fires.
   const autoOpenedRef = useRef(false);
 
+  // The Claude button opens a NEW chat: it navigates to /claude?new=<timestamp>,
+  // and this effect resets to the blank composer. Keyed on the VALUE so every
+  // click is fresh (openTab dedupes the tab by path and only updates its href —
+  // a static param would fire once and never again), and deliberately NOT
+  // touching deepLinkedRef, so a later ?thread=<id> deep-link (corrections'
+  // "continue with Claude") still opens its conversation.
+  const newParamRef = useRef<string | null>(null);
+  useEffect(() => {
+    const fresh = screenSearch.get("new");
+    if (!fresh || fresh === newParamRef.current) return;
+    newParamRef.current = fresh;
+    autoOpenedRef.current = true; // suppress open-latest on arrival
+    setActiveId(null);
+    activeIdRef.current = null;
+    setTurns([]);
+  }, [screenSearch]);
+
   /** The inspect-mode seed: the user marked an element somewhere in the app and
    *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
    *  the mark happened) AND from a live window event (it was — a mount-time read
