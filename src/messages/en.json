@@ -4621,6 +4621,20 @@
     "billingMonth": "fal spend this month",
     "billingTotal": "fal all-time total",
     "billingTopUp": "Top up credit (fal → Billing)",
-    "projectCost": "Actual cost: {fal} image/video (fal) · {voice} voice"
+    "projectCost": "Actual cost: {fal} image/video (fal) · {voice} voice",
+    "qcNotChecked": "Not checked yet",
+    "qcPass": "QC pass",
+    "qcRejected": "QC rejected",
+    "qcManual": "manual",
+    "qcRunVlm": "Run VLM judge",
+    "qcVlmConfirm": "The check is billed by tokens and cannot be precisely estimated up front (video costs more than an image). The actual cost is recorded on the run and included in billing. Approve?",
+    "qcVlmRunning": "Checking…",
+    "qcVlmGo": "Approve & check",
+    "qcOverridePass": "Approve manually",
+    "runFailed": "Failed",
+    "runInProgress": "Running…",
+    "qcBorderline": "Borderline",
+    "qcVlmFailed": "Previous check failed",
+    "qcCostSuffix": "+ {usd} QC checks"
   }
 }
