@@ -31,6 +31,8 @@ interface ProviderStatus {
   /** DB dot: the db_health_watchdog's "approaching problem" message + when it fired. */
   warning?: string | null;
   warnedAt?: string | null;
+  /** DB dot: live metric summary (memory/disk %), shown even when healthy. */
+  note?: string | null;
 }
 
 /** Deploy time in New York (CLAUDE.md: all user-facing times are America/New_York). */
@@ -80,6 +82,7 @@ function Dot({ label, full, s }: { label: string; full: string; s: ProviderStatu
             state,
             s?.commitSha ? `v ${s.commitSha.slice(0, 7)}` : null,
             when ? `${when} NY` : null,
+            s?.note ?? null, // live DB metrics (memory/disk) when present
           ]
             .filter(Boolean)
             .join(" · ");
