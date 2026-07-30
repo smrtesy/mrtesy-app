@@ -109,11 +109,10 @@
 
 /* Embedded pane mode — set on <html> by the inline script in (app)/layout.tsx
    when a page is loaded inside a tabs-workspace iframe (?embed=1). Strips the
-   app chrome (sidebar, collapse handle, floating WhatsApp FAB/panel) and zeroes
-   the content offsets so only the page itself fills the pane. */
+   app chrome (sidebar, collapse handle, WhatsApp panel) and zeroes the content
+   offsets so only the page itself fills the pane. */
 html[data-embed="1"] aside[data-sidebar],
 html[data-embed="1"] [data-sidebar-open-handle],
-html[data-embed="1"] [data-wa-fab],
 html[data-embed="1"] [data-task-fab],
 html[data-embed="1"] [data-mobile-avatar],
 html[data-embed="1"] [data-mobile-nav],

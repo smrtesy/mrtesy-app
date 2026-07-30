@@ -23,6 +23,15 @@ interface OpenWhatsAppOpts {
   preservePane?: boolean;
   /** Header label for the new pane when `preservePane` opens one. */
   paneLabel?: string;
+  /**
+   * When `preservePane` opens a NEW component pane, open it BESIDE the current
+   * pane (both expanded, side by side) instead of parking the current pane as a
+   * thin rail. Set by "open source" links so that clicking a WhatsApp source
+   * from the inbox / a task list keeps that list open and wide — the reported
+   * bug was the list pane being replaced (or shrunk to a rail) on every source
+   * open. Ignored outside a component pane.
+   */
+  besideCurrent?: boolean;
 }
 
 /**
@@ -54,7 +63,7 @@ export function useOpenWhatsAppChat() {
 
   return useCallback(
     (phone: string | null, opts: OpenWhatsAppOpts = {}) => {
-      const { focusWamid = null, draft = null, preservePane = false, paneLabel } = opts;
+      const { focusWamid = null, draft = null, preservePane = false, paneLabel, besideCurrent = false } = opts;
 
       const inComponentPane = paneNav !== null;
       const inIframePane = isEmbeddedPane();
@@ -76,7 +85,7 @@ export function useOpenWhatsAppChat() {
         // (better a live WhatsApp than a dead button).
         if (preservePane) {
           if (inComponentPane && tabs) {
-            tabs.openTab(href, paneLabel ?? "WhatsApp");
+            tabs.openTab(href, paneLabel ?? "WhatsApp", { focus: !besideCurrent });
             return;
           }
           if (inIframePane && requestOpenTab(href, paneLabel ?? "WhatsApp")) return;

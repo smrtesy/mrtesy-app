@@ -27,6 +27,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
 import { fileLastCommitDate, blobUrl, getGitHubToken, isValidRepo } from "./github";
+import { BROWSER_HELPER_PATH } from "./app-access";
 
 const router = Router();
 
@@ -515,6 +516,15 @@ export async function composePrompt(
   // inverse of the bug this fixes — it would confidently promise access it lacks.
   const hasGitHub = Boolean(await getGitHubToken());
 
+  // Whether the destructive-migration approval gate is actually reachable from a run.
+  // Same env the runner injects into the child (runner.ts): without both the internal
+  // secret and the backend URL, the m2m endpoint can't be called, so the preamble must
+  // NOT tell the run to use it — it should fall back to asking the human instead.
+  const gateReachable = Boolean(
+    (process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET) &&
+      (process.env.SMRTESY_PUBLIC_URL || process.env.SMRTESY_BACKEND_URL),
+  );
+
   const envLines = [
     "# איפה אתה רץ",
     "",
@@ -524,16 +534,51 @@ export async function composePrompt(
   ];
   if (hasGitHub) {
     envLines.push(
-      "- **גישה ל-GitHub:** מוגדר טוקן עם הרשאת repo. אתה יכול לשכפל כל ריפו שהטוקן מגיע אליו " +
-        "ולעבוד עליו כאן — `git clone https://github.com/<owner>/<repo>` — ולדחוף חזרה. " +
-        "אין צורך שהמשתמש ייתן לך כתובת או טוקן; ההרשאה כבר בסביבה.",
+      "- **הריפו כבר אצלך:** אם מחובר ריפו לצ'אט הזה (וכברירת מחדל מחובר הריפו הראשי), " +
+        "**המערכת כבר שכפלה אותו לתיקיית העבודה שלך** — אתה יכול לקרוא ולערוך את הקבצים ישירות, בלי פעולה מקדימה.",
+      "- **יש לך מעטפת (shell) מלאה בתוך העותק הזה** — git, npm, בדיקות, בנייה, דחיפה, ו-`supabase` CLI. " +
+        "אתה עובד כמו מפתח בצוות: קורא, עורך, מריץ ומוסר. אל תאמר למשתמש שאין לך גישה להרצת פקודות — יש.",
+      "- כדי לעבוד על ריפו **אחר**, בקש מהמשתמש לבחור אותו בהגדרות הצ'אט (כפתור ההגדרות ← בחירת ריפו), " +
+        "והמערכת תשכפל אותו עבורך בתור הבא. אל תבקש מהמשתמש כתובת או טוקן — ההרשאה כבר בסביבה.",
     );
     if (orgRepos.length > 0) {
       envLines.push(`- **הריפו-ים של הארגון:** ${orgRepos.join(", ")}.`);
     }
+    // The autonomy protocol — the operational half of docs/claude-console/
+    // autonomy-safety-gate.md, stated where the run will actually read it. The rule
+    // in one line: reversible → do it yourself; irreversible → route through a human.
+    // The first bullet (from origin/main) is repo orientation; the rest is the gate.
     envLines.push(
-      "- אם נבחר ריפו לצ'אט הזה (בהגדרות), הוא כבר משוכפל לתיקיית העבודה שלך. אם לא — שכפל בעצמך " +
-        "את הריפו הרלוונטי, או הצע למשתמש לבחור אותו בהגדרות הצ'אט.",
+      "- **התמצאות מהירה בריפו:** לפני שאתה חוקר עץ קבצים, קרא בשורש הריפו את `CLAUDE.md` ואת " +
+        'מפת הקודבייס `docs/codebase-map.md` (אם קיימת) — "איפה X" כמעט תמיד נענה משם. ' +
+        "בריפו המחובר לצ'אט ה-CLAUDE.md כבר נטען אוטומטית — והמפה איתו, כשהיא קיימת.",
+      "",
+      "## מה מותר לך לעשות לבד (ומה לא)",
+      "הכלל: **פעולה הפיכה — עשה לבד; פעולה בלתי-הפיכה — עצור לאישור אנושי.**",
+      "- **סיום שינוי → הבאה ל-main (הפיך, לבד):** כשסיימת שינוי שאמור לעלות לאוויר, הרץ קודם את " +
+        "פרוטוקול לפני-הדחיפה (`npm install --no-audit --no-fund && npm run build`, ותקן כל שגיאה חדשה בקבצים שנגעת בהם), " +
+        "ואז מזג ל-main עם `--no-ff` כך ש-main מקבל commit משלו (לא fast-forward), ודחוף. " +
+        "אל תבקש אישור למיזוג עצמו — הבנייה שעברה היא השער, ודחיפה הפיכה (revert / חזרה לגרסה ב-Vercel).",
+      "  **אחרי הדחיפה — אמת שהפרודקשן התקדם:** תן ל-Vercel דקות אחדות לבנות, ואז " +
+        "`curl -s https://app.smrtesy.com/api/deploy-info` ובדוק ש-`commit_short` תואם ל-SHA שדחפת. אם הוא " +
+        "עדיין תקוע על commit ישן אחרי ~10 דק', אמור זאת למשתמש (ייתכן שהתיקון עלה כ-Preview בלבד וצריך " +
+        "'Promote to Production' ב-Vercel).",
+      "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
+        "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` והרץ `supabase db push`.",
+      gateReachable
+        ? "- **מיגרציה הרסנית** (DROP, DELETE, UPDATE שמשנה נתונים, TRUNCATE, ALTER COLUMN TYPE/SET NOT NULL): " +
+          "**אל תחיל בעצמך.** קודם הרץ `SELECT` שקול כדי לראות מה ייפגע (ספירה + דגימה), ואז פתח כרטיס-אישור אנושי:\n" +
+          "  ```\n" +
+          "  curl -sS -X POST \"$SMRTESY_BACKEND_URL/api/claude-action/request-approval\" \\\n" +
+          "    -H \"content-type: application/json\" -H \"x-cron-secret: $SMRTBOT_INTERNAL_SECRET\" \\\n" +
+          "    -d '{\"org_id\":\"'\"$CLAUDE_ORG_ID\"'\",\"run_id\":\"'\"$CLAUDE_RUN_ID\"'\",\"repo\":\"<owner/name>\",\"git_branch\":\"<branch>\",\"migration_path\":\"supabase/migrations/<file>.sql\",\"sql\":\"<ה-SQL המלא>\",\"affected_count\":<מספר>,\"sample_rows\":[…]}'\n" +
+          "  ```\n" +
+          "  ה-backend מסווג את ה-SQL בעצמו: אם יתברר תוספתי תקבל `\"decision\":\"additive\"` (החל בעצמך); אם הרסני " +
+          "תקבל `\"decision\":\"needs_approval\"` — **עצור ואמור למשתמש שהמיגרציה ממתינה לאישורו במסך האישורים.** " +
+          "אחרי שיאשר, המערכת תריץ את ההחלה אוטומטית. אל תעקוף את זה ואל תמחק/תשנה נתונים ידנית."
+        : "- **מיגרציה הרסנית** (DROP, DELETE, UPDATE שמשנה נתונים, TRUNCATE): **אל תחיל בעצמך ואל תמחק נתונים.** " +
+          "שער-האישור אינו מוגדר בסביבה הזו (חסר SMRTBOT_INTERNAL_SECRET או SMRTESY_BACKEND_URL) — כתוב את קובץ המיגרציה, " +
+          "ובקש מהמשתמש להריץ אותו ידנית ב-Supabase CLI אחרי שבדק אותו.",
     );
   } else {
     // No token: say so plainly and point at where to set it, instead of promising
@@ -545,6 +590,51 @@ export async function composePrompt(
   }
   envLines.push(
     "- תיקיית העבודה שלך נשמרת לאורך כל השיחה — לכן קובץ ששכפלת או ערכת בתור אחד קיים בתור הבא.",
+  );
+
+  // App API access — whether the run will actually carry a token is decided at
+  // spawn time (runner.ts mints one per turn, best-effort), so the instruction is
+  // phrased against the environment variables themselves: present means usable.
+  envLines.push(
+    "",
+    "## גישה לאפליקציה עצמה (שימוש רגיל, כמו משתמש)",
+    "",
+    "- אם מוגדרים בסביבה `SMRTESY_API_URL` + `SMRTESY_API_TOKEN` (בדוק עם `env | grep SMRTESY`), " +
+      "יש לך סשן אמיתי וקצר-מועד של המשתמש שפתח את הצ'אט. אתה יכול לקרוא ל-API של הפלטפורמה " +
+      "בדיוק כמו שהפרונטאנד קורא לו:",
+    "  `curl -sS \"$SMRTESY_API_URL/api/<route>\" -H \"Authorization: Bearer $SMRTESY_API_TOKEN\" -H \"X-Org-Id: $SMRTESY_ORG_ID\"`",
+    "- זה מיועד לבדיקה אמיתית של התנהגות: לקרוא נתונים, להריץ פעולה, ולראות מה באמת חוזר — " +
+      "במקום להסיק מהקוד בלבד. הטוקן מתחדש בכל תור, אז הוא תמיד בתוקף בזמן שאתה רץ.",
+    "- זהירות: הקריאות פועלות על נתוני אמת של המשתמש. פעולות קריאה — חופשי; פעולות שכותבות או " +
+      "מוחקות — רק אם המשתמש ביקש זאת במפורש בצ'אט.",
+    "",
+    "## דפדפן אמיתי על האפליקציה (לראות מסכים כמו המשתמש)",
+    "",
+    "- אם מוגדר `SMRTESY_APP_URL` בסביבה, יש לך דפדפן Chrome ללא-ראש שכבר **מחובר לאפליקציה " +
+      "כמשתמש שפתח את הצ'אט**. שלוש פקודות (זו פקודת המעטפת היחידה שמאושרת לך מראש — הרץ אותה " +
+      "**בדיוק בצורה הזו**, עם הנתיב המלא, כי האישור מותאם לטקסט הפקודה המילולי):",
+    `  - \`node ${BROWSER_HELPER_PATH} shot <נתיב-במערכת> --out shot.png --attach\` — פותח מסך ומצלם; ` +
+      "`--attach` שולח את הצילום לצ'אט כך שהמשתמש רואה אותו בתשובה שלך. נתיב יחסי (כמו `/he/tasks`) נפתח על האפליקציה.",
+    `  - \`node ${BROWSER_HELPER_PATH} text <נתיב> --selector <css>\` — מדפיס את הטקסט המרונדר של מסך או רכיב.`,
+    `  - \`node ${BROWSER_HELPER_PATH} run <script.mjs>\` — שליטה מלאה ב-Playwright: כתוב סקריפט עם ` +
+      "`export default async ({ page, goto, shot, log }) => { … }` והרץ אותו (אין לייבא playwright — הוא מגיע מוזרק). " +
+      "כתיבת הסקריפט דורשת הרשאת עריכה, שקיימת רק בצ'אט שמחובר לריפו.",
+    "- כל פקודה מדווחת בסופה גם את שגיאות הקונסול של הדפדפן ואת ה-URL הסופי — קרא אותם; הם חלק מהראיה.",
+    "- מתי להשתמש: לוודא שתיקון UI באמת נראה נכון, לראות מה המשתמש רואה כשהוא מדווח על בעיה, " +
+      "ולצרף צילום כהוכחה במקום לתאר במילים. אחרי תיקון קוד — עדיף לצלם את המסך הפרוס רק אם התיקון כבר נפרס; " +
+      "ציין ליד הצילום איזו גרסה הוא משקף.",
+    "- אותם כללי זהירות כמו ה-API: לנווט, לקרוא ולצלם — חופשי; ללחוץ על פעולות שכותבות או מוחקות " +
+      "נתונים — רק אם המשתמש ביקש זאת במפורש.",
+    "",
+    "## כשהמשתמש מסמן מקום באפליקציה",
+    "",
+    "- למשתמש יש 'מצב סימון': הוא לוחץ על רכיב במסך, וההודעה שתקבל תכיל את הנתיב (route), " +
+      "תיאור הרכיב (תגית, מחלקות CSS, טקסט) ושרשרת האבות שלו.",
+    "- כשמגיעה הודעה כזו: שכפל את ריפו האפליקציה (אם לא משוכפל), אתר את הקומפוננטה לפי " +
+      "הטקסט/המחלקות/הנתיב (חיפוש בקוד — המסכים תחת `src/app` והקומפוננטות תחת `src/components`), " +
+      "הבן מה קורה שם, ותקן או הסבר לפי מה שהמשתמש ביקש.",
+    "- הנתיב שבהודעת הסימון עובד ישירות בדפדפן: `shot <הנתיב> --attach` מראה לך (ולמשתמש) " +
+      "את המסך המדובר בפועל.",
   );
   parts.push(envLines.join("\n"));
 

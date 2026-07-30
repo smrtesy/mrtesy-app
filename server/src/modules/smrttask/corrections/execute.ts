@@ -19,7 +19,7 @@
  */
 
 import { db } from "../../../db";
-import { executeRun } from "../../claude/runner";
+import { executeRun, AUTOMATION_ACCOUNT } from "../../claude/runner";
 import { maybeTitle } from "../../claude/threads";
 import { composePrompt } from "../../claude/playbooks";
 
@@ -126,6 +126,10 @@ export async function createFixThread(
         prompt: composed.prompt,
         user_prompt: message,
         repo: AUTOFIX_REPO,
+        // Automated classification fix — runs on the second subscription account so
+        // it stays off the primary account's usage window (falls back to primary
+        // when that account isn't configured).
+        claude_account: AUTOMATION_ACCOUNT,
         status: "queued",
       })
       .select("id")

@@ -148,7 +148,9 @@ function InboxPane({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      {/* pe-9 reserves the pane's top-inline-end corner for the floating grip
+          (TabsWorkspace PaneControls) so the ms-auto export button clears it. */}
+      <div className="flex items-center gap-3 pe-9">
         <h1 className="text-2xl font-bold">{t("title")}</h1>
         <OpenTabLink
           href={`/${locale}/log`}

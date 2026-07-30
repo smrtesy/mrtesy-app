@@ -170,6 +170,7 @@
   },
   "tabsWorkspace": {
     "close": "Close tab",
+    "paneControls": "Pane actions",
     "focusPane": "Focus this tab",
     "resizePane": "Resize",
     "paneError": "Something went wrong in this tab",
@@ -1139,6 +1140,9 @@
     "checkinTitle": "Daily report",
     "checkinSave": "Save report",
     "checkinSaved": "Report saved",
+    "checkinAutosaveHint": "Saved automatically · {answered}/{total}",
+    "checkinAllSaved": "All answers saved",
+    "checkinDone": "Done",
     "cancel": "Cancel",
     "noQuestions": "No questions defined yet. Add questions in the tool settings.",
     "segmentEnd": "End of day",
@@ -4418,6 +4422,7 @@
   "claudeChat": {
     "placeholder": "Describe a task or ask a question",
     "send": "Send",
+    "queueSend": "Send — queues and runs when the current turn finishes",
     "stop": "Stop",
     "stopped": "Turn stopped",
     "attach": "Attach a file",
@@ -4472,11 +4477,43 @@
       "apply": "Split {count} topics",
       "done": "Split into {count} chats"
     },
+    "approvals": {
+      "banner": "{count} destructive migrations awaiting your approval",
+      "showDetails": "Show details",
+      "affected": "{count} rows will be affected",
+      "noPreview": "No row preview available",
+      "approve": "Approve & run",
+      "reject": "Reject",
+      "approved": "Approved — applying now",
+      "rejected": "Rejected — nothing ran",
+      "decideFailed": "Action failed"
+    },
     "group": {
       "toggle": "Group by topic",
       "now": "Group now",
       "done": "Grouping updated",
       "none": "No topic"
+    },
+    "usage": {
+      "tokens": "tokens",
+      "tooltip": "Tokens in this conversation — input: {input} · output: {output}"
+    },
+    "queue": {
+      "waiting": "Waiting in line — runs when the current turn finishes",
+      "remove": "Remove from queue"
+    },
+    "inspect": {
+      "arm": "Mark a place in the app (Alt+Shift+C)",
+      "banner": "Inspect mode: click the problem component — Esc to cancel",
+      "cancel": "Cancel inspect",
+      "seedHeader": "I marked a place in the app (inspect mode). Captured details:",
+      "seedRoute": "Screen (route)",
+      "seedElement": "Element",
+      "seedText": "Visible text",
+      "seedFrame": "Embedded screen URL (iframe)",
+      "seedChain": "Component chain",
+      "seedTask": "Locate this component in the app's code (the repo is already selected for this chat), understand what happens there, and address the problem I describe.",
+      "seedProblem": "The problem:"
     },
     "decompose": {
       "title": "Break into parts",

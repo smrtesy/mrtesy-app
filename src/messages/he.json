@@ -170,6 +170,7 @@
   },
   "tabsWorkspace": {
     "close": "סגור טאב",
+    "paneControls": "פעולות טאב",
     "focusPane": "מקד טאב זה",
     "resizePane": "שנה רוחב",
     "paneError": "משהו השתבש בטאב הזה",
@@ -1139,6 +1140,9 @@
     "checkinTitle": "דיווח יומי",
     "checkinSave": "שמור דיווח",
     "checkinSaved": "הדיווח נשמר",
+    "checkinAutosaveHint": "נשמר אוטומטית · {answered}/{total}",
+    "checkinAllSaved": "כל התשובות נשמרו",
+    "checkinDone": "סיום",
     "cancel": "ביטול",
     "noQuestions": "לא הוגדרו שאלות. הוסף שאלות בהגדרות הכלי.",
     "segmentEnd": "סיום יום",
@@ -4417,6 +4421,7 @@
   "claudeChat": {
     "placeholder": "תאר משימה או שאל שאלה",
     "send": "שלח",
+    "queueSend": "שלח — ייכנס לתור וירוץ כשהתור הנוכחי יסתיים",
     "stop": "עצור",
     "stopped": "התור נעצר",
     "attach": "צרף קובץ",
@@ -4471,11 +4476,43 @@
       "apply": "פצל {count} נושאים",
       "done": "פוצל ל־{count} צ'אטים"
     },
+    "approvals": {
+      "banner": "{count} מיגרציות הרסניות ממתינות לאישורך",
+      "showDetails": "הצג פרטים",
+      "affected": "{count} שורות ייפגעו",
+      "noPreview": "אין תצוגה מקדימה של השורות",
+      "approve": "אשר והרץ",
+      "reject": "דחה",
+      "approved": "אושר — ההחלה מתחילה",
+      "rejected": "נדחה — כלום לא רץ",
+      "decideFailed": "הפעולה נכשלה"
+    },
     "group": {
       "toggle": "קבץ לפי נושא",
       "now": "אגד עכשיו",
       "done": "האיגוד עודכן",
       "none": "ללא נושא"
+    },
+    "usage": {
+      "tokens": "טוקנים",
+      "tooltip": "טוקנים בשיחה הזו — קלט: {input} · פלט: {output}"
+    },
+    "queue": {
+      "waiting": "ממתין בתור — ירוץ כשהתור הנוכחי יסתיים",
+      "remove": "הסר מהתור"
+    },
+    "inspect": {
+      "arm": "סמן מקום באפליקציה (Alt+Shift+C)",
+      "banner": "מצב סימון: לחץ על הרכיב הבעייתי במסך — Esc לביטול",
+      "cancel": "בטל סימון",
+      "seedHeader": "סימנתי מקום באפליקציה (מצב סימון). הפרטים שנלכדו:",
+      "seedRoute": "מסך (route)",
+      "seedElement": "רכיב",
+      "seedText": "טקסט מוצג",
+      "seedFrame": "כתובת המסך המוטמע (iframe)",
+      "seedChain": "שרשרת רכיבים",
+      "seedTask": "אתר את הקומפוננטה הזו בקוד האפליקציה (הריפו כבר נבחר לצ'אט), הבן מה קורה שם, וטפל בבעיה שאתאר.",
+      "seedProblem": "הבעיה:"
     },
     "decompose": {
       "title": "פירוק לחלקים",
