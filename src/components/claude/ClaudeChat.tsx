@@ -45,7 +45,6 @@ import { SplitReview, type ProposedTopic } from "./SplitReview";
 import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
-import { DeployStatusBadge } from "./DeployStatusBadge";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { Scissors, FolderTree, ExternalLink, ListTree } from "lucide-react";
 
@@ -812,8 +811,6 @@ export function ClaudeChat() {
               )}
             </Button>
           )}
-          {/* Deploy-status dots (Vercel/Railway). Invisible until a token is set. */}
-          <DeployStatusBadge />
           <Button
             size="sm"
             variant={settingsOpen ? "secondary" : "ghost"}

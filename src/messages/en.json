@@ -4505,9 +4505,10 @@
       "decideFailed": "Action failed"
     },
     "deploy": {
-      "label": "Deploy status",
-      "frontend": "FE",
-      "backend": "BE",
+      "label": "System status",
+      "frontend": "Frontend (Vercel)",
+      "backend": "Backend (Railway)",
+      "database": "Database (Supabase)",
       "building": "building",
       "ready": "ready",
       "error": "failed",
