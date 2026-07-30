@@ -85,7 +85,7 @@ function Dot({ label, full, s }: { label: string; full: string; s: ProviderStatu
 }
 
 export function SystemStatusStrip() {
-  const t = useTranslations("claude");
+  const t = useTranslations("claudeChat");
   const [data, setData] = useState<SystemStatus | null>(null);
 
   const load = useCallback(async () => {

@@ -41,7 +41,7 @@ interface Approval {
 const POLL_MS = 15_000;
 
 export function ApprovalsPanel() {
-  const t = useTranslations("claude");
+  const t = useTranslations("claudeChat");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
