@@ -19,6 +19,7 @@ import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
 import { getAppSecret } from "../../../db";
 import { transcribeAudioDetailed } from "../../../gemini";
+import { whatsappApiBase, whatsappBearer, whatsappViaProxy } from "../../../lib/whatsapp-endpoint";
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
@@ -460,14 +461,26 @@ function audioExtForMime(mime: string | null | undefined): string {
 // pull along its module initialization.
 async function downloadMetaMediaById(mediaId: string, token: string): Promise<{ base64: string; mimeType: string }> {
   const apiVersion = (await getAppSecret("smrttask", "META_API_VERSION", "META_API_VERSION")) || "v23.0";
-  const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const base = whatsappApiBase();
+  const bearer = whatsappBearer(token);
+  const metaRes = await fetch(`${base}/${apiVersion}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${bearer}` },
   });
   if (!metaRes.ok) throw new Error(`Meta media metadata ${metaRes.status}`);
   const meta = (await metaRes.json()) as { url?: string; mime_type?: string };
-  if (!meta.url) throw new Error("Meta media response missing url");
 
-  const fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+  // Direct-to-Meta returns a one-time lookaside CDN url we must follow; via the
+  // DualHook proxy that url is not reachable with the dh_live_ key, so pull the
+  // bytes from DualHook's dedicated /content route instead.
+  let fileRes: Awaited<ReturnType<typeof fetch>>;
+  if (whatsappViaProxy()) {
+    fileRes = await fetch(`${base}/${apiVersion}/${mediaId}/content`, {
+      headers: { Authorization: `Bearer ${bearer}` },
+    });
+  } else {
+    if (!meta.url) throw new Error("Meta media response missing url");
+    fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${bearer}` } });
+  }
   if (!fileRes.ok) throw new Error(`Meta media download ${fileRes.status}`);
   const buf = Buffer.from(await fileRes.arrayBuffer());
   return { base64: buf.toString("base64"), mimeType: meta.mime_type ?? "application/octet-stream" };

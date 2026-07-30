@@ -9,6 +9,7 @@
  * Ported from botsite/src/modules/wa.js.
  */
 import { metaErrorSummary } from "../../lib/meta-errors";
+import { whatsappApiBase, whatsappBearer } from "../../lib/whatsapp-endpoint";
 
 const META_API_VERSION = "v23.0";
 const MIN_GAP_MS = 500; // minimum gap between messages on the same number
@@ -89,10 +90,15 @@ export interface WaTemplate {
  * (whatsapp_business_account) and an access token with whatsapp_business_management.
  */
 export async function listTemplates(wabaId: string, accessToken: string): Promise<WaTemplate[]> {
+  // Auth via Bearer header (not the access_token query param) so the DualHook
+  // proxy path works: it expects the dh_live_ key as the bearer. Meta accepts
+  // the header identically for this GET.
   const url =
-    `https://graph.facebook.com/${META_API_VERSION}/${wabaId}/message_templates` +
-    `?fields=name,language,status,category,components&limit=200&access_token=${encodeURIComponent(accessToken)}`;
-  const resp = await fetch(url);
+    `${whatsappApiBase()}/${META_API_VERSION}/${wabaId}/message_templates` +
+    `?fields=name,language,status,category,components&limit=200`;
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}` },
+  });
   if (!resp.ok) {
     const detail = await resp.text().catch(() => "");
     throw new WhatsAppSendError(metaErrorSummary(resp.status, detail), resp.status, detail);
@@ -140,7 +146,7 @@ async function send(
   if (wait > 0) await sleep(wait);
   lastSentAt.set(creds.phoneNumberId, Date.now());
 
-  const url = `https://graph.facebook.com/${META_API_VERSION}/${creds.phoneNumberId}/messages`;
+  const url = `${whatsappApiBase()}/${META_API_VERSION}/${creds.phoneNumberId}/messages`;
   const body = JSON.stringify({ messaging_product: "whatsapp", to, ...message });
 
   let lastErr: WhatsAppSendError | null = null;
@@ -150,7 +156,7 @@ async function send(
       resp = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
+          Authorization: `Bearer ${whatsappBearer(creds.accessToken)}`,
           "Content-Type": "application/json",
         },
         body,

@@ -22,12 +22,17 @@ import { cn } from "@/lib/utils";
 
 interface ProviderStatus {
   configured: boolean;
-  state?: "building" | "ready" | "error" | "unknown";
+  state?: "building" | "ready" | "warn" | "error" | "unknown";
   rawState?: string;
   commitSha?: string | null;
   createdAt?: string | null;
   hint?: string;
   error?: string;
+  /** DB dot: the db_health_watchdog's "approaching problem" message + when it fired. */
+  warning?: string | null;
+  warnedAt?: string | null;
+  /** DB dot: live metric summary (memory/disk %), shown even when healthy. */
+  note?: string | null;
 }
 
 /** Deploy time in New York (CLAUDE.md: all user-facing times are America/New_York). */
@@ -55,6 +60,7 @@ const POLL_MS = 30_000;
 const DOT: Record<string, string> = {
   ready: "bg-status-ok",
   building: "bg-status-warn",
+  warn: "bg-status-warn", // amber — a problem is approaching (DB watchdog)
   error: "bg-destructive",
   unknown: "bg-muted-foreground/50",
 };
@@ -67,15 +73,19 @@ function Dot({ label, full, s }: { label: string; full: string; s: ProviderStatu
   const when = nyTime(s?.createdAt);
   const detail = s?.error
     ? s.error
-    : s?.configured === false
-      ? s?.hint ?? "—"
-      : [
-          state,
-          s?.commitSha ? `v ${s.commitSha.slice(0, 7)}` : null,
-          when ? `${when} NY` : null,
-        ]
-          .filter(Boolean)
-          .join(" · ");
+    : // amber DB pressure: show the watchdog's message + when it fired (NY).
+      s?.warning
+      ? [s.warning, nyTime(s?.warnedAt) ? `${nyTime(s?.warnedAt)} NY` : null].filter(Boolean).join(" · ")
+      : s?.configured === false
+        ? s?.hint ?? "—"
+        : [
+            state,
+            s?.commitSha ? `v ${s.commitSha.slice(0, 7)}` : null,
+            when ? `${when} NY` : null,
+            s?.note ?? null, // live DB metrics (memory/disk) when present
+          ]
+            .filter(Boolean)
+            .join(" · ");
   return (
     <span className="inline-flex items-center gap-1" title={`${full}: ${detail}`}>
       <span className={cn("size-2.5 rounded-full", DOT[state] ?? DOT.unknown)} />
