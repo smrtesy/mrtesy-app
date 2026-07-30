@@ -75,6 +75,12 @@ export async function saveAttachment(params: {
   filename: string;
   mimeType: string | null;
   base64: string;
+  /** Set for files the RUN produced (browser screenshots): linked to the turn
+   *  immediately, instead of waiting for a send to claim them. */
+  runId?: string;
+  /** 'user' (default) = sent by the user with a message; 'run' = produced by the
+   *  run itself. The UI renders them differently (chips vs inline images). */
+  source?: "user" | "run";
 }): Promise<AttachmentRow> {
   const cleaned = params.base64.replace(/^data:[^;]+;base64,/, "");
   const buffer = Buffer.from(cleaned, "base64");
@@ -102,6 +108,8 @@ export async function saveAttachment(params: {
       mime_type: params.mimeType,
       size_bytes: buffer.length,
       storage_path: storagePath,
+      ...(params.runId ? { run_id: params.runId } : {}),
+      ...(params.source ? { source: params.source } : {}),
     })
     .select("id, filename, mime_type, size_bytes, storage_path")
     .single();

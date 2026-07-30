@@ -124,7 +124,14 @@ interface Turn {
   duration_ms: number | null;
   created_at: string;
   events: TurnEvent[];
-  attachments: { id: string; filename: string }[];
+  attachments: {
+    id: string;
+    filename: string;
+    /** 'user' = sent with the message (chip); 'run' = produced by the run itself
+     *  (browser screenshot — rendered inline when signed_url is present). */
+    source?: "user" | "run";
+    signed_url?: string | null;
+  }[];
 }
 
 interface SplitProposal {
@@ -1114,10 +1121,20 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
   const live = turn.status === "queued" || turn.status === "running";
   const waiting = turn.status === "waiting";
   const turnTokens = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0);
+  // Two kinds of files on one turn: what the user SENT (chips on their message)
+  // and what the run PRODUCED — browser screenshots posted back mid-run, shown
+  // as inline images with the reply. `source` is absent on rows created before
+  // the column existed; those are all user uploads.
+  const userAttachments = turn.attachments.filter((a) => a.source !== "run");
+  const runAttachments = turn.attachments.filter((a) => a.source === "run");
+  const screenshots = runAttachments.filter((a) => a.signed_url);
+  // A run file whose signed URL failed to mint still gets named — invisible
+  // evidence is worse than an unclickable filename.
+  const unsignedRunFiles = runAttachments.filter((a) => !a.signed_url);
 
   return (
     <div className="flex flex-col gap-2">
-      {(turn.user_prompt || turn.attachments.length > 0) && (
+      {(turn.user_prompt || userAttachments.length > 0) && (
         <div className="group/msg flex items-start justify-end gap-1">
           {/* Copy sits OUTSIDE the bubble, on its leading edge, so it never
               overlaps the text and reads for the whole message. */}
@@ -1139,9 +1156,9 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
                 {turn.user_prompt}
               </p>
             )}
-            {turn.attachments.length > 0 && (
+            {userAttachments.length > 0 && (
               <p className="mt-1 text-[11px] text-muted-foreground" dir="auto">
-                {turn.attachments.map((a) => a.filename).join(" · ")}
+                {userAttachments.map((a) => a.filename).join(" · ")}
               </p>
             )}
           </div>
@@ -1192,6 +1209,40 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
                 reveal="msg"
                 className="mt-0.5 shrink-0"
               />
+            </div>
+          )}
+
+          {unsignedRunFiles.length > 0 && (
+            <p className="text-[11px] text-muted-foreground" dir="auto">
+              {unsignedRunFiles.map((a) => a.filename).join(" · ")}
+            </p>
+          )}
+
+          {screenshots.length > 0 && (
+            // What the run SAW: browser screenshots it posted back. Thumbnails,
+            // not full-size — a click opens the real image (signed URL, ~1h).
+            <div className="flex flex-wrap gap-2">
+              {screenshots.map((s) => (
+                <a
+                  key={s.id}
+                  href={s.signed_url!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={s.filename}
+                  className="block overflow-hidden rounded-lg border border-border"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- signed
+                      Supabase URL with ~1h expiry; next/image optimization would
+                      cache/proxy a URL that dies, and these are ephemeral proofs,
+                      not site assets. */}
+                  <img
+                    src={s.signed_url!}
+                    alt={s.filename}
+                    loading="lazy"
+                    className="max-h-48 w-auto max-w-full"
+                  />
+                </a>
+              ))}
             </div>
           )}
 

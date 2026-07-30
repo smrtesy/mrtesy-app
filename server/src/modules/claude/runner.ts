@@ -28,7 +28,7 @@ import { db, getAppSecret } from "../../db";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
-import { mintAppAccess, revokeAppAccess } from "./app-access";
+import { mintAppAccess, revokeAppAccess, BROWSER_HELPER_PATH } from "./app-access";
 
 /**
  * Where the subscription token is stored.
@@ -508,6 +508,18 @@ async function executeRunBody(runId: string): Promise<void> {
     env.SMRTESY_API_URL = appAccess.url;
     env.SMRTESY_API_TOKEN = appAccess.token;
     if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
+    // Real-browser access: the helper script logs a headless Chromium into the
+    // app as the user (same session as the API token, as cookies) and can post
+    // screenshots back into this very turn — hence the run id. The helper is
+    // shipped with the server build, next to this file's compiled form, so its
+    // require('playwright') resolves from the server's own node_modules no
+    // matter which workspace directory the turn runs in.
+    if (appAccess.browser) {
+      env.SMRTESY_APP_URL = appAccess.browser.appUrl;
+      env.SMRTESY_BROWSER_COOKIES = JSON.stringify(appAccess.browser.cookies);
+      env.SMRTESY_BROWSER_HELPER = BROWSER_HELPER_PATH;
+      env.SMRTESY_RUN_ID = runId;
+    }
   }
 
   // Attachments: downloaded into the working directory, then named in the prompt.
@@ -575,6 +587,20 @@ async function executeRunBody(runId: string): Promise<void> {
     // operator already set a permission flag there, so their choice wins.
     if (run.repo && !extra.some((x) => x.startsWith("--permission-mode") || x === "--dangerously-skip-permissions")) {
       a.push("--permission-mode", "acceptEdits");
+    }
+    // The ONE shell command a run may execute without a prompt: the browser
+    // helper (headless Chromium logged in as the user). Scoped to the helper's
+    // literal absolute path — the permission matcher compares literal command
+    // text, so this pre-approves `node <helper> …` and nothing else; general
+    // shell stays gated behind CLAUDE_RUN_EXTRA_ARGS exactly as before. Both
+    // quoting spellings are listed because each produces different literal text.
+    // --allowedTools is additive with --permission-mode and with any operator
+    // flags in `extra` (verified against CLI docs, 2026-07-29).
+    if (appAccess?.browser) {
+      // Flag repeated per rule (not one flag with two values): repetition is
+      // documented-additive, while variadic parsing of a second value is not.
+      a.push("--allowedTools", `Bash(node ${BROWSER_HELPER_PATH}:*)`);
+      a.push("--allowedTools", `Bash(node "${BROWSER_HELPER_PATH}":*)`);
     }
     a.push(...extra);
     return a;
