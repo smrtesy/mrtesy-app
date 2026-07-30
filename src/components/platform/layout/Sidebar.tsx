@@ -37,6 +37,7 @@ import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
 import { BrandWordmark } from "@/components/platform/branding/BrandWordmark";
+import { SystemStatusStrip } from "@/components/platform/layout/SystemStatusStrip";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
 import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -559,6 +560,9 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
               />
             )}
+            {/* General system status (frontend / backend / database) — one quiet row
+                under the Claude button. Admin-only: it reads a super-admin endpoint. */}
+            {isAdmin && <SystemStatusStrip />}
           </div>
         )}
       </aside>
