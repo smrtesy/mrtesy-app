@@ -263,7 +263,8 @@
     "platform": "Platform",
     "noAppsEnabled": "No apps enabled for this organization",
     "openPlatformAdmin": "Open platform admin",
-    "platformDescription": "System-level management — users, orgs, apps, logs and usage."
+    "platformDescription": "System-level management — users, orgs, apps, logs and usage.",
+    "voiceGuide": "Voice guide (smrtVoice)"
   },
   "whatsappAutoreply": {
     "title": "WhatsApp auto-reply",
