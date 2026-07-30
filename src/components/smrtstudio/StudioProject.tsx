@@ -927,7 +927,12 @@ function VoiceProjectGroup({
 
       {open && (
         <div className="space-y-2 border-t p-3">
-          <CreateScriptForm projectId={project.id} nextCode={nextCode} onCreated={() => { setScripts(null); setScriptsErr(null); onChanged(); }} />
+          {/* Only after the folder + scripts load do we know the real
+              code_prefix → nextCode; gating avoids briefly showing "1"
+              instead of e.g. "EP1" in the create dialog. */}
+          {scripts !== null && (
+            <CreateScriptForm projectId={project.id} nextCode={nextCode} onCreated={() => { setScripts(null); setScriptsErr(null); onChanged(); }} />
+          )}
 
           {scriptsErr && <p className="text-xs text-destructive">{scriptsErr}</p>}
           {scripts === null && !scriptsErr && <p className="text-xs text-muted-foreground">…</p>}
