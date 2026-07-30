@@ -4503,9 +4503,10 @@
       "decideFailed": "הפעולה נכשלה"
     },
     "deploy": {
-      "label": "סטטוס דיפלוי",
-      "frontend": "פרונט",
-      "backend": "שרת",
+      "label": "סטטוס מערכת",
+      "frontend": "פרונט (Vercel)",
+      "backend": "שרת (Railway)",
+      "database": "בסיס נתונים (Supabase)",
       "building": "בונה",
       "ready": "פעיל",
       "error": "נכשל",
