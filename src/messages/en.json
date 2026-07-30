@@ -4568,5 +4568,32 @@
     "anchor": "Link to section {title}",
     "copyCode": "Copy code",
     "copied": "Copied"
+  },
+  "studioProjects": {
+    "title": "Projects",
+    "newProject": "New project",
+    "namePlaceholder": "Project name",
+    "create": "Create",
+    "cancel": "Cancel",
+    "empty": "No projects yet — create the first one with the plus button.",
+    "tabVoice": "Voice",
+    "tabImage": "Image",
+    "tabVideo": "Video",
+    "voiceEmpty": "No linked voice project.",
+    "imageEmpty": "No image outputs in this project yet.",
+    "videoEmpty": "No video outputs in this project yet.",
+    "costPending": "cost pending",
+    "createTitle": "Create output",
+    "createModel": "Model",
+    "createBasis": "Recommendation basis",
+    "createRecipeHint": "Recommended prompt structure (from the recipe)",
+    "createPrompt": "Prompt",
+    "createMoreSettings": "More settings",
+    "createNoCandidates": "No catalog candidates for this kind — run a catalog sync.",
+    "createSchemaUnavailable": "Field schema currently unavailable from fal — prompt-only mode.",
+    "createRunDisabled": "Run",
+    "createRunDisabledWhy": "Running opens in stage C — once the cost-approval gate is built.",
+    "createBasisShortlist": "Catalog rank + recipe (no locked test winner yet)",
+    "createModelLockedWhy": "Choosing another model opens in stage C, together with running"
   }
 }

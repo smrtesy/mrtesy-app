@@ -4567,5 +4567,32 @@
     "anchor": "קישור לסעיף {title}",
     "copyCode": "העתק קוד",
     "copied": "הועתק"
+  },
+  "studioProjects": {
+    "title": "פרויקטים",
+    "newProject": "פרויקט חדש",
+    "namePlaceholder": "שם הפרויקט",
+    "create": "צור",
+    "cancel": "ביטול",
+    "empty": "אין עדיין פרויקטים — צור את הראשון עם כפתור הפלוס.",
+    "tabVoice": "קול",
+    "tabImage": "תמונה",
+    "tabVideo": "וידאו",
+    "voiceEmpty": "אין פרויקט קול מקושר.",
+    "imageEmpty": "אין עדיין תוצרי תמונה בפרויקט.",
+    "videoEmpty": "אין עדיין תוצרי וידאו בפרויקט.",
+    "costPending": "עלות בהמתנה",
+    "createTitle": "צור תוצר",
+    "createModel": "מודל",
+    "createBasis": "בסיס ההמלצה",
+    "createRecipeHint": "מבנה הפרומפט המומלץ (מהמתכון)",
+    "createPrompt": "פרומפט",
+    "createMoreSettings": "עוד הגדרות",
+    "createNoCandidates": "אין מועמדים בקטלוג לסוג הזה — הרץ סינכרון קטלוג.",
+    "createSchemaUnavailable": "סכמת השדות לא זמינה כרגע מ-fal — הטופס במצב פרומפט בלבד.",
+    "createRunDisabled": "הרץ",
+    "createRunDisabledWhy": "ההרצה נפתחת בשלב C — אחרי ששער אישור-העלות נבנה.",
+    "createBasisShortlist": "דירוג הקטלוג + מתכון (אין עדיין מנצח נעול מהבדיקות)",
+    "createModelLockedWhy": "בחירת מודל אחר נפתחת בשלב C, יחד עם ההרצה"
   }
 }
