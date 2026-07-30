@@ -4634,6 +4634,24 @@
     "runInProgress": "בהרצה…",
     "qcBorderline": "גבולי",
     "qcVlmFailed": "בדיקה קודמת נכשלה",
-    "qcCostSuffix": "‏+ {usd} בדיקות QC"
+    "qcCostSuffix": "‏+ {usd} בדיקות QC",
+    "consultButton": "יש לי בעיה",
+    "consultPlaceholder": "מה הבעיה בתוצר? תאר במילים שלך — כל פרטי ההרצה מצורפים אוטומטית.",
+    "consultSend": "שלח למומחה",
+    "consultSending": "שולח…",
+    "consultFiled": "נשלח למומחה ✓",
+    "consultTitle": "התייעצויות מומחה",
+    "consultOpen": "ממתין למומחה",
+    "consultAnswered": "יש תשובה — בחר פתרונות",
+    "consultExecuted": "הופעל",
+    "consultClosed": "נסגר",
+    "consultRisk": "סיכון",
+    "consultRejected": "כיוונים שנשללו",
+    "consultEstimateBtn": "הערכת עלות",
+    "consultEstimateTotal": "סה\"כ משוער",
+    "consultNoEstimate": "לא ניתן לאמוד",
+    "consultApproveRun": "אשר והרץ",
+    "consultRunning": "מריץ…",
+    "consultPartialFail": "חלק מההרצות נכשלו"
   }
 }

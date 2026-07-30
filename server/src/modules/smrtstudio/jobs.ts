@@ -133,6 +133,51 @@ router.post("/api/studio/jobs/sweep", async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/studio/jobs/consult-answer — the expert session's write-back
+ * (stage F). A manual /expert session (video-lab) diagnoses a filed
+ * consultation and posts its structured answer here; the project screen then
+ * renders the solutions as checkboxes → estimate → "אשר והרץ".
+ *
+ * Machine-to-machine (cron-secret guarded like the sweep). The answer must
+ * carry the contract shape: { diagnosis: string, solutions: [{title, ...}],
+ * rejected?: [...] } — a malformed answer is refused, never half-stored.
+ */
+router.post("/api/studio/jobs/consult-answer", async (req: Request, res: Response) => {
+  const id = String(req.body?.consultation_id ?? "");
+  const answer = req.body?.answer as Record<string, unknown> | undefined;
+  if (!id || !answer || typeof answer !== "object") {
+    return res.status(400).json({ error: "consultation_id and answer are required" });
+  }
+  if (typeof answer.diagnosis !== "string" || !answer.diagnosis.trim()) {
+    return res.status(400).json({ error: "answer.diagnosis (string) is required" });
+  }
+  const solutions = answer.solutions;
+  if (!Array.isArray(solutions) || solutions.length === 0 ||
+      solutions.some((s) => !s || typeof s !== "object" || typeof (s as Record<string, unknown>).title !== "string")) {
+    return res.status(400).json({ error: "answer.solutions must be a non-empty array of {title, ...}" });
+  }
+
+  const { data: consult, error } = await db.from("studio_consultations")
+    .select("id, status").eq("id", id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!consult) return res.status(404).json({ error: "consultation not found" });
+  // Re-answering an open/answered consultation refines it; an executed one is
+  // history — a new problem gets a new consultation.
+  if (consult.status !== "open" && consult.status !== "answered") {
+    return res.status(409).json({ error: `consultation is ${consult.status} — file a new one` });
+  }
+
+  const { error: upErr } = await db.from("studio_consultations").update({
+    answer,
+    status: "answered",
+    answered_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq("id", id);
+  if (upErr) return res.status(500).json({ error: upErr.message });
+  res.json({ ok: true, consultation_id: id, status: "answered" });
+});
+
+/**
  * POST /api/studio/jobs/poll-runs — the webhook-loss safety net (cron, every
  * few minutes): sweep runs stuck in `submitted` and settle any that fal has
  * finished. Idempotent with the webhook; free (status reads only).
