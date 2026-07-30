@@ -23,6 +23,7 @@ import {
   MoreHorizontal,
   BookOpen,
   Sparkles,
+  Search,
   ListPlus,
   CalendarRange,
   Archive,
@@ -148,6 +149,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const router = useRouter();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
   const [manualTaskOpen, setManualTaskOpen] = useState(false);
+  // Compact global-search entry point: collapsed to a magnifying-glass icon
+  // beside the Claude button; clicking expands a one-line input that opens the
+  // results as a tab. Same collapsed-until-needed pattern as the WhatsApp search.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQ, setSearchQ] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [openTasksCount, setOpenTasksCount] = useState(0);
@@ -524,29 +530,63 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 Gated on isAdmin because /claude's Express routes require a
                 super-admin; a non-admin keeps the router here rather than getting
                 a button that leads to a 401. */}
-            {isAdmin ? (
-              <Link
-                href={`${basePath}/claude`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  // ?new=<timestamp> → ClaudeChat resets to a blank chat. Fresh
-                  // value per click, because openTab dedupes the tab by path and
-                  // only swaps its href — a repeated value would be ignored.
-                  openTab(`${basePath}/claude?new=${Date.now()}`, t("claude"));
-                }}
-                className={cn(
-                  buttonVariants({ variant: "default" }),
-                  "w-full gap-2",
-                )}
+            {/* Primary action (Claude / update) + the compact search split: the
+                big button keeps its role; the small magnifying glass beside it
+                opens a one-line global search whose results open as a tab. */}
+            <div className="flex gap-2">
+              {isAdmin ? (
+                <Link
+                  href={`${basePath}/claude`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    // ?new=<timestamp> → ClaudeChat resets to a blank chat. Fresh
+                    // value per click, because openTab dedupes the tab by path and
+                    // only swaps its href — a repeated value would be ignored.
+                    openTab(`${basePath}/claude?new=${Date.now()}`, t("claude"));
+                  }}
+                  className={cn(buttonVariants({ variant: "default" }), "flex-1 gap-2")}
+                >
+                  <Bot className="h-4 w-4" />
+                  {t("claude")}
+                </Link>
+              ) : (
+                <Button onClick={() => setTaskInputOpen(true)} className="flex-1 gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  {t("update")}
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                aria-label={t("search")}
+                title={t("search")}
+                onClick={() => setSearchOpen((v) => !v)}
               >
-                <Bot className="h-4 w-4" />
-                {t("claude")}
-              </Link>
-            ) : (
-              <Button onClick={() => setTaskInputOpen(true)} className="w-full gap-2">
-                <Sparkles className="h-4 w-4" />
-                {t("update")}
+                <Search className="h-4 w-4" />
               </Button>
+            </div>
+            {searchOpen && (
+              <input
+                autoFocus
+                value={searchQ}
+                onChange={(e) => setSearchQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && searchQ.trim()) {
+                    openTab(
+                      `${basePath}/search?q=${encodeURIComponent(searchQ.trim())}`,
+                      t("search"),
+                    );
+                    setSearchOpen(false);
+                    setSearchQ("");
+                  } else if (e.key === "Escape") {
+                    setSearchOpen(false);
+                    setSearchQ("");
+                  }
+                }}
+                placeholder={t("searchPlaceholder")}
+                className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+              />
             )}
           </div>
         )}

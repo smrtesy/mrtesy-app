@@ -13,6 +13,7 @@ import appsRouter from "./apps/routes";
 import meRouter from "./me/routes";
 import messagingRouter from "./messaging/routes";
 import pushRouter from "./push/routes";
+import searchRouter from "./search/routes";
 
 const router = Router();
 
@@ -22,5 +23,10 @@ router.use(appsRouter);
 router.use(meRouter);
 router.use(messagingRouter);
 router.use(pushRouter);
+router.use(searchRouter);
 
 export default router;
+
+// Machine-to-machine (cron-secret gated) — mounted BEFORE the auth routers in
+// server/src/index.ts, like the other cron routers.
+export { default as searchCronRouter } from "./search/cron-routes";
