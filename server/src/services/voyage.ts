@@ -21,6 +21,14 @@ const COST_PER_1M = 0.06;
 
 export const EMBED_DIM = 1024;
 
+// Last batch-embed failure reason (status + short body), surfaced so the drain
+// endpoint can echo WHY Voyage rejected a batch (Railway logs aren't reachable
+// from the DB side). Diagnostic only.
+let lastEmbedError: string | null = null;
+export function getLastEmbedError(): string | null {
+  return lastEmbedError;
+}
+
 interface VoyageResponse {
   data?: { embedding: number[]; index?: number }[];
   usage?: { total_tokens?: number };
@@ -129,8 +137,14 @@ export async function embedTexts(
       },
       body: JSON.stringify({ model: MODEL, input: inputs, input_type: inputType }),
     });
-    if (!resp.ok) return results; // whole batch failed → all null (caller retries)
+    if (!resp.ok) {
+      // Capture the reason so the drain endpoint can echo it (see getLastEmbedError).
+      const body = await resp.text().catch(() => "");
+      lastEmbedError = `voyage ${resp.status} (${inputs.length} inputs): ${body.slice(0, 300)}`;
+      return results; // whole batch failed → all null (caller retries)
+    }
 
+    lastEmbedError = null;
     const json = (await resp.json()) as VoyageResponse;
     for (let k = 0; k < (json.data?.length ?? 0); k++) {
       const item = json.data![k];
@@ -143,7 +157,8 @@ export async function embedTexts(
     }
     await logVoyageUsage(json.usage?.total_tokens ?? 0, meta?.userId, meta?.refId);
     return results;
-  } catch {
+  } catch (e) {
+    lastEmbedError = `voyage fetch threw: ${(e as Error).message}`.slice(0, 300);
     return results;
   }
 }

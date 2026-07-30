@@ -13,6 +13,7 @@
 import { Router, type Request, type Response } from "express";
 import { drainQueue } from "./worker";
 import { backfillAll } from "./indexer";
+import { getLastEmbedError } from "../../../services/voyage";
 
 const router = Router();
 
@@ -28,7 +29,10 @@ router.post("/search/index/drain", async (req: Request, res: Response) => {
   const limit = typeof capRaw === "number" && capRaw > 0 && capRaw <= 1000 ? capRaw : undefined;
 
   const result = await drainQueue(limit);
-  return res.json({ ok: true, ...result });
+  // Echo the last embed failure reason so it's visible in net._http_response
+  // (Railway logs aren't reachable from the DB side). Only when something failed.
+  const voyageError = result.failed > 0 ? getLastEmbedError() : null;
+  return res.json({ ok: true, ...result, ...(voyageError ? { voyageError } : {}) });
 });
 
 // One-time history seed for the whole instance (no JWT — cron-secret only), so
