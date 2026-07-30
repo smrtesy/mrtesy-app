@@ -182,6 +182,19 @@
     "emptyTitle": "אין טאבים פתוחים",
     "emptyHint": "בחר מסך מהתפריט כדי לפתוח טאב"
   },
+  "searchPage": {
+    "title": "חיפוש בכל המערכת",
+    "placeholder": "מה לחפש? למשל: הביטוח הרפואי של שפרה",
+    "searching": "מחפש…",
+    "answerLabel": "תשובה",
+    "answerHint": "התשובה נוצרה מהמקורות שלמטה — לחצו כדי לאמת.",
+    "groupSettings": "הגדרות ודפים",
+    "groupContent": "הצעות, משימות ומידע",
+    "groupClaude": "שיחות בקלוד",
+    "empty": "לא נמצאו תוצאות.",
+    "emptyHint": "נסו ניסוח אחר, או ודאו שהאינדקס נבנה.",
+    "external": "פתיחה במקור"
+  },
   "nav": {
     "account": "ניהול חשבון",
     "dailyReport": "דוח יומי",
@@ -203,6 +216,8 @@
     "sectionViews": "תצוגות",
     "newTask": "משימה חדשה",
     "update": "עדכון",
+    "search": "חיפוש",
+    "searchPlaceholder": "חיפוש בכל המערכת…",
     "inbox": "תיבה",
     "inboxIncoming": "נכנס",
     "guide": "מדריך",
