@@ -12,6 +12,8 @@ import {
   Plus, Check, X, Pencil, Trash2, Loader2, BookOpen,
 } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { cn } from "@/lib/utils";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { toast } from "sonner";
 
 type Status = "approved" | "pending" | "rejected";
@@ -35,6 +37,9 @@ type SheetState =
 export function KnowledgeCenter() {
   const t = useTranslations("knowledge");
   const locale = useLocale();
+  // Reserve the pane's top-inline-end corner for the floating grip so the "add"
+  // button clears it; no-op when rendered as a routed page.
+  const inPane = useOptionalPaneNav() != null;
 
   const [tab, setTab] = useState<Status>("approved");
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -119,7 +124,7 @@ export function KnowledgeCenter() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className={cn("flex items-center justify-between gap-2", inPane && "pe-9")}>
         <h1 className="text-2xl font-bold text-start flex items-center gap-2">
           <BookOpen className="h-6 w-6 text-status-ok" />
           {t("title")}
