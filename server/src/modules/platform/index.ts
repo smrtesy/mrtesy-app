@@ -26,3 +26,7 @@ router.use(pushRouter);
 router.use(searchRouter);
 
 export default router;
+
+// Machine-to-machine (cron-secret gated) — mounted BEFORE the auth routers in
+// server/src/index.ts, like the other cron routers.
+export { default as searchCronRouter } from "./search/cron-routes";

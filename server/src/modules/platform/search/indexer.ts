@@ -32,8 +32,17 @@ export interface SearchDocInput {
   language: string | null;
 }
 
+// "upserted"    — row written with its embedding (or none was needed).
+// "embed_failed" — Voyage is configured but the call came back null (transient):
+//                  the row IS written (text search still works) but the caller
+//                  should RETRY later so it gets a real embedding, rather than
+//                  being left unsearchable-by-meaning forever.
+// "error"        — the DB upsert itself failed.
+export type UpsertResult = "upserted" | "embed_failed" | "error";
+
 /** Embed the row's searchable text and upsert on (source_type, source_id). */
-async function upsertDoc(input: SearchDocInput, userIdForUsage?: string): Promise<boolean> {
+async function upsertDoc(input: SearchDocInput, userIdForUsage?: string): Promise<UpsertResult> {
+  const voyageConfigured = !!process.env.VOYAGE_API_KEY;
   const text = [input.title, input.snippet ?? "", input.keywords ?? ""].join(" ").trim();
   const embedding = text
     ? await embedText(text, "document", { userId: userIdForUsage, refId: input.source_id })
@@ -59,9 +68,13 @@ async function upsertDoc(input: SearchDocInput, userIdForUsage?: string): Promis
 
   if (error) {
     console.error("[search/indexer] upsert failed:", input.source_type, input.source_id, error.message);
-    return false;
+    return "error";
   }
-  return true;
+  // Voyage configured + real text to embed + null back = transient failure → retry.
+  // (Voyage NOT configured → embedding is expected-null and permanent; don't retry
+  //  or the incremental queue would grow unbounded while the feature is off.)
+  if (voyageConfigured && text && !embedding) return "embed_failed";
+  return "upserted";
 }
 
 /** Index the curated navigation destinations (global rows). */
@@ -79,7 +92,7 @@ export async function indexDestinations(): Promise<number> {
       keywords: `${d.titleHe} ${d.titleEn} ${d.keywords}`,
       language: "he",
     });
-    if (ok) n++;
+    if (ok !== "error") n++;
   }
   return n;
 }
@@ -121,7 +134,7 @@ export async function indexTasksForUser(userId: string, cap = DEFAULT_CAP): Prom
       },
       userId,
     );
-    if (ok) n++;
+    if (ok !== "error") n++;
   }
   return n;
 }
@@ -168,7 +181,7 @@ export async function indexInfoForUser(userId: string, cap = DEFAULT_CAP): Promi
       },
       userId,
     );
-    if (ok) n++;
+    if (ok !== "error") n++;
   }
   return n;
 }
@@ -201,9 +214,119 @@ export async function indexClaudeThreadsForOrg(orgId: string, cap = DEFAULT_CAP)
       keywords: title,
       language: null,
     });
-    if (ok) n++;
+    if (ok !== "error") n++;
   }
   return n;
+}
+
+// ── Single-row indexers (used by the incremental drain worker) ───────────────
+// Each fetches ONE source row by id and upserts it. Returns "upserted" (indexed),
+// "missing" (row gone — nothing to index; the worker still clears the queue),
+// or "error". The row→SearchDocInput mapping mirrors the batch functions above;
+// keep the two in step if a field changes.
+
+export type IndexOneResult = "upserted" | "embed_failed" | "missing" | "error";
+
+export async function indexOneTask(id: string): Promise<IndexOneResult> {
+  const { data, error } = await db
+    .from("tasks")
+    .select("id, user_id, title, title_he, description, serial_display")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[search/indexer] indexOneTask load failed:", error.message);
+    return "error";
+  }
+  if (!data) return "missing";
+  const t = data as {
+    id: string;
+    user_id: string | null;
+    title: string | null;
+    title_he: string | null;
+    description: string | null;
+    serial_display: string | null;
+  };
+  const ok = await upsertDoc(
+    {
+      org_id: null,
+      user_id: t.user_id,
+      source_type: "task",
+      source_id: t.id,
+      title: (t.title_he || t.title || "משימה").trim(),
+      snippet: t.description ? t.description.slice(0, 300) : null,
+      url: `/tasks?focus=${t.id}`,
+      keywords: [t.title, t.title_he, t.serial_display].filter(Boolean).join(" ") || null,
+      language: null,
+    },
+    t.user_id ?? undefined,
+  );
+  return ok;
+}
+
+export async function indexOneInfo(id: string): Promise<IndexOneResult> {
+  const { data, error } = await db
+    .from("source_messages")
+    .select("id, user_id, subject, body_text, source_url, sender, sender_email, sender_phone")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[search/indexer] indexOneInfo load failed:", error.message);
+    return "error";
+  }
+  if (!data) return "missing";
+  const m = data as {
+    id: string;
+    user_id: string | null;
+    subject: string | null;
+    body_text: string | null;
+    source_url: string | null;
+    sender: string | null;
+    sender_email: string | null;
+    sender_phone: string | null;
+  };
+  const ok = await upsertDoc(
+    {
+      org_id: null,
+      user_id: m.user_id,
+      source_type: "info",
+      source_id: m.id,
+      title: (m.subject || m.sender || "הודעה").trim(),
+      snippet: m.body_text ? m.body_text.slice(0, 300) : null,
+      url: m.source_url || "/info",
+      keywords:
+        [m.sender, m.sender_email, m.sender_phone, m.subject].filter(Boolean).join(" ") || null,
+      language: null,
+    },
+    m.user_id ?? undefined,
+  );
+  return ok;
+}
+
+export async function indexOneClaudeThread(id: string): Promise<IndexOneResult> {
+  const { data, error } = await db
+    .from("claude_threads")
+    .select("id, org_id, title")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[search/indexer] indexOneClaudeThread load failed:", error.message);
+    return "error";
+  }
+  if (!data) return "missing";
+  const th = data as { id: string; org_id: string | null; title: string | null };
+  const title = (th.title || "שיחת קלוד").trim();
+  const ok = await upsertDoc({
+    org_id: th.org_id,
+    user_id: null,
+    source_type: "claude_thread",
+    source_id: th.id,
+    title,
+    snippet: null,
+    url: `/claude?thread=${th.id}`,
+    keywords: title,
+    language: null,
+  });
+  return ok;
 }
 
 export interface ReindexResult {

@@ -114,8 +114,10 @@ Rules & AI: `rules_memory` (skip rules — parser lives in
 `supabase/functions/_shared/rule-filters.ts`; the two must stay in sync),
 `ai_prompts`, `log_entries`, `run_sessions`, `sync_state`, `sync_schedules`.
 Global search: `search_documents` (unified pgvector index over destinations/
-tasks/info/claude threads; `match_search_documents` hybrid RPC —
-`server/src/modules/platform/search/`).
+tasks/info/claude threads; `match_search_documents` hybrid RPC) +
+`search_index_queue` (DB triggers enqueue changed rows; a pg_cron→
+`/api/search/index/drain` worker keeps the index fresh) —
+`server/src/modules/platform/search/`.
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`
