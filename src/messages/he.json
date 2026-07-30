@@ -4582,6 +4582,8 @@
     "createNoCandidates": "אין מועמדים בקטלוג לסוג הזה — הרץ סינכרון קטלוג.",
     "createSchemaUnavailable": "סכמת השדות לא זמינה כרגע מ-fal — הטופס במצב פרומפט בלבד.",
     "createRunDisabled": "הרץ",
-    "createRunDisabledWhy": "ההרצה נפתחת בשלב C — אחרי ששער אישור-העלות נבנה."
+    "createRunDisabledWhy": "ההרצה נפתחת בשלב C — אחרי ששער אישור-העלות נבנה.",
+    "createBasisShortlist": "דירוג הקטלוג + מתכון (אין עדיין מנצח נעול מהבדיקות)",
+    "createModelLockedWhy": "בחירת מודל אחר נפתחת בשלב C, יחד עם ההרצה"
   }
 }

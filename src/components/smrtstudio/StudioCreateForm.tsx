@@ -62,6 +62,8 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
 
   useEffect(() => {
     let cancelled = false;
+    setRec(null);
+    setError(null);
     (async () => {
       try {
         const data = await api<Recommendation>(`/api/studio/recommendation?kind=${kind}`);
@@ -154,16 +156,21 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
               // Stage B renders the recommended model's schema; switching model
               // re-fetches in stage C when the form drives a real run.
               disabled
+              title={t("createModelLockedWhy")}
             >
               {rec.candidates.map((c) => (
                 <option key={c.endpoint_id} value={c.endpoint_id}>
                   {c.title || c.endpoint_id}
-                  {c.price_usd != null ? ` — $${c.price_usd}/${c.price_unit}` : ""}
+                  {c.price_usd != null
+                    ? ` — $${c.price_usd}${c.price_unit ? `/${c.price_unit}` : ""}`
+                    : ""}
                   {c.has_recipe ? " ★" : ""}
                 </option>
               ))}
             </select>
-            <span className="block text-muted-foreground">{t("createBasis")}: {rec.basis}</span>
+            <span className="block text-muted-foreground">
+              {t("createBasis")}: {rec.basis === "shortlist_rank" ? t("createBasisShortlist") : rec.basis}
+            </span>
           </label>
 
           {recipePromptSection && (

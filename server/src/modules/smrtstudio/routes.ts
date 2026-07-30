@@ -709,7 +709,9 @@ router.get("/studio/recommendation", async (req: Request, res: Response) => {
       : null;
   res.json({
     kind,
-    basis: "shortlist_rank+recipe (no locked winner-*.json in video-lab yet)",
+    // A CODE, not prose — the client maps it to an i18n string. Values:
+    // "shortlist_rank" (no locked winner yet) | future: "locked_winner".
+    basis: "shortlist_rank",
     candidates,
     recommended: {
       endpoint_id: top.endpoint_id,

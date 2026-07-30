@@ -4583,6 +4583,8 @@
     "createNoCandidates": "No catalog candidates for this kind — run a catalog sync.",
     "createSchemaUnavailable": "Field schema currently unavailable from fal — prompt-only mode.",
     "createRunDisabled": "Run",
-    "createRunDisabledWhy": "Running opens in stage C — once the cost-approval gate is built."
+    "createRunDisabledWhy": "Running opens in stage C — once the cost-approval gate is built.",
+    "createBasisShortlist": "Catalog rank + recipe (no locked test winner yet)",
+    "createModelLockedWhy": "Choosing another model opens in stage C, together with running"
   }
 }
