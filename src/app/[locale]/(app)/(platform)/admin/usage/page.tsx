@@ -160,6 +160,19 @@ export default async function AdminUsagePage({
             <span className="font-medium">month</span> — the providers bill by calendar month
             (UTC), so a rolling window will never match an invoice.
           </p>
+          {/* Says what is NOT here, on the screen that claims to hold everything.
+              Without this line the omission reads as a gap to be closed — which is
+              how fal got folded in (correctly), and how claude_runs would get folded
+              in (incorrectly: subscription runs appear on no invoice, so adding them
+              breaks the reconciliation this page exists for). See migration
+              20260729210000_ai_usage_summary_excludes_claude_runs.sql. */}
+          <p className="text-sm text-muted-foreground mt-1">
+            <span className="font-medium">Invoiced spend only.</span> Claude Code console runs
+            are a <span className="font-medium">separate account</span> and are deliberately
+            excluded: they execute on the Claude subscription, are not billed per token, and
+            their cost figure is an equivalent-value estimate rather than an amount owed.
+            They are reported on the Claude runs screen instead.
+          </p>
         </div>
         {/* Two groups: rolling windows, then the calendar months to reconcile
             against. The divider is what tells them apart at a glance — without

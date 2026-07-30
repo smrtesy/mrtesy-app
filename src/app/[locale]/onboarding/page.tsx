@@ -34,27 +34,37 @@ export default function OnboardingStep1() {
         // Make sure an active org is selected so the next API calls carry X-Org-Id.
         setActiveOrgId(orgs[0].id);
 
-        // Project-only ("lite") worker: they have no data sources to connect and
-        // nothing to scan. Skip the entire connect+scan onboarding — mark it done
-        // and drop them straight into their task list. This is what fixes an
-        // invited worker being pushed through the sync screen (and hitting the
-        // permission error on "scan"). If the access check fails (e.g. no
-        // smrtTask grant at all) we fall through to the normal flow.
-        let isLite = false;
+        // Who actually needs the source-connection onboarding (connect Gmail/
+        // Drive/Calendar, then scan)? Only a FULL smrtTask user. Two kinds of
+        // member have nothing to connect here and must skip it:
+        //   • a project-only ("lite") smrtTask worker — no sources, no scan; and
+        //   • a member with NO smrtTask access at all (e.g. a smrtVoice-only
+        //     employee) — the smrtTask funnel is irrelevant to them, AND they
+        //     can't complete it, so onboarding_completed would never flip and
+        //     they'd be stuck on the Gmail step forever.
+        // /api/tasks/access returns the level for a smrtTask user and 403s for a
+        // member without smrtTask — so a 403 is the "no smrtTask → skip" signal.
+        // Any OTHER error is left to fail safe: we keep the normal wizard rather
+        // than skip onboarding wrongly.
+        let needsSourceOnboarding = true;
         try {
           const { access_level } = await api<{ access_level: string }>("/api/tasks/access");
-          isLite = access_level === "lite";
+          needsSourceOnboarding = access_level !== "lite";
         } catch (accessErr) {
-          if (!(accessErr instanceof ApiError && accessErr.status === 403)) {
+          if (accessErr instanceof ApiError && accessErr.status === 403) {
+            needsSourceOnboarding = false;
+          } else {
             console.error("[onboarding] access check failed:", accessErr);
           }
         }
-        if (isLite) {
-          // Commit to the lite path: mark onboarding done and go to tasks. Never
-          // fall back to the source-connection flow (a lite worker can't finish
-          // it). If the settings write fails transiently, still route to /tasks —
-          // the layout re-runs this page and retries, so it self-heals rather
-          // than stranding the worker on a Gmail step they can't complete.
+        if (!needsSourceOnboarding) {
+          // Commit to skipping: mark onboarding done and hand off to the locale
+          // root, which routes the user to their app (smrtTask → /tasks, else
+          // their first enabled app). Never fall back to the source-connection
+          // flow — these users can't finish it. If the settings write fails
+          // transiently, still route away: the layout re-runs this page and
+          // retries, so it self-heals rather than stranding the user on a Gmail
+          // step they can't complete.
           try {
             await api("/api/me/settings", {
               method: "PATCH",
@@ -62,9 +72,9 @@ export default function OnboardingStep1() {
               noOrg: true,
             });
           } catch (patchErr) {
-            console.error("[onboarding] completing lite onboarding failed:", patchErr);
+            console.error("[onboarding] completing app-only onboarding failed:", patchErr);
           }
-          router.replace(`/${locale}/tasks`);
+          router.replace(`/${locale}`);
           return;
         }
         setReady(true);
