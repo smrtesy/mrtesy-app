@@ -1,6 +1,5 @@
 import type { ComponentType } from "react";
 import { SmrtTaskIcon } from "@/components/icons/SmrtTaskIcon";
-import { SmrtVoiceIcon } from "@/components/icons/SmrtVoiceIcon";
 import { SmrtCRMIcon } from "@/components/icons/SmrtCRMIcon";
 import { SmrtReachIcon } from "@/components/icons/SmrtReachIcon";
 import { SmrtBotIcon } from "@/components/icons/SmrtBotIcon";
@@ -57,22 +56,6 @@ export const APPS: Record<string, AppDef> = {
     guideHref: "/tasks/guide",
     settingsHref: "/settings/apps/smrttask",
     color: "#3b82f6",
-  },
-  smrtvoice: {
-    slug: "smrtvoice",
-    word: "Voice",
-    Icon: SmrtVoiceIcon,
-    homeHref: "/voice",
-    guideHref: "/voice/guide",
-    settingsHref: "/settings/apps/smrtvoice",
-    // Lime, not the violet it used to carry: that violet (hue 258°) sat 12° from
-    // smrtStudio's purple below (hue 271°) — the closest pair in this table — so
-    // the two sections read as the same category in the sidebar. Hue 85° is the
-    // middle of the only wide gap left (smrtReach 38° → smrtCRM 160°), 47° clear
-    // of its nearest neighbour. The 600 shade, not 500: `color` is also the
-    // section-name TEXT color in AppSectionHeader, and lime-500 (#84cc16) is
-    // 1.98:1 on white — below every other app here; this is 3.09:1, mid-range.
-    color: "#65a30d",
   },
   smrtcrm: {
     slug: "smrtcrm",
@@ -149,7 +132,7 @@ export function getApp(slug: string): AppDef | undefined {
  * the nav is the one they land on.
  */
 const LANDING_ORDER: readonly string[] = [
-  "smrttask", "smrtplan", "smrtstudio", "smrtvoice",
+  "smrttask", "smrtplan", "smrtstudio",
   "smrtcrm", "smrtreach", "smrtbot", "smrtvault", "smrtinfo",
 ];
 
@@ -164,6 +147,9 @@ const LANDING_ORDER: readonly string[] = [
  * Returns a locale-less path (leading slash); callers prepend `/{locale}`.
  */
 export function getLandingHref(enabledApps: string[]): string {
+  // Stage G: a lingering smrtvoice entitlement (pre-absorption-migration DB)
+  // counts as smrtstudio — the app it was absorbed into.
+  enabledApps = enabledApps.map((s) => (s === "smrtvoice" ? "smrtstudio" : s));
   if (enabledApps.length === 0 || enabledApps.includes("smrttask")) return "/tasks";
   for (const slug of LANDING_ORDER) {
     if (enabledApps.includes(slug)) return APPS[slug]?.homeHref ?? "/tasks";

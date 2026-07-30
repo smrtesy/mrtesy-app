@@ -14,13 +14,18 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
+import { requireAuth, requireOrg, requireApp, requireRole, isSuperAdmin } from "../../middleware";
 import { fetchModelSchema } from "./indexer";
 import { runSweep, sweepToCompletion, SweepError } from "./sweep";
 import { MODEL_RECIPES } from "./recipes";
 import {
   estimateRunCost, falKey, newRunCode, newWebhookToken, queueSubmit, webhookUrlFor,
 } from "./runner";
+import {
+  pollVlmJudge, submitVlmJudge, vlmJudgeEnabled, vlmJudgeModel,
+  type VlmJudgeHandle,
+} from "./qc";
+import { emitEvent } from "../../lib/platform";
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
@@ -631,7 +636,7 @@ router.post("/studio/projects", async (req: Request, res: Response) => {
 router.get("/studio/projects/:id", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
   const id = req.params.id;
-  const [project, voice, runs] = await Promise.all([
+  const [project, voice, runs, consults] = await Promise.all([
     db.from("studio_projects").select("*")
       .eq("org_id", orgId).eq("id", id).maybeSingle(),
     db.from("smrtvoice_projects")
@@ -640,18 +645,32 @@ router.get("/studio/projects/:id", async (req: Request, res: Response) => {
       .order("updated_at", { ascending: false }),
     pageAll<Row>((from, to) =>
       db.from("experiment_runs")
-        .select("id, code, model, method, stage, prompt, seed, cost_usd, output_url, qc_status, qc_score, qc_reason, meta, created_at")
+        .select("id, code, model, method, stage, prompt, seed, cost_usd, output_url, run_status, error, qc_status, qc_score, qc_reason, qc_scores, qc_cost_usd, overridden, meta, created_at")
+        .eq("org_id", orgId).eq("studio_project_id", id)
+        .order("created_at", { ascending: false }).range(from, to)),
+    pageAll<Row>((from, to) =>
+      db.from("studio_consultations")
+        .select("id, run_id, status, problem, answer, executed_run_ids, created_at, answered_at")
         .eq("org_id", orgId).eq("studio_project_id", id)
         .order("created_at", { ascending: false }).range(from, to)),
   ]);
-  const err = project.error || voice.error || runs.error;
+  const err = project.error || voice.error || runs.error || consults.error;
   if (err) return res.status(500).json({ error: err.message });
   if (!project.data) return res.status(404).json({ error: "project not found" });
+  // The card only needs the run's display code, not another query.
+  const codeById = new Map(runs.rows.map((r: Row) => [r.id as string, r.code as string]));
   res.json({
     project: project.data,
     voice_projects: voice.data ?? [],
     image_runs: runs.rows.filter((r: Row) => r.stage === "image"),
     video_runs: runs.rows.filter((r: Row) => VIDEO_STAGES.has(r.stage as string)),
+    consultations: consults.rows.map((c: Row) => ({
+      ...c,
+      run_code: codeById.get(c.run_id as string) ?? null,
+    })),
+    // Stage E: the VLM judge is opt-in on the backend (explicit flag) — the
+    // client hides the button entirely when it cannot possibly run.
+    vlm_qc_enabled: vlmJudgeEnabled() && Boolean(falKey()),
   });
 });
 
@@ -821,6 +840,658 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
     return res.status(502).json({ error: `fal submit failed: ${msg}` });
   }
   res.status(201).json({ run: { id: run.id, code, run_status: "submitted", estimate: est } });
+});
+
+/**
+ * Stage E (docs/studio-build-plan.md) — the VLM judge, behind the explicit
+ * STUDIO_VLM_JUDGE flag, and the human override that always trumps it.
+ *
+ * POST /studio/runs/:id/qc-vlm { cost_approved } — judge one finished
+ * artifact with a broken-down rubric. Token-priced, so the 402 estimate is an
+ * honest null; the REAL billed cost from the response is recorded in
+ * qc_cost_usd either way — including when the judge's answer fails to parse,
+ * because the tokens were spent either way.
+ *
+ * Money-safety shape (review findings 1+2, 2026-07-30):
+ *   1. CLAIM a slot in qc_scores.vlm_pending with a guarded update — two
+ *      concurrent clicks cannot both submit (the loser gets 409);
+ *   2. submit, then IMMEDIATELY persist the fal request id into the claim —
+ *      from that point the spend is reconcilable no matter what dies;
+ *   3. poll; on deadline leave the pending record and tell the user to click
+ *      again — the retry RESUMES the same request, it never pays twice;
+ *   4. settle from a FRESH read of qc_cost_usd/qc_scores, clearing the claim.
+ */
+type VlmPendingRecord = Partial<VlmJudgeHandle> & { at?: string };
+
+router.post("/studio/runs/:id/qc-vlm", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!vlmJudgeEnabled()) {
+    return res.status(503).json({ error: "STUDIO_VLM_JUDGE is not enabled on the backend" });
+  }
+  if (!falKey()) {
+    return res.status(503).json({ error: "FAL_KEY is not configured on the backend" });
+  }
+  const { data: run, error } = await db.from("experiment_runs")
+    .select("id, code, stage, prompt, output_url, run_status, qc_status, qc_scores, input_args")
+    .eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!run) return res.status(404).json({ error: "run not found" });
+
+  const kind = run.stage === "image" ? "image"
+    : VIDEO_STAGES.has(run.stage as string) ? "video" : null;
+  if (!kind) return res.status(409).json({ error: "only image/video artifacts can be judged" });
+  // Judgeable = there is an output to look at, and the run is not still in
+  // flight / failed. Legacy harness rows (run_status NULL) qualify — their
+  // fal-hosted URL may have expired, in which case the judge fails loudly.
+  const rs = (run.run_status as string | null) ?? null;
+  if (!run.output_url || rs === "pending" || rs === "submitted" || rs === "failed") {
+    return res.status(409).json({ error: "run has no finished output to judge" });
+  }
+  // The tier-0 principle scaled to the studio: never pay to judge a known
+  // non-starter. A human override (back to pass) re-opens judging.
+  if (run.qc_status === "rejected") {
+    return res.status(409).json({ error: "run is already rejected — override it first if you disagree" });
+  }
+  if (req.body?.cost_approved !== true) {
+    return res.status(402).json({
+      error: "cost approval required",
+      estimate: { usd: null, basis: "per_token" },
+      judge_model: vlmJudgeModel(),
+    });
+  }
+
+  const scores = ((run.qc_scores as Row | null) ?? {}) as Row;
+  const pendingRaw = scores.vlm_pending as VlmPendingRecord | undefined;
+  const pendingAgeMs = pendingRaw?.at ? Date.now() - Date.parse(pendingRaw.at) : Infinity;
+  // A claim that never got its request id and is old is a crash leftover —
+  // ignore it. One WITH a request id stays valid forever (the money is out).
+  const pending: VlmPendingRecord | null =
+    pendingRaw && (pendingRaw.request_id || pendingAgeMs < 10 * 60_000) ? pendingRaw : null;
+
+  let handle: VlmJudgeHandle;
+  if (pending?.request_id && pending.endpoint_id && pending.model && pending.criteria) {
+    // Resume the already-paid request — no new submit, no new charge.
+    handle = pending as VlmJudgeHandle;
+  } else if (pending) {
+    return res.status(409).json({ error: "a judge request is already being submitted for this run" });
+  } else {
+    // Claim the slot BEFORE submitting, guarded on the slot being free, so a
+    // double-click cannot submit (and pay) twice. `select` makes the win
+    // visible: zero rows back = lost the race.
+    const claimAt = new Date().toISOString();
+    const claimScores = { ...scores, vlm_pending: { at: claimAt } };
+    let claimQuery = db.from("experiment_runs").update({ qc_scores: claimScores })
+      .eq("id", run.id);
+    claimQuery = pendingRaw
+      ? claimQuery.eq("qc_scores->vlm_pending->>at", pendingRaw.at ?? "")
+      : claimQuery.is("qc_scores->vlm_pending", null);
+    const { data: claimed, error: claimErr } = await claimQuery.select("id");
+    if (claimErr) return res.status(500).json({ error: claimErr.message });
+    if (!claimed?.length) {
+      return res.status(409).json({ error: "a judge request is already running for this run" });
+    }
+
+    // Reference for the identity criterion: the run's own input image (i2v /
+    // edit), when it was given by URL. Absent → identity is left out of the
+    // rubric rather than scored against nothing.
+    const args = (run.input_args as Row | null) ?? {};
+    const referenceUrl =
+      typeof args.image_url === "string" ? args.image_url
+      : Array.isArray(args.image_urls) && typeof args.image_urls[0] === "string"
+        ? args.image_urls[0] : null;
+
+    try {
+      handle = await submitVlmJudge({
+        kind,
+        outputUrl: run.output_url as string,
+        prompt: (run.prompt as string | null) ?? null,
+        referenceUrl,
+      });
+    } catch (e) {
+      // Submit failed → nothing was billed. Release the claim by REMOVING
+      // the key — writing `vlm_pending: null` would leave a JSON null, which
+      // the `is null` claim guard (SQL NULL) never matches, locking the run
+      // out of judging forever.
+      const released = { ...scores } as Row;
+      delete released.vlm_pending;
+      const { error: relErr } = await db.from("experiment_runs")
+        .update({ qc_scores: released }).eq("id", run.id);
+      if (relErr) console.error(`[studio-qc] ${run.code} claim release:`, relErr.message);
+      return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+    // Money is now committed on fal's side — persist the request id FIRST,
+    // so a crash/timeout from here on leaves a reconcilable record.
+    const { error: pendErr } = await db.from("experiment_runs")
+      .update({ qc_scores: { ...scores, vlm_pending: { ...handle, at: claimAt } } })
+      .eq("id", run.id);
+    if (pendErr) console.error(`[studio-qc] ${run.code} pending record:`, pendErr.message);
+  }
+
+  const verdict = await pollVlmJudge(handle);
+  if (verdict.ok === "in_progress") {
+    // The request is still running (and already paid). The pending record
+    // stays; the next click resumes it for free.
+    return res.status(504).json({
+      error: "the judge is still running — try again in a minute; the same request will be picked up without paying again",
+    });
+  }
+
+  // Settle from a FRESH read — the claim serializes judges, but overrides
+  // and webhooks may have touched the row while we polled.
+  const { data: fresh, error: freshErr } = await db.from("experiment_runs")
+    .select("qc_scores, qc_cost_usd").eq("id", run.id).maybeSingle();
+  if (freshErr || !fresh) {
+    console.error(`[studio-qc] ${run.code} fresh read failed:`, freshErr?.message);
+    return res.status(500).json({ error: "settle read failed — the check is recorded in vlm_pending" });
+  }
+  const freshScores = { ...((fresh.qc_scores as Row | null) ?? {}) } as Row;
+  delete freshScores.vlm_pending;
+  const spentBefore = fresh.qc_cost_usd == null ? 0 : Number(fresh.qc_cost_usd);
+  const qcCost = Math.round((spentBefore + (verdict.cost ?? 0)) * 1e6) / 1e6;
+  const at = new Date().toISOString();
+
+  if (!verdict.ok) {
+    const qcScores = {
+      ...freshScores,
+      vlm_error: {
+        model: verdict.model,
+        error: verdict.error,
+        request_id: handle.request_id,
+        cost_usd: verdict.cost,
+        // usage.cost is required by the schema, so null here means the money
+        // went out but the amount is unknown — flagged, never silently zero.
+        cost_unknown: verdict.cost == null,
+        at,
+      },
+    };
+    const { error: upErr } = await db.from("experiment_runs")
+      .update({ qc_scores: qcScores, qc_cost_usd: qcCost })
+      .eq("id", run.id);
+    if (upErr) console.error(`[studio-qc] ${run.code} failure record:`, upErr.message);
+    return res.status(502).json({ error: `judge answer unusable: ${verdict.error}`, cost_usd: verdict.cost });
+  }
+
+  const qcScores = {
+    ...freshScores,
+    vlm: {
+      model: verdict.model,
+      verdict: verdict.verdict,
+      criteria: verdict.criteria,
+      summary: verdict.summary,
+      request_id: handle.request_id,
+      cost_usd: verdict.cost,
+      cost_unknown: verdict.cost == null,
+      at,
+    },
+  };
+  const { error: upErr } = await db.from("experiment_runs").update({
+    qc_status: verdict.verdict === "fail" ? "rejected" : "pass",
+    qc_score: verdict.overall,
+    qc_reason: verdict.summary || null,
+    qc_scores: qcScores,
+    qc_cost_usd: qcCost,
+  }).eq("id", run.id);
+  if (upErr) return res.status(500).json({ error: upErr.message });
+
+  res.json({
+    qc_status: verdict.verdict === "fail" ? "rejected" : "pass",
+    qc_score: verdict.overall,
+    verdict: verdict.verdict,
+    criteria: verdict.criteria,
+    summary: verdict.summary,
+    cost_usd: verdict.cost,
+    judge_model: verdict.model,
+  });
+});
+
+/**
+ * PATCH /studio/runs/:id/qc { status: pass|rejected, reason? } — the human
+ * override. Always available (rule 13: the QC is a filter, never the arbiter
+ * — it mis-judges stylized characters and Hebrew). The machine's verdict and
+ * reasons stay in qc_scores untouched; `overridden` marks who decided.
+ */
+router.patch("/studio/runs/:id/qc", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const status = req.body?.status;
+  if (status !== "pass" && status !== "rejected") {
+    return res.status(400).json({ error: "status must be pass|rejected" });
+  }
+  const { data: run, error } = await db.from("experiment_runs")
+    .select("id, qc_scores")
+    .eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!run) return res.status(404).json({ error: "run not found" });
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : null;
+  const qcScores = {
+    ...((run.qc_scores as Row | null) ?? {}),
+    human_override: {
+      status,
+      reason,
+      by: req.user!.id,
+      at: new Date().toISOString(),
+    },
+  };
+  // qc_reason follows the HUMAN decision — leaving the machine's rejection
+  // text on an overridden-to-pass card reads as a contradiction. The machine
+  // verdict survives verbatim in qc_scores.vlm.
+  const { error: upErr } = await db.from("experiment_runs")
+    .update({ qc_status: status, overridden: true, qc_scores: qcScores, qc_reason: reason })
+    .eq("id", run.id);
+  if (upErr) return res.status(500).json({ error: upErr.message });
+  res.json({ qc_status: status, overridden: true });
+});
+
+/**
+ * Stage D (docs/studio-build-plan.md) — the real-money surface.
+ *
+ * GET /studio/billing — fal credit balance (live, via FAL_ADMIN_KEY) + spend
+ * roll-ups from the ledger. Money is manager information (rule 10; review
+ * finding 9): gated requireRole(owner|admin) on top of the app chain — a
+ * plain member gets 403, and the chip in the UI simply doesn't render.
+ * Degrades loudly: no FAL_ADMIN_KEY → balance null + balance_error
+ * "not_configured", never a silent zero.
+ */
+router.get("/studio/billing",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const orgId = req.org!.id;
+
+    let balance: { current_balance: number; currency: string } | null = null;
+    let balanceError: string | null = null;
+    const adminKey = process.env.FAL_ADMIN_KEY || "";
+    if (!adminKey) {
+      balanceError = "not_configured";
+    } else {
+      try {
+        const r = await fetch("https://api.fal.ai/v1/account/billing?expand=credits", {
+          headers: { Authorization: `Key ${adminKey}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as { credits?: { current_balance: number; currency: string } };
+        balance = j?.credits ?? null;
+        if (!balance) balanceError = "no_credits_field";
+      } catch (e) {
+        balanceError = e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    // "This month" is the user's month — America/New_York (the repo's TZ
+    // rule), not UTC: on the evening of the 31st in NY a UTC boundary would
+    // already show ~$0. NY midnight on the 1st is 04:00 or 05:00 UTC (DST);
+    // probe which offset puts NY at hour 0.
+    const nyNow = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit",
+    }).formatToParts(new Date());
+    const nyYear = Number(nyNow.find((p) => p.type === "year")?.value);
+    const nyMonth = Number(nyNow.find((p) => p.type === "month")?.value);
+    let monthStart = new Date(Date.UTC(nyYear, nyMonth - 1, 1, 4));
+    const hourInNy = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", hour12: false,
+    }).format(monthStart);
+    if (hourInNy !== "00") monthStart = new Date(Date.UTC(nyYear, nyMonth - 1, 1, 5));
+    const runs = await pageAll<Row>((from, to) =>
+      db.from("experiment_runs").select("studio_project_id, cost_usd, qc_cost_usd, created_at")
+        .eq("org_id", orgId).order("id").range(from, to));
+    if (runs.error) return res.status(500).json({ error: runs.error.message });
+
+    let totalUsd = 0;
+    let monthUsd = 0;
+    const perProject = new Map<string, number>();
+    for (const r of runs.rows) {
+      // QC judge checks (stage E) are billed by fal exactly like the run
+      // itself — a spend report that hides them under-reports real money.
+      const gen = r.cost_usd == null ? 0 : Number(r.cost_usd);
+      const qc = r.qc_cost_usd == null ? 0 : Number(r.qc_cost_usd);
+      const c = (Number.isFinite(gen) ? gen : 0) + (Number.isFinite(qc) ? qc : 0);
+      if (!c) continue;
+      totalUsd += c;
+      if (typeof r.created_at === "string" && r.created_at >= monthStart.toISOString()) monthUsd += c;
+      if (r.studio_project_id) {
+        const k = r.studio_project_id as string;
+        perProject.set(k, (perProject.get(k) ?? 0) + c);
+      }
+    }
+    res.json({
+      balance,
+      balance_error: balanceError,
+      fal_total_usd: Math.round(totalUsd * 1000) / 1000,
+      fal_month_usd: Math.round(monthUsd * 1000) / 1000,
+      per_project_fal_usd: Object.fromEntries(
+        [...perProject].map(([k, v]) => [k, Math.round(v * 1000) / 1000]),
+      ),
+      top_up_url: "https://fal.ai/dashboard/billing",
+    });
+  });
+
+/**
+ * Stage F (docs/studio-build-plan.md) — the consultation pipeline.
+ *
+ * POST /studio/runs/:id/consult { problem } — "יש לי בעיה" on an artifact.
+ * Freezes the run's FULL provenance into the consultation payload (the
+ * expert-agent contract: a problem question arrives attached to its artifact
+ * — provenance is read, never asked for) and files a smrtTask task for
+ * pickup by a manual /expert session (v1 decision: no auto-lifter).
+ */
+router.post("/studio/runs/:id/consult", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const problem = typeof req.body?.problem === "string" ? req.body.problem.trim() : "";
+  if (!problem) return res.status(400).json({ error: "problem is required" });
+
+  const { data: run, error } = await db.from("experiment_runs")
+    .select("id, code, stage, model, method, endpoint_id, prompt, seed, input_args, output_url, run_status, qc_status, qc_score, qc_reason, qc_scores, cost_usd, qc_cost_usd, derived_from, recipe_source, studio_project_id, meta, created_at")
+    .eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!run) return res.status(404).json({ error: "run not found" });
+  if (!run.studio_project_id) {
+    return res.status(409).json({ error: "run is not linked to a studio project" });
+  }
+
+  // The provenance snapshot — everything the expert needs to diagnose without
+  // asking. meta is reduced to storage_paths (tokens stay out of the payload).
+  const meta = (run.meta as Row | null) ?? {};
+  const payload: Row = {
+    code: run.code, stage: run.stage, model: run.model, method: run.method,
+    endpoint_id: run.endpoint_id, prompt: run.prompt, seed: run.seed,
+    input_args: run.input_args, output_url: run.output_url,
+    run_status: run.run_status, qc_status: run.qc_status, qc_score: run.qc_score,
+    qc_reason: run.qc_reason, qc_scores: run.qc_scores,
+    cost_usd: run.cost_usd, qc_cost_usd: run.qc_cost_usd,
+    derived_from: run.derived_from, recipe_source: run.recipe_source,
+    storage_paths: meta.storage_paths ?? null, run_created_at: run.created_at,
+  };
+
+  const { data: consult, error: insErr } = await db.from("studio_consultations").insert({
+    org_id: orgId,
+    studio_project_id: run.studio_project_id,
+    run_id: run.id,
+    created_by: req.user!.id,
+    problem,
+    payload,
+  }).select("id").single();
+  if (insErr) return res.status(500).json({ error: insErr.message });
+
+  // The pickup task. Best-effort: the consultation row is the source of
+  // truth; a task failure is reported but does not undo the filing.
+  const appBase = (process.env.SMRTESY_APP_URL || "https://app.smrtesy.com").replace(/\/$/, "");
+  const projectUrl = `${appBase}/he/studio/projects/${run.studio_project_id}`;
+  const title = `התייעצות מומחה: בעיה בתוצר ${run.code}`;
+  const description = [
+    problem,
+    `תוצר: ${run.code} · ${run.model}`,
+    `מזהה התייעצות: ${consult.id}`,
+    "הרמה: פתח סשן מומחה (‎/expert ברפו video-lab) עם מזהה ההתייעצות — הפרובננס המלא שמור על ההתייעצות. תשובת המומחה נכתבת דרך POST ‎/api/studio/jobs/consult-answer והפתרונות מוצגים לאישור במסך הפרויקט.",
+  ].join("\n\n");
+  const { data: task, error: taskErr } = await db.from("tasks").insert({
+    user_id: req.user!.id,
+    organization_id: orgId,
+    task_type: "followup",
+    status: "inbox",
+    priority: "medium",
+    manually_verified: true, // the user typed this problem themselves
+    title,
+    title_he: title,
+    description,
+    action_links: [{ label: "פתח את הפרויקט בסטודיו", url: projectUrl }],
+    tags: ["studio-consult", `studio-consult:${consult.id}`],
+    ai_model_used: null,
+  }).select("id").single();
+  if (taskErr) {
+    console.error(`[studio-consult] task filing failed for ${consult.id}:`, taskErr.message);
+  } else {
+    const { error: linkErr } = await db.from("studio_consultations")
+      .update({ task_id: task.id }).eq("id", consult.id);
+    if (linkErr) console.error(`[studio-consult] task link failed:`, linkErr.message);
+    await emitEvent(orgId, "smrtstudio", "consultation.created", "task", task.id, {
+      run_code: run.code, consultation_id: consult.id,
+    });
+  }
+
+  res.status(201).json({ consultation_id: consult.id, task_id: task?.id ?? null });
+});
+
+/** One solution in the expert's answer contract. `changes` is what executing
+ *  it actually alters relative to the original run. */
+type ConsultSolution = {
+  title?: unknown;
+  changes?: { endpoint_id?: unknown; args?: unknown; prompt?: unknown } | null;
+  evidence?: unknown;
+  est_cost?: unknown;
+  risk?: unknown;
+  move?: unknown;
+};
+
+/**
+ * POST /studio/consultations/:id/execute { selected: number[], cost_approved,
+ * approved_usd } — run the chosen solutions, behind the SAME cost gate as
+ * /studio/runs: the first call (without cost_approved) answers 402 with a
+ * per-solution estimate + total; the confirm echoes the total it displayed.
+ * Every executed solution is a NEW run with derived_from = the consulted run.
+ */
+router.post("/studio/consultations/:id/execute", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!falKey()) {
+    return res.status(503).json({ error: "FAL_KEY is not configured on the backend" });
+  }
+  const { data: consult, error } = await db.from("studio_consultations")
+    .select("*").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!consult) return res.status(404).json({ error: "consultation not found" });
+  if (consult.status !== "answered" && consult.status !== "executed") {
+    return res.status(409).json({ error: "consultation has no answer to execute yet" });
+  }
+
+  const solutions = ((consult.answer as Row | null)?.solutions ?? []) as ConsultSolution[];
+  const selectedRaw = req.body?.selected;
+  const selected: number[] = Array.isArray(selectedRaw)
+    ? [...new Set(selectedRaw.map(Number))].filter((n) => Number.isInteger(n)) : [];
+  if (!selected.length) return res.status(400).json({ error: "selected[] is required" });
+  if (selected.some((i) => i < 0 || i >= solutions.length)) {
+    return res.status(400).json({ error: "selected index out of range" });
+  }
+
+  const payload = (consult.payload as Row | null) ?? {};
+  // Resolve each chosen solution to a concrete submit plan + estimate.
+  const plans: {
+    index: number; title: string; endpoint_id: string;
+    input: Record<string, unknown>; model: Row | null;
+    est: { usd: number | null; basis: string };
+  }[] = [];
+  for (const index of selected) {
+    const sol = solutions[index];
+    const changes = (sol.changes ?? {}) as Row;
+    const endpointId = typeof changes.endpoint_id === "string" && changes.endpoint_id
+      ? changes.endpoint_id
+      : typeof payload.endpoint_id === "string" && payload.endpoint_id
+        ? payload.endpoint_id
+        : typeof payload.model === "string" ? payload.model : "";
+    if (!endpointId) {
+      return res.status(400).json({ error: `solution ${index} has no endpoint to run` });
+    }
+    const baseArgs = (payload.input_args as Record<string, unknown> | null) ?? {};
+    const patch = (typeof changes.args === "object" && changes.args && !Array.isArray(changes.args)
+      ? changes.args : {}) as Record<string, unknown>;
+    const input: Record<string, unknown> = { ...baseArgs, ...patch };
+    const prompt = typeof changes.prompt === "string" ? changes.prompt
+      : typeof payload.prompt === "string" ? payload.prompt : "";
+    if (prompt) input.prompt = prompt;
+
+    const { data: model, error: mErr } = await db.from("studio_models")
+      .select("endpoint_id, kind, price_usd, price_unit")
+      .eq("org_id", orgId).eq("endpoint_id", endpointId).maybeSingle();
+    if (mErr) return res.status(500).json({ error: mErr.message });
+    // Off-catalog = unpriceable AND unvetted — refuse outright, exactly like
+    // /studio/runs does. An expert answer travels through a machine channel;
+    // the catalog check is the code-side veto on a bad endpoint string.
+    if (!model) {
+      return res.status(400).json({ error: `solution ${index}: endpoint ${endpointId} is not in the org catalog` });
+    }
+    plans.push({
+      index,
+      title: typeof sol.title === "string" ? sol.title : `פתרון ${index + 1}`,
+      endpoint_id: endpointId, input, model: model as Row,
+      est: estimateRunCost(model, input),
+    });
+  }
+
+  const estimable = plans.filter((p) => p.est.usd != null);
+  const unestimated = plans.length - estimable.length;
+  const totalUsd = estimable.length
+    ? Math.round(estimable.reduce((s, p) => s + (p.est.usd as number), 0) * 1000) / 1000
+    : null;
+  const estimateBody = {
+    items: plans.map((p) => ({ index: p.index, title: p.title, endpoint_id: p.endpoint_id, ...p.est })),
+    total_usd: totalUsd,
+    unestimated,
+  };
+  // Same approval contract as /studio/runs, twice over: the ack is FOR the
+  // number shown AND for the exact selection it was shown for — a matching
+  // total on a different selection re-gates. Token-priced items in the batch
+  // additionally require an explicit accept_unestimated (the client shows
+  // them as "cannot estimate" line by line).
+  const approvedUsd = req.body?.approved_usd as number | null | undefined;
+  const approvedSelection = Array.isArray(req.body?.approved_selection)
+    ? [...new Set((req.body.approved_selection as unknown[]).map(Number))].sort((a, b) => a - b)
+    : null;
+  const selectionMatches =
+    approvedSelection != null &&
+    JSON.stringify(approvedSelection) === JSON.stringify([...selected].sort((a, b) => a - b));
+  const totalMatches =
+    approvedUsd !== undefined &&
+    ((totalUsd == null && approvedUsd == null) ||
+      (totalUsd != null && typeof approvedUsd === "number" &&
+        Math.abs(totalUsd - approvedUsd) < 0.0005));
+  const unestimatedAcked = unestimated === 0 || req.body?.accept_unestimated === true;
+  if (req.body?.cost_approved !== true || !totalMatches || !selectionMatches || !unestimatedAcked) {
+    return res.status(402).json({ error: "cost approval required", estimate: estimateBody });
+  }
+
+  // Claim slot (the qc-vlm pattern): flip answered/executed → executing with
+  // a conditional update, so two concurrent approvals cannot both submit and
+  // pay. A crash leaves 'executing' — reclaimable after 10 minutes.
+  const staleClaim = new Date(Date.now() - 10 * 60_000).toISOString();
+  const { data: claimed, error: claimErr } = await db.from("studio_consultations")
+    .update({ status: "executing", updated_at: new Date().toISOString() })
+    .eq("id", consult.id)
+    .or(`status.in.(answered,executed),and(status.eq.executing,updated_at.lt.${staleClaim})`)
+    .select("id");
+  if (claimErr) return res.status(500).json({ error: claimErr.message });
+  if (!claimed?.length) {
+    return res.status(409).json({ error: "an execution is already running for this consultation" });
+  }
+
+  // Submit each plan as a new run. One failure does not abort the batch —
+  // it is recorded as a failed run and reported per item.
+  const results: { index: number; run_id?: string; code?: string; error?: string }[] = [];
+  const newRunIds: string[] = [];
+  for (const plan of plans) {
+    const kind = (plan.model?.kind as string) ?? payload.stage ?? "video";
+    const code = newRunCode();
+    const token = newWebhookToken();
+    const { data: newRun, error: runErr } = await db.from("experiment_runs").insert({
+      org_id: orgId,
+      studio_project_id: consult.studio_project_id,
+      stage: kind === "image" ? "image" : kind === "voice" ? "voice" : "video",
+      test_label: "studio-consult",
+      code,
+      model: plan.endpoint_id,
+      endpoint_id: plan.endpoint_id,
+      method: `expert consultation fix: ${plan.title}`,
+      prompt: typeof plan.input.prompt === "string" ? plan.input.prompt : null,
+      seed: typeof plan.input.seed === "number" ? plan.input.seed : null,
+      input_args: plan.input,
+      run_status: "pending",
+      derived_from: consult.run_id,
+      cost_usd: plan.est.usd,
+      meta: {
+        kind, webhook_token: token, cost_basis: plan.est.basis, params: plan.input,
+        consultation_id: consult.id, solution_index: plan.index, solution_title: plan.title,
+      },
+    }).select("id").single();
+    if (runErr) {
+      results.push({ index: plan.index, error: runErr.message });
+      continue;
+    }
+    try {
+      const { request_id } = await queueSubmit(plan.endpoint_id, plan.input, webhookUrlFor(newRun.id, token));
+      const { error: upErr } = await db.from("experiment_runs")
+        .update({ fal_request_id: request_id, run_status: "submitted" })
+        .eq("id", newRun.id);
+      if (upErr) console.error(`[studio-consult] ${code} request-id update:`, upErr.message);
+      results.push({ index: plan.index, run_id: newRun.id, code });
+      newRunIds.push(newRun.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await db.from("experiment_runs")
+        .update({ run_status: "failed", error: msg }).eq("id", newRun.id);
+      results.push({ index: plan.index, run_id: newRun.id, code, error: `fal submit failed: ${msg}` });
+    }
+  }
+
+  // Release the claim: 'executed' when anything ran; back to the pre-claim
+  // status when nothing did, so a fully-failed batch stays retryable.
+  const prior = Array.isArray(consult.executed_run_ids) ? consult.executed_run_ids : [];
+  const { error: exErr } = await db.from("studio_consultations").update({
+    status: newRunIds.length ? "executed" : consult.status,
+    executed_run_ids: [...prior, ...newRunIds],
+    updated_at: new Date().toISOString(),
+  }).eq("id", consult.id);
+  if (exErr) console.error(`[studio-consult] ${consult.id} executed update:`, exErr.message);
+
+  res.status(newRunIds.length ? 201 : 502).json({ results, executed: newRunIds.length });
+});
+
+/**
+ * Stage G0 (docs/studio-build-plan.md) — voice creation FROM the studio.
+ *
+ * POST /studio/projects/:id/voice-projects { name, code_prefix? } — creates a
+ * smrtVoice project already linked (studio_project_id) to this studio
+ * project, so voice work starts from the voice tab without ever visiting the
+ * smrtVoice app. The full pipeline (scripts → lines → takes, the approval
+ * flow, voice-engine) continues in the existing screens — absorbed, not
+ * rebuilt. Free: creating a project runs nothing paid.
+ */
+const VOICE_PREFIX_RE = /^[A-Z]{1,3}$/; // mirrors smrtvoice/routes.ts PREFIX_RE
+router.post("/studio/projects/:id/voice-projects", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const prefix = (req.body?.code_prefix ?? "").toString().trim().toUpperCase() || null;
+  if (prefix && !VOICE_PREFIX_RE.test(prefix)) {
+    return res.status(400).json({ error: "Invalid code prefix — use 1-3 letters (e.g. BR)" });
+  }
+
+  const { data: project, error: pErr } = await db.from("studio_projects")
+    .select("id").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  // Stage G: the voice screens are guarded by the same smrtstudio entitlement
+  // as this route (the absorption flipped the voice router's requireApp), so
+  // reaching here already proves the org can open what gets created.
+  const { data, error } = await db.from("smrtvoice_projects").insert({
+    org_id: orgId,
+    created_by: req.user!.id,
+    name,
+    description: typeof req.body?.description === "string" ? req.body.description : null,
+    code_prefix: prefix,
+    language: "he",
+    status: "draft",
+    studio_project_id: project.id,
+  }).select("id, name").single();
+  if (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: prefix
+          ? `A project with prefix "${prefix}" already exists`
+          : "A conflicting voice project already exists",
+      });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  await emitEvent(orgId, "smrtvoice", "project.created", "project", data.id, { name: data.name });
+  res.status(201).json({ voice_project: data });
 });
 
 /** PATCH /studio/projects/:id — rename / describe / archive. */

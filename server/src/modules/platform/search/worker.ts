@@ -3,17 +3,20 @@
  * triggers) and (re)indexes each changed row into search_documents. Invoked
  * every minute by pg_cron via POST /api/search/index/drain.
  *
- * Bounded per run (limit) so a drain always finishes well under a minute; a
- * backlog just carries to the next tick. An item that errors is LEFT in the
- * queue to retry; an item whose row is gone ("missing") is cleared.
+ * Batched: up to `limit` queue rows per tick, processed in chunks of EMBED_BATCH
+ * that each cost ONE Voyage request (indexBatch). This is what makes a large
+ * backlog (tens of thousands of rows) finish in minutes and survive Voyage rate
+ * limits, instead of one request per row.
  *
- * Race guard: the queue row is deleted only if its enqueued_at is unchanged
- * since we read it — so a re-enqueue that lands mid-processing is not lost, it
- * simply gets picked up again next drain.
+ * An item that errors or whose embedding came back null is LEFT in the queue to
+ * retry; an item whose row is gone ("missing") is cleared.
+ *
+ * Race guard: a queue row is deleted only if its enqueued_at is unchanged since
+ * we read it — so a re-enqueue that lands mid-processing is not lost.
  */
 
 import { db } from "../../../db";
-import { indexOneTask, indexOneInfo, indexOneClaudeThread, type IndexOneResult } from "./indexer";
+import { indexBatch, type IndexOneResult } from "./indexer";
 
 interface QueueRow {
   source_type: string;
@@ -28,15 +31,17 @@ export interface DrainResult {
   skipped?: boolean;
 }
 
+// Texts per Voyage request. 100 × ~a few hundred tokens stays well under
+// Voyage's per-request token ceiling.
+const EMBED_BATCH = 32;
+
 // In-process guard against overlapping drains. pg_cron's net.http_post is
 // fire-and-forget, so the next minute's tick can fire while this drain is still
-// running; two overlapping drains would both embed the same rows (wasted Voyage
-// cost — the enqueued_at guard prevents corruption, not the double call). One
-// backend process serves the cron, so a module-level flag dedupes it. (A
-// multi-instance deployment would need a pg advisory lock instead.)
+// running; one backend process serves the cron, so a module-level flag dedupes
+// it. (A multi-instance deployment would need a pg advisory lock instead.)
 let draining = false;
 
-export async function drainQueue(limit = 100): Promise<DrainResult> {
+export async function drainQueue(limit = 500): Promise<DrainResult> {
   if (draining) return { processed: 0, missing: 0, failed: 0, skipped: true };
   draining = true;
   try {
@@ -62,30 +67,32 @@ async function runDrain(limit: number): Promise<DrainResult> {
   let missing = 0;
   let failed = 0;
 
-  for (const r of rows) {
-    let res: IndexOneResult;
-    if (r.source_type === "task") res = await indexOneTask(r.source_id);
-    else if (r.source_type === "info") res = await indexOneInfo(r.source_id);
-    else if (r.source_type === "claude_thread") res = await indexOneClaudeThread(r.source_id);
-    else res = "missing"; // unknown source_type → just drop it from the queue
+  for (let i = 0; i < rows.length; i += EMBED_BATCH) {
+    const chunk = rows.slice(i, i + EMBED_BATCH);
+    const results = await indexBatch(
+      chunk.map((r) => ({ source_type: r.source_type, source_id: r.source_id })),
+    );
 
-    // "error" (DB failure) and "embed_failed" (Voyage transient) both stay in
-    // the queue so the row gets a real embedding on a later drain instead of
-    // being left semantically unsearchable.
-    if (res === "error" || res === "embed_failed") {
-      failed++;
-      continue;
+    for (const r of chunk) {
+      const res: IndexOneResult = results.get(`${r.source_type}:${r.source_id}`) ?? "error";
+
+      // "error" (fetch/upsert failure) and "embed_failed" (Voyage transient)
+      // both stay in the queue so the row is retried on a later drain.
+      if (res === "error" || res === "embed_failed") {
+        failed++;
+        continue;
+      }
+      if (res === "missing") missing++;
+      else processed++;
+
+      const { error: delErr } = await db
+        .from("search_index_queue")
+        .delete()
+        .eq("source_type", r.source_type)
+        .eq("source_id", r.source_id)
+        .eq("enqueued_at", r.enqueued_at); // only if not re-enqueued mid-processing
+      if (delErr) console.error("[search/worker] queue delete failed:", delErr.message);
     }
-    if (res === "missing") missing++;
-    else processed++;
-
-    const { error: delErr } = await db
-      .from("search_index_queue")
-      .delete()
-      .eq("source_type", r.source_type)
-      .eq("source_id", r.source_id)
-      .eq("enqueued_at", r.enqueued_at); // only if not re-enqueued mid-processing
-    if (delErr) console.error("[search/worker] queue delete failed:", delErr.message);
   }
 
   return { processed, missing, failed };

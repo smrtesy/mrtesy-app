@@ -17,6 +17,7 @@ import { PaneLink } from "@/lib/panes/nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StudioBalanceChip } from "@/components/smrtstudio/StudioBalanceChip";
 
 type ProjectRow = {
   id: string;
@@ -73,6 +74,7 @@ export function StudioProjects() {
     <div className="mx-auto w-full max-w-4xl p-4 space-y-4">
       <div className="flex items-center gap-2">
         <h1 className="text-lg font-semibold flex-1">{t("title")}</h1>
+        <StudioBalanceChip />
         {creating ? (
           <div className="flex items-center gap-2">
             <Input

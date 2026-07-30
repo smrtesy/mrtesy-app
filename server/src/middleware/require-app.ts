@@ -40,67 +40,107 @@ async function getAppIdBySlug(slug: string): Promise<string | null> {
   return data.id as string;
 }
 
+/**
+ * The entitlement decision for ONE slug, with no response written — so it can
+ * back both the single-slug middleware and the any-of variant. Returns "ok",
+ * "forbidden" (with the human reason), or "error" (an infra failure that must
+ * surface as a 500, never be read as a denial).
+ */
+async function checkApp(
+  req: Request,
+  slug: string,
+): Promise<{ verdict: "ok" } | { verdict: "forbidden"; reason: string } | { verdict: "error"; reason: string }> {
+  const appId = await getAppIdBySlug(slug);
+  if (!appId) {
+    return { verdict: "error", reason: `App not registered: ${slug}` };
+  }
+
+  const needsGrant = req.member?.role === "member";
+  const orgKey = `${req.org!.id}:${appId}`;
+  const grantKey = `${orgKey}:${req.user!.id}`;
+
+  const orgCached = orgAppCache.get(orgKey) === true;
+  const grantCached = !needsGrant || grantCache.get(grantKey) === true;
+  if (orgCached && grantCached) {
+    return { verdict: "ok" };
+  }
+
+  const [membership, grant] = await Promise.all([
+    orgCached
+      ? Promise.resolve(null)
+      : db
+          .from("app_memberships")
+          .select("org_id")
+          .eq("org_id", req.org!.id)
+          .eq("app_id", appId)
+          .maybeSingle(),
+    needsGrant && !grantCached
+      ? db
+          .from("user_app_access")
+          .select("app_id")
+          .eq("org_id", req.org!.id)
+          .eq("user_id", req.user!.id)
+          .eq("app_id", appId)
+          .maybeSingle()
+      : Promise.resolve(null),
+  ]);
+
+  if (membership) {
+    if (membership.error) {
+      return { verdict: "error", reason: `app entitlement check failed: ${membership.error.message}` };
+    }
+    if (!membership.data) {
+      return { verdict: "forbidden", reason: `App "${slug}" is not enabled for this organization` };
+    }
+    orgAppCache.set(orgKey, true);
+  }
+
+  if (needsGrant && !grantCached) {
+    if (grant?.error) {
+      return { verdict: "error", reason: `app access check failed: ${grant.error.message}` };
+    }
+    if (!grant?.data) {
+      return { verdict: "forbidden", reason: `App "${slug}" is not enabled for your user` };
+    }
+    grantCache.set(grantKey, true);
+  }
+
+  return { verdict: "ok" };
+}
+
 export function requireApp(slug: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!req.org) {
       return res.status(500).json({ error: "requireApp used without requireOrg" });
     }
+    const result = await checkApp(req, slug);
+    if (result.verdict === "ok") return next();
+    return res
+      .status(result.verdict === "error" ? 500 : 403)
+      .json({ error: result.reason });
+  };
+}
 
-    const appId = await getAppIdBySlug(slug);
-    if (!appId) {
-      return res.status(500).json({ error: `App not registered: ${slug}` });
+/**
+ * requireAnyApp — pass if ANY of the slugs is entitled. Exists for entitlement
+ * migrations (an app absorbed into another): the routes accept the new slug
+ * and, transitionally, the old one, so the code deploy and the membership
+ * migration do not have to land in the same instant. An infra error on any
+ * slug is a 500 (never silently read as "not entitled"); a denial on all
+ * slugs is a 403 naming the PRIMARY (first) slug.
+ */
+export function requireAnyApp(...slugs: [string, ...string[]]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.org) {
+      return res.status(500).json({ error: "requireAnyApp used without requireOrg" });
     }
-
-    const needsGrant = req.member?.role === "member";
-    const orgKey = `${req.org.id}:${appId}`;
-    const grantKey = `${orgKey}:${req.user!.id}`;
-
-    const orgCached = orgAppCache.get(orgKey) === true;
-    const grantCached = !needsGrant || grantCache.get(grantKey) === true;
-    if (orgCached && grantCached) {
-      return next();
+    let firstDenial: string | null = null;
+    for (const slug of slugs) {
+      const result = await checkApp(req, slug);
+      if (result.verdict === "ok") return next();
+      if (result.verdict === "error") return res.status(500).json({ error: result.reason });
+      firstDenial ??= result.reason;
     }
-
-    const [membership, grant] = await Promise.all([
-      orgCached
-        ? Promise.resolve(null)
-        : db
-            .from("app_memberships")
-            .select("org_id")
-            .eq("org_id", req.org.id)
-            .eq("app_id", appId)
-            .maybeSingle(),
-      needsGrant && !grantCached
-        ? db
-            .from("user_app_access")
-            .select("app_id")
-            .eq("org_id", req.org.id)
-            .eq("user_id", req.user!.id)
-            .eq("app_id", appId)
-            .maybeSingle()
-        : Promise.resolve(null),
-    ]);
-
-    if (membership) {
-      if (membership.error) {
-        return res.status(500).json({ error: `app entitlement check failed: ${membership.error.message}` });
-      }
-      if (!membership.data) {
-        return res.status(403).json({ error: `App "${slug}" is not enabled for this organization` });
-      }
-      orgAppCache.set(orgKey, true);
-    }
-
-    if (needsGrant && !grantCached) {
-      if (grant?.error) {
-        return res.status(500).json({ error: `app access check failed: ${grant.error.message}` });
-      }
-      if (!grant?.data) {
-        return res.status(403).json({ error: `App "${slug}" is not enabled for your user` });
-      }
-      grantCache.set(grantKey, true);
-    }
-
-    next();
+    return res.status(403).json({ error: firstDenial ?? "not entitled" });
   };
 }

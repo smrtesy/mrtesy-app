@@ -21,8 +21,16 @@ const COST_PER_1M = 0.06;
 
 export const EMBED_DIM = 1024;
 
+// Last batch-embed failure reason (status + short body), surfaced so the drain
+// endpoint can echo WHY Voyage rejected a batch (Railway logs aren't reachable
+// from the DB side). Diagnostic only.
+let lastEmbedError: string | null = null;
+export function getLastEmbedError(): string | null {
+  return lastEmbedError;
+}
+
 interface VoyageResponse {
-  data?: { embedding: number[] }[];
+  data?: { embedding: number[]; index?: number }[];
   usage?: { total_tokens?: number };
 }
 
@@ -86,5 +94,71 @@ export async function embedText(
     return embedding;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Embed MANY texts in a SINGLE Voyage request (the API accepts an array), so a
+ * bulk index pass costs ~1 request per batch instead of one per item — the
+ * difference between minutes and days when the account is rate-limited.
+ *
+ * Returns an array aligned 1:1 with `texts`: each entry is the embedding, or
+ * null when that text was empty, the whole call failed, or the key is unset.
+ * Empty texts are skipped from the request but still occupy their null slot, so
+ * the caller can map results straight back by index.
+ */
+export async function embedTexts(
+  texts: string[],
+  inputType: "query" | "document",
+  meta?: { userId?: string; refId?: string },
+): Promise<(number[] | null)[]> {
+  const results: (number[] | null)[] = texts.map(() => null);
+  const apiKey = process.env.VOYAGE_API_KEY;
+  if (!apiKey) return results;
+
+  // Only send non-empty texts; remember each one's slot in the original array.
+  const slots: number[] = [];
+  const inputs: string[] = [];
+  texts.forEach((t, i) => {
+    const trimmed = (t ?? "").trim();
+    if (trimmed) {
+      slots.push(i);
+      inputs.push(trimmed.slice(0, 16000));
+    }
+  });
+  if (inputs.length === 0) return results;
+
+  try {
+    const resp = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: MODEL, input: inputs, input_type: inputType }),
+    });
+    if (!resp.ok) {
+      // Capture the reason so the drain endpoint can echo it (see getLastEmbedError).
+      const body = await resp.text().catch(() => "");
+      lastEmbedError = `voyage ${resp.status} (${inputs.length} inputs): ${body.slice(0, 300)}`;
+      return results; // whole batch failed → all null (caller retries)
+    }
+
+    lastEmbedError = null;
+    const json = (await resp.json()) as VoyageResponse;
+    for (let k = 0; k < (json.data?.length ?? 0); k++) {
+      const item = json.data![k];
+      // Voyage tags each vector with its index into `inputs`; fall back to order.
+      const inputIdx = typeof item.index === "number" ? item.index : k;
+      const emb = item.embedding;
+      if (emb && emb.length === EMBED_DIM && slots[inputIdx] !== undefined) {
+        results[slots[inputIdx]] = emb;
+      }
+    }
+    await logVoyageUsage(json.usage?.total_tokens ?? 0, meta?.userId, meta?.refId);
+    return results;
+  } catch (e) {
+    lastEmbedError = `voyage fetch threw: ${(e as Error).message}`.slice(0, 300);
+    return results;
   }
 }

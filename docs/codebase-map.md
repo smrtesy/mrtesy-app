@@ -36,14 +36,13 @@ route group `src/app/[locale]/(app)/(<slug>)/…`, components
 | App | Screens (route group) | What it is |
 |---|---|---|
 | smrttask | `/tasks`, `/calendar`, `/projects`, `/log`, `/whatsapp`, `/sms`, `/daily-report`, `/day-tools`, `/knowledge`, `/transcription-experiment` | Core: AI task extraction from Gmail/WhatsApp/Drive/Calendar/SMS |
-| smrtvoice | `/voice` | Voice/transcription |
 | smrtcrm | `/crm` | CRM |
 | smrtreach | `/reach` | Outreach/campaigns |
 | smrtbot | `/bots` | Bots (web bot at `src/app/api/bot/web/[key]`) |
 | smrtplan | `/plan` | Planning engine (plans, dependency matrix, experiments) |
 | smrtvault | `/vault` | Vault |
 | smrtinfo | `/info` | Info extraction center |
-| smrtstudio | `/studio` (console), `/studio/projects` (+`/[id]` — voice/image/video tabs), `/studio/models`, `/studio/research` | Content studio — build plan: `docs/studio-build-plan.md` |
+| smrtstudio | `/studio` (console), `/studio/projects` (+`/[id]` — voice/image/video tabs), `/studio/models`, `/studio/research`; plus the absorbed voice screens at `/voice/*` (deep URLs kept; `/voice` itself redirects to `/studio/projects`) | Content studio — build plan: `docs/studio-build-plan.md`. **smrtVoice was absorbed here** (stage G, 2026-07-30): entitlement is smrtstudio (migration `20260730190000`), voice code still lives in `(smrtvoice)` route group / `components/smrtvoice/` / `modules/smrtvoice/`, settings+lexicon under `/settings/apps/smrtstudio` |
 
 **Platform (cross-app), route group `(platform)`:** `/inbox` (notifications),
 `/suggestions`, `/settings`, `/account`, `/admin`, `/search` (global content
