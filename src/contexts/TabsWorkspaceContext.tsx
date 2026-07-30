@@ -109,8 +109,20 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         // stored id/href to the locale THIS document is actually on; the persist
         // effect then writes the corrected set back.
         const active = window.location.pathname.match(/^\/(he|en)(?=\/|$)/)?.[1];
-        const swap = (s: string) =>
+        const swapLocale = (s: string) =>
           active ? s.replace(/^\/(he|en)(?=\/|$)/, `/${active}`) : s;
+        // `?new=<ts>` is a one-shot "open a blank chat" command (the Claude
+        // button). The pane consumes it and replaces the URL, but a workspace
+        // persisted before that replace would replay the blank chat on every
+        // restore — so it is also stripped here, like the locale fix above.
+        const swap = (s: string) => {
+          const [path, query = ""] = swapLocale(s).split("?");
+          if (!query) return path;
+          const params = new URLSearchParams(query);
+          params.delete("new");
+          const q = params.toString();
+          return q ? `${path}?${q}` : path;
+        };
         if (Array.isArray(parsed.tabs)) {
           const valid = parsed.tabs
             .filter((t) => t && typeof t.id === "string" && typeof t.href === "string")

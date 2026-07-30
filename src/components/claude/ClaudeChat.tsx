@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { useScreenSearchParams } from "@/lib/panes/nav";
+import { useScreenPathname, useScreenRouter, useScreenSearchParams } from "@/lib/panes/nav";
 import {
   ChevronDown,
   ChevronRight,
@@ -224,6 +224,8 @@ export function ClaudeChat() {
   // touching deepLinkedRef, so a later ?thread=<id> deep-link (corrections'
   // "continue with Claude") still opens its conversation.
   const newParamRef = useRef<string | null>(null);
+  const screenRouter = useScreenRouter();
+  const screenPathname = useScreenPathname();
   useEffect(() => {
     const fresh = screenSearch.get("new");
     if (!fresh || fresh === newParamRef.current) return;
@@ -232,7 +234,14 @@ export function ClaudeChat() {
     setActiveId(null);
     activeIdRef.current = null;
     setTurns([]);
-  }, [screenSearch]);
+    // Consume the param OUT of the URL: it is a one-shot command, and left in
+    // place it persists (workspace localStorage / mobile history), replaying
+    // "blank chat" on every reload and burying continue-where-you-left-off.
+    const params = new URLSearchParams(screenSearch.toString());
+    params.delete("new");
+    const q = params.toString();
+    screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
+  }, [screenSearch, screenRouter, screenPathname]);
 
   /** The inspect-mode seed: the user marked an element somewhere in the app and
    *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
