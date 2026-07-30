@@ -27,7 +27,7 @@ import { db } from "../../db";
 import { executeRun, cancelRun, runOneShot } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
-import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS } from "./attachments";
+import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
 import { removeThreadWorkspace, sweepWorkspaces } from "./workspace";
 import {
   runSplitAnalysis,
@@ -322,10 +322,40 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
 
   const { data: attachments, error: aErr } = await db
     .from("claude_attachments")
-    .select("id, run_id, filename, mime_type, size_bytes")
+    .select("id, run_id, filename, mime_type, size_bytes, source, storage_path")
     .eq("thread_id", thread.id)
     .order("created_at", { ascending: true });
   if (aErr) console.error("[claude/threads] attachments failed:", aErr.message);
+
+  // Run-produced screenshots render as inline images, which needs a fetchable
+  // URL — the bucket is private, so mint short-lived signed URLs here rather
+  // than exposing a public path. Only for images the RUN produced: user uploads
+  // stay filename chips and never need a URL. Best-effort per file (a failed
+  // signature downgrades that one image to a chip, not the whole screen).
+  const signedByPath = new Map<string, string>();
+  await Promise.all(
+    (attachments ?? [])
+      .filter((a) => a.source === "run" && (a.mime_type ?? "").startsWith("image/"))
+      .map(async (a) => {
+        const { data: signed, error: sErr } = await db.storage
+          .from(BUCKET)
+          .createSignedUrl(a.storage_path, 3600);
+        if (sErr || !signed?.signedUrl) {
+          if (sErr) console.error("[claude/threads] sign failed:", sErr.message);
+          return;
+        }
+        signedByPath.set(a.storage_path, signed.signedUrl);
+      }),
+  );
+  const attachmentPayload = (attachments ?? []).map((a) => ({
+    id: a.id,
+    run_id: a.run_id,
+    filename: a.filename,
+    mime_type: a.mime_type,
+    size_bytes: a.size_bytes,
+    source: a.source,
+    signed_url: signedByPath.get(a.storage_path) ?? null,
+  }));
 
   // The open split proposal, if any — the banner the user acts on.
   const { data: splitProposal } = await db
@@ -371,7 +401,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
     turns: (runs ?? []).map((r) => ({
       ...r,
       events: eventsByRun.get(r.id) ?? [],
-      attachments: (attachments ?? []).filter((a) => a.run_id === r.id),
+      attachments: attachmentPayload.filter((a) => a.run_id === r.id),
     })),
     split_proposal: splitProposal ?? null,
     children: children ?? [],
@@ -513,6 +543,52 @@ router.post("/claude/threads/:id/attachments", async (req: Request, res: Respons
       filename: str(filename, 200) || "file",
       mimeType: str(mime_type, 200) || null,
       base64,
+    });
+    return res.status(201).json({ attachment });
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * A RUN posts a file back into its own turn — the browser helper's screenshot
+ * upload ("here is what the screen actually shows"). Authenticated with the
+ * run's minted user session, so the same superadmin gate as every /claude route
+ * applies; ownership is then pinned to the exact run: it must belong to this
+ * org, be created by this user, and still be running — a finished run must not
+ * be able to grow new content after its reply was rendered.
+ */
+router.post("/claude/runs/:id/attachments", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "run not found" });
+  const { filename, mime_type, base64 } = (req.body ?? {}) as {
+    filename?: string;
+    mime_type?: string;
+    base64?: string;
+  };
+  if (!base64 || typeof base64 !== "string") return res.status(400).json({ error: "base64 is required" });
+  if (base64.length > MAX_BASE64_CHARS) return res.status(413).json({ error: "file is too large" });
+
+  const { data: run, error: rErr } = await db
+    .from("claude_runs")
+    .select("id, thread_id, status, created_by")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (rErr) return res.status(500).json({ error: "could not verify run" });
+  if (!run || run.created_by !== req.user!.id) return res.status(404).json({ error: "run not found" });
+  if (!run.thread_id) return res.status(400).json({ error: "run has no thread" });
+  if (run.status !== "running") return res.status(409).json({ error: "run is not running" });
+
+  try {
+    const attachment = await saveAttachment({
+      orgId: req.org!.id,
+      threadId: run.thread_id,
+      userId: req.user!.id,
+      filename: str(filename, 200) || "screenshot.png",
+      mimeType: str(mime_type, 200) || null,
+      base64,
+      runId: run.id,
+      source: "run",
     });
     return res.status(201).json({ attachment });
   } catch (e) {
