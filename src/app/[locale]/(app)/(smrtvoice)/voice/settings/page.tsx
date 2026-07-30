@@ -6,5 +6,7 @@ export default async function VoiceSettingsRedirect({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  redirect(`/${locale}/settings/apps/smrtvoice`);
+  // Stage G: the voice settings (engine form + lexicon) moved under the
+  // studio's settings tab when smrtVoice was absorbed into smrtStudio.
+  redirect(`/${locale}/settings/apps/smrtstudio`);
 }

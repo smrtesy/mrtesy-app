@@ -2,7 +2,9 @@
  * smrtVoice — Express routes (v2: folders → scripts → per-script casting).
  *
  * Every route below requires the standard chain:
- *   requireAuth → requireOrg → requireApp("smrtvoice")
+ *   requireAuth → requireOrg → requireAnyApp("smrtstudio", "smrtvoice")
+ * (stage G of docs/studio-build-plan.md: smrtVoice was absorbed into
+ * smrtStudio, so the studio entitlement now covers the voice engine).
  *
  * The unauthenticated webhook endpoint lives in webhook-handler.ts and
  * is mounted separately at app level (before the auth guards).
@@ -15,7 +17,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireApp, requireRole } from "../../middleware";
+import { requireAuth, requireOrg, requireAnyApp, requireRole } from "../../middleware";
 import { emitEvent, notify, notifyError } from "../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../anthropic";
 import { getOAuthClient } from "../../services/token-refresh";
@@ -236,8 +238,13 @@ function parseFolderId(raw: string): string | null {
 
 const router = Router();
 
-// Every smrtVoice route requires auth + active org + smrtvoice enabled for that org.
-router.use(requireAuth, requireOrg, requireApp("smrtvoice"));
+// Every voice route requires auth + active org + the studio entitlement —
+// the voice engine is part of smrtStudio since the stage-G absorption
+// (migration 20260730190000 moves the app_memberships rows). The old
+// smrtvoice slug is accepted TRANSITIONALLY so the code deploy and the
+// membership migration don't have to land in the same instant; drop it to
+// requireApp("smrtstudio") once the migration has run everywhere.
+router.use(requireAuth, requireOrg, requireAnyApp("smrtstudio", "smrtvoice"));
 
 // ============================================================
 // CHARACTERS
@@ -2117,6 +2124,10 @@ async function queueRegeneration(
   lineOverrides: Array<{ line_number: number; text_for_tts: string }> = [],
   // Line numbers to re-run through the LLM (fresh emotion + tone tags).
   reprocessLineNumbers: number[] = [],
+  // Extra fields merged into the success JSON (e.g. the quick-line path adds
+  // script_id so the client can render the produced take). Empty for the
+  // regenerate callers → their response shape is unchanged.
+  extra: Record<string, unknown> = {},
 ) {
   if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines to regenerate" });
 
@@ -2228,7 +2239,7 @@ async function queueRegeneration(
       .in("line_number", lineNumbers);
     if (flipErr) console.warn("[smrtvoice] failed to flip redo lines to processing:", flipErr.message);
 
-    res.json({ job, line_numbers: lineNumbers });
+    res.json({ job, line_numbers: lineNumbers, ...extra });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
@@ -2334,6 +2345,174 @@ router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Res
   const lineNumbers = (lines ?? []).map((l: { line_number: number }) => l.line_number);
   if (lineNumbers.length === 0) return res.status(400).json({ error: "No lines are marked for redo" });
   await queueRegeneration(req, res, script, lineNumbers);
+});
+
+// POST /voice/quick-line — the studio's fast path: pick a project + voice, type
+// text, hear a take. NO Google Doc and NO visible "script": it reuses the
+// doc-less regenerate path (line_overrides carry the verbatim text to the
+// engine, routes.ts:queueRegeneration). Per the agreed "Way A", the script is
+// an invisible per-project container holding the language/model/casting the
+// engine requires — the user never sees it. See docs/studio-quick-line-plan.md.
+const QUICK_MODELS = new Set(["resemble-ultra", "chatterbox", "chatterbox-turbo"]);
+const QUICK_SCRIPT_NAME = "__quick__";
+
+router.post("/voice/quick-line", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const projectId = typeof body.project_id === "string" ? body.project_id : "";
+  const voiceId = typeof body.voice_id === "string" ? body.voice_id.trim() : "";
+  const voiceLabel = typeof body.voice_label === "string" ? body.voice_label.trim() : "";
+  const model = typeof body.model === "string" ? body.model.trim() : "";
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (!projectId) return res.status(400).json({ error: "project_id is required" });
+  if (!voiceId) return res.status(400).json({ error: "voice_id is required" });
+  if (!text) return res.status(400).json({ error: "text is required" });
+  if (model && !QUICK_MODELS.has(model)) return res.status(400).json({ error: "unknown model" });
+
+  // 1) Project must belong to the org.
+  const { data: project, error: projErr } = await db
+    .from("smrtvoice_projects")
+    .select("id, code_prefix, language")
+    .eq("id", projectId)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (projErr) return res.status(500).json({ error: projErr.message });
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  // A stable, org-unique code prefix for the hidden quick script. Prefer the
+  // project's own prefix; else derive a per-project one so two prefix-less
+  // projects can't collide on UNIQUE(org_id, code).
+  const codePrefix = project.code_prefix?.trim() || `Q${project.id.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+  const lang: "he" | "en" = project.language === "en" ? "en" : "he";
+
+  // 2) Find-or-create the invisible quick script (no Google Doc).
+  const scriptCols =
+    "id, project_id, code, language, generation_mode, input_recording_path, resemble_model, emotion_enabled";
+  const { data: existing, error: findErr } = await db
+    .from("smrtvoice_scripts")
+    .select(scriptCols)
+    .eq("org_id", req.org!.id)
+    .eq("project_id", project.id)
+    .eq("name", QUICK_SCRIPT_NAME)
+    .is("google_doc_id", null)
+    .maybeSingle();
+  if (findErr) return res.status(500).json({ error: findErr.message });
+
+  let script = existing as {
+    id: string;
+    project_id: string;
+    code: string;
+    language: string | null;
+    generation_mode: "sts" | "tts";
+    input_recording_path: string | null;
+    resemble_model: string | null;
+    emotion_enabled: boolean | null;
+  } | null;
+
+  if (!script) {
+    const { data: last } = await db
+      .from("smrtvoice_scripts")
+      .select("seq")
+      .eq("project_id", project.id)
+      .order("seq", { ascending: false })
+      .limit(1);
+    const seq = (last?.[0]?.seq ?? 0) + 1;
+    const { data: created, error: createErr } = await db
+      .from("smrtvoice_scripts")
+      .insert({
+        org_id: req.org!.id,
+        project_id: project.id,
+        created_by: req.user!.id,
+        seq,
+        code: `${codePrefix}${seq}`,
+        name: QUICK_SCRIPT_NAME,
+        language: lang,
+        generation_mode: "tts",
+        status: "ready",
+      })
+      .select(scriptCols)
+      .single();
+    if (createErr || !created) {
+      if (createErr?.code === "23505") return res.status(409).json({ error: "quick script race — please retry" });
+      return res.status(500).json({ error: createErr?.message ?? "quick script create failed" });
+    }
+    script = created;
+  }
+
+  // 3) Apply the chosen model to the quick script (per-script override;
+  //    ""/absent → inherit the org default).
+  const desiredModel = model || null;
+  if ((script.resemble_model ?? null) !== desiredModel) {
+    const { error: modelErr } = await db
+      .from("smrtvoice_scripts")
+      .update({ resemble_model: desiredModel })
+      .eq("id", script.id)
+      .eq("org_id", req.org!.id);
+    if (modelErr) return res.status(500).json({ error: modelErr.message });
+    script.resemble_model = desiredModel;
+  }
+
+  // 4) Cast the chosen voice directly (no character — buildSpeakerMap supports
+  //    a speaker with resemble_voice_id and no character_id). speaker_name is a
+  //    stable per-voice key so several voices coexist in one quick script.
+  const speakerName = voiceLabel || `voice ${voiceId.slice(0, 8)}`;
+  const { error: castErr } = await db
+    .from("smrtvoice_script_speakers")
+    .upsert(
+      {
+        org_id: req.org!.id,
+        script_id: script.id,
+        speaker_name: speakerName,
+        character_id: null,
+        extra_character_ids: [],
+        resemble_voice_id: voiceId,
+        skip: false,
+      },
+      { onConflict: "script_id,speaker_name" },
+    );
+  if (castErr) return res.status(500).json({ error: castErr.message });
+
+  // 5) Create the line (next line_number for this script; UNIQUE(script_id,line_number)).
+  const { data: lastLine } = await db
+    .from("smrtvoice_lines")
+    .select("line_number")
+    .eq("script_id", script.id)
+    .eq("org_id", req.org!.id)
+    .order("line_number", { ascending: false })
+    .limit(1);
+  const lineNumber = (lastLine?.[0]?.line_number ?? 0) + 1;
+  const { data: line, error: lineErr } = await db
+    .from("smrtvoice_lines")
+    .insert({
+      // NOTE: smrtvoice_lines.project_id was dropped in v2
+      // (20260701140000_smrtvoice_v2.sql:88) — lines are script-scoped now.
+      org_id: req.org!.id,
+      script_id: script.id,
+      line_number: lineNumber,
+      speaker_name: speakerName,
+      text_raw: text,
+      text_clean: text,
+      text_for_tts: text,
+      status: "pending",
+    })
+    .select("id, line_number")
+    .single();
+  if (lineErr || !line) {
+    if (lineErr?.code === "23505") return res.status(409).json({ error: "line race — please retry" });
+    return res.status(500).json({ error: lineErr?.message ?? "line insert failed" });
+  }
+
+  // 6) Render via the existing doc-less override path. queueRegeneration sends
+  //    the HTTP response (the queued job, or an error), with script_id + line
+  //    merged in so the client can show the take with the standard tools.
+  return queueRegeneration(
+    req,
+    res,
+    script,
+    [lineNumber],
+    [{ line_number: lineNumber, text_for_tts: text }],
+    [],
+    { script_id: script.id, line_id: line.id, line_number: lineNumber },
+  );
 });
 
 router.get("/voice/lines/:id/audio-url", async (req: Request, res: Response) => {
