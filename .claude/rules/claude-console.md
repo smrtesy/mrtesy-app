@@ -1,0 +1,61 @@
+---
+paths:
+  - "server/src/modules/claude/**"
+  - "src/components/claude/**"
+---
+
+# The in-app Claude console — how it actually works
+
+The `/claude` screen runs the real Claude Code engine on the Railway backend.
+Frontend: `src/components/claude/` (ClaudeChat, ChatComposer, ProjectPanel,
+PlaybookList, StandingInstructions, RepoPicker, SplitReview, DecomposeReview,
+ClaudeRunsClient). Server: `server/src/modules/claude/`.
+
+## Design decisions (don't re-litigate them by accident)
+
+- **CLI, not Agent SDK** (`runner.ts` header): the runner spawns
+  `claude -p … --output-format stream-json` and stores every stream event in
+  `claude_run_events`. The SDK wraps the same engine — swapping later is
+  drop-in.
+- **Billing:** runs authenticate with `CLAUDE_CODE_OAUTH_TOKEN` (subscription,
+  zero paid API tokens). `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` are
+  **stripped** from the child env so a stray key can't silently bill the run.
+  Secrets live in `app_secrets` under the `smrttask` slug
+  (`/admin/apps/smrttask/secrets`), env-var fallback: `CLAUDE_CODE_OAUTH_TOKEN`,
+  `GITHUB_TOKEN`.
+- **A thread is a conversation:** each turn resumes the thread's engine session
+  (`--resume`); the session id is re-written after every successful turn
+  because `--resume` mints a new id. The workspace (`workspace.ts`) is a stable
+  per-thread dir under the OS temp dir — required for resume to work and for
+  turn 2 to see turn 1's files. Swept after 7 days; deleted with the thread.
+- **Repo work:** `github.ts` clones depth-1 once per thread (idempotent
+  `ensureClone`) and authenticates via an env credential helper scoped to
+  github.com — the token never touches disk; `redact()` scrubs it from
+  anything stored. The clone contains the repo's CLAUDE.md, so the codebase
+  map (`docs/codebase-map.md`) loads automatically in repo threads.
+- **Resume fallback:** Railway containers are ephemeral. A `--resume` whose
+  transcript is gone retries once as a fresh session and records
+  `resumed_session: null` (the "context lost" banner).
+- **Thread split:** method A = `--fork-session` from the parent's session (in
+  the parent's workspace — `workspace_thread_id`); method B = seed-context
+  prepended to the child's first prompt.
+- **First-turn composition** (`playbooks.ts:composePrompt`): environment
+  preamble → standing instructions (`claude_instructions`, one row per org) →
+  chosen playbook (`claude_playbooks`) → the user's task. Budgeted to 100 KB
+  because the prompt is a single argv entry (Linux MAX_ARG_STRLEN).
+- **`runOneShot`** runs short prompts (titles, analyses) with no
+  `claude_runs` row — a title is not a turn of the conversation.
+
+## Tables (13, all org-scoped)
+
+`claude_threads`, `claude_runs`, `claude_run_events`, `claude_instructions`,
+`claude_playbooks`, `claude_attachments`, `claude_actions`, `claude_topics`,
+`claude_thread_topics`, `claude_thread_analyses`, `claude_daily_identity`,
+`claude_known_workers`, `claude_manager_proposals`. Authoritative shapes:
+`grep -rn "<table>" supabase/migrations/`.
+
+## Docs
+
+`docs/claude-console/` — plan.md, feasibility.md, app-integration-plan.md,
+standing-instructions.md (the living copy is the DB row, edited in-app),
+threads-split-and-group-plan.md, project-decompose-and-board.md.

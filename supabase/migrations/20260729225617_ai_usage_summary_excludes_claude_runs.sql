@@ -3,6 +3,12 @@
 --
 -- COMMENT-only. No behaviour changes, no signature change, re-runnable.
 --
+-- APPLIED to the Smrtesy production project on 2026-07-29 with the user's explicit
+-- go-ahead. The filename version matches the recorded migration row (the file was
+-- renamed from 20260729210000 to the version Supabase assigned at apply time), so a
+-- later `supabase db push` sees it as already applied and is a no-op rather than
+-- re-running it.
+--
 -- WHY THIS FILE EXISTS
 -- ai_usage_summary() is the single source for every cost total the platform shows
 -- (/admin/usage, the /admin overview card, the price-tracker). It unions exactly
