@@ -56,6 +56,14 @@ ClaudeRunsClient, ApprovalsPanel). Server: `server/src/modules/claude/`.
   from `ApprovalsPanel` (which enqueues the apply run). All run secrets — GitHub token,
   internal secret, OAuth token, app-access token — are scrubbed from stored events by
   `redactSecrets` in `runner.ts`.
+- **Deploy status** (`deploy-status.ts`, route `GET /claude/deploy-status`,
+  `DeployStatusBadge`): Vercel (frontend) + Railway (backend) production build state
+  via their official APIs — richer than `/api/deploy-info` (in-flight building/ready/
+  error, both surfaces). Tokens read at call time from app_secrets (`VERCEL_TOKEN`,
+  optional `VERCEL_PROJECT_ID`/`VERCEL_TEAM_ID`; `RAILWAY_TOKEN` + `RAILWAY_PROJECT_ID`,
+  service/environment auto-resolved or pinned via `RAILWAY_SERVICE_ID`/
+  `RAILWAY_ENVIRONMENT_ID`). Each provider degrades to `configured:false` with a hint
+  when its token is unset; the badge is invisible until then.
 - **App access, two layers** (`app-access.ts`): every turn mints a short-lived
   Supabase session for the launching user — injected (1) as `SMRTESY_API_TOKEN`
   for direct API calls, and (2) as `@supabase/ssr` cookies for a REAL headless

@@ -1,21 +1,22 @@
 "use client";
 
 /**
- * smrtStudio — the creation form (stage B of docs/studio-build-plan.md).
+ * smrtStudio — the creation form (stages B+C of docs/studio-build-plan.md).
  *
  * Deterministic recommendation, zero LLM: GET /studio/recommendation returns
  * ranked catalog candidates, the recommended model's written recipe (synced
- * from video-lab) and its LIVE fal schema fields. The form arrives pre-filled
- * and everything is editable. The run button ships DISABLED by design — it
- * turns on in stage C behind the cost gate (rule 2), and the label says so
- * instead of pretending.
+ * from video-lab) and its LIVE fal schema fields. Running is a two-click cost
+ * gate (rule 2): the first click POSTs without approval and the server's 402
+ * carries the estimate; the inputs then LOCK, and only the explicit
+ * "approve & run" — echoing the displayed number back as approved_usd —
+ * actually submits. Any drift between the two clicks re-gates.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
-import { api } from "@/lib/api/client";
+import { api, ApiError } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,12 +54,33 @@ type Recommendation = {
 /** prompt/seed render as dedicated controls; everything else is schema-driven. */
 const DEDICATED = new Set(["prompt", "seed"]);
 
-export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; onClose: () => void }) {
+type Estimate = { usd: number | null; basis: string };
+
+export function StudioCreateForm({
+  kind, projectId, onClose, onSubmitted,
+}: {
+  kind: "image" | "video";
+  projectId: string;
+  onClose: () => void;
+  onSubmitted?: () => void;
+}) {
   const t = useTranslations("studioProjects");
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
+  // The cost gate (rule 2 in the screen): first click fetches the estimate
+  // and shows it; only the second, explicit confirmation actually submits.
+  const [estimate, setEstimate] = useState<Estimate | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submittedCode, setSubmittedCode] = useState<string | null>(null);
+  // Synchronous double-click guard: state updates are async, a second click
+  // can land before the re-render disables the button — and this button
+  // spends money.
+  const inFlight = useRef(false);
+  // Once the estimate is on screen the inputs LOCK: the number the user
+  // approves must be the number that runs (review finding, 30/07).
+  const locked = estimate != null || submitting || submittedCode != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -86,6 +108,70 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
     setValues((prev) => ({ ...prev, [name]: v }));
   }, []);
 
+  // The submit payload: field values typed per the live schema (fal validates
+  // types — a "5" where an integer is due is a 422). Empty values are omitted
+  // so fal's own defaults apply, exactly like the harness.
+  const buildPayload = useCallback(() => {
+    const args: Record<string, unknown> = {};
+    for (const f of fields) {
+      const raw = values[f.name] ?? f.default ?? "";
+      if (raw === "") continue;
+      if (f.type.includes("integer") || f.type.includes("number")) {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) args[f.name] = n;
+      } else if (f.type.includes("boolean")) {
+        args[f.name] = raw === "true";
+      } else {
+        args[f.name] = raw;
+      }
+    }
+    return {
+      studio_project_id: projectId,
+      endpoint_id: rec!.recommended!.endpoint_id,
+      prompt: prompt.trim(),
+      args,
+    };
+  }, [fields, values, projectId, prompt, rec]);
+
+  // First click: POST without cost_approved — the server answers 402 with the
+  // estimate, which IS the cost dialog. Nothing is spent on this call.
+  const requestEstimate = useCallback(async () => {
+    setError(null);
+    try {
+      await api("/api/studio/runs", { method: "POST", body: buildPayload() });
+      // A 2xx here would mean the server ran without approval — treat as a bug.
+      setError("server accepted a run without cost approval — not submitting further");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        const est = (e.body as { estimate?: Estimate } | undefined)?.estimate;
+        setEstimate(est ?? { usd: null, basis: "unknown" });
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [buildPayload]);
+
+  const confirmRun = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { run } = await api<{ run: { code: string } }>("/api/studio/runs", {
+        method: "POST",
+        body: { ...buildPayload(), cost_approved: true, approved_usd: estimate?.usd ?? null },
+      });
+      setSubmittedCode(run.code);
+      setEstimate(null);
+      onSubmitted?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
+  }, [buildPayload, onSubmitted, estimate]);
+
   const renderField = (f: SchemaField) => {
     const value = values[f.name] ?? f.default ?? "";
     return (
@@ -98,6 +184,7 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
           <select
             className="w-full h-8 rounded-md border bg-background px-2"
             value={value}
+            disabled={locked}
             onChange={(e) => setValue(f.name, e.target.value)}
           >
             {!f.default && <option value="" />}
@@ -110,6 +197,7 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
             className="h-8"
             value={value}
             placeholder={f.type}
+            disabled={locked}
             onChange={(e) => setValue(f.name, e.target.value)}
           />
         )}
@@ -182,7 +270,7 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
 
           <label className="block text-xs space-y-1">
             <span className="font-medium">{t("createPrompt")}</span>
-            <Textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+            <Textarea rows={4} value={prompt} disabled={locked} onChange={(e) => setPrompt(e.target.value)} />
           </label>
 
           {rec.recommended.schema_error && (
@@ -201,12 +289,36 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
             </details>
           )}
 
-          <div className="flex items-center gap-2 pt-1">
-            <Button size="sm" disabled title={t("createRunDisabledWhy")}>
-              {t("createRunDisabled")}
-            </Button>
-            <span className="text-xs text-muted-foreground">{t("createRunDisabledWhy")}</span>
-          </div>
+          {submittedCode ? (
+            <p className="text-xs text-emerald-600 pt-1">
+              {t("createSubmitted", { code: submittedCode })}
+            </p>
+          ) : estimate ? (
+            /* Rule 2 embodied: the number is on screen and only the explicit
+               second click spends it. */
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2 space-y-2 text-xs">
+              <p className="font-medium">
+                {estimate.usd != null
+                  ? t("createEstimateCost", { usd: `$${estimate.usd.toFixed(3)}` })
+                  : t("createEstimateUnknown")}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void confirmRun()} disabled={submitting}>
+                  {t("createConfirmRun")}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEstimate(null)} disabled={submitting}>
+                  {t("cancel")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 pt-1">
+              <Button size="sm" onClick={() => void requestEstimate()} disabled={submitting || !prompt.trim()}>
+                {t("createRunDisabled")}
+              </Button>
+              <span className="text-xs text-muted-foreground">{t("createRunGate")}</span>
+            </div>
+          )}
         </>
       ))}
     </div>
