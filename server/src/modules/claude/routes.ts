@@ -23,6 +23,7 @@ import { db } from "../../db";
 import { executeRun } from "./runner";
 import { composePrompt } from "./playbooks";
 import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
+import { deployStatus } from "./deploy-status";
 import { transcribeAudio } from "../../gemini";
 
 // The auth chain (requireAuth → requireOrg → requireSuperAdmin) is installed once
@@ -293,6 +294,28 @@ router.get("/claude/github/repos", async (_req: Request, res: Response) => {
     const msg = redact(e instanceof Error ? e.message : String(e), token);
     console.error("[claude/github] repos failed:", msg);
     return res.status(502).json({ error: msg });
+  }
+});
+
+// ── Deploy status ───────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/claude/deploy-status?sha=<sha> — Vercel (frontend) + Railway (backend)
+ * production deploy state, via their official APIs (deploy-status.ts).
+ *
+ * Richer than /api/deploy-info (which reports only the live frontend commit): this
+ * reports in-flight build state (building / ready / error) for BOTH surfaces, so the
+ * operator can see a build in progress or a failed build after a merge. Each provider
+ * answers `configured:false` with a hint naming the exact secret to set when its token
+ * isn't present — never an error.
+ */
+router.get("/claude/deploy-status", async (req: Request, res: Response) => {
+  const sha = typeof req.query.sha === "string" ? req.query.sha.trim().slice(0, 100) : undefined;
+  try {
+    return res.json(await deployStatus(sha || undefined));
+  } catch (e) {
+    console.error("[claude/deploy-status] failed:", e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: "could not fetch deploy status" });
   }
 });
 

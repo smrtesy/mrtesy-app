@@ -4487,6 +4487,15 @@
       "rejected": "נדחה — כלום לא רץ",
       "decideFailed": "הפעולה נכשלה"
     },
+    "deploy": {
+      "label": "סטטוס דיפלוי",
+      "frontend": "פרונט",
+      "backend": "שרת",
+      "building": "בונה",
+      "ready": "פעיל",
+      "error": "נכשל",
+      "unknown": "לא ידוע"
+    },
     "group": {
       "toggle": "קבץ לפי נושא",
       "now": "אגד עכשיו",
