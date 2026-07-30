@@ -4476,6 +4476,17 @@
       "apply": "פצל {count} נושאים",
       "done": "פוצל ל־{count} צ'אטים"
     },
+    "approvals": {
+      "banner": "{count} מיגרציות הרסניות ממתינות לאישורך",
+      "showDetails": "הצג פרטים",
+      "affected": "{count} שורות ייפגעו",
+      "noPreview": "אין תצוגה מקדימה של השורות",
+      "approve": "אשר והרץ",
+      "reject": "דחה",
+      "approved": "אושר — ההחלה מתחילה",
+      "rejected": "נדחה — כלום לא רץ",
+      "decideFailed": "הפעולה נכשלה"
+    },
     "group": {
       "toggle": "קבץ לפי נושא",
       "now": "אגד עכשיו",

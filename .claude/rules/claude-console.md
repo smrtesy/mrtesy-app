@@ -9,7 +9,7 @@ paths:
 The `/claude` screen runs the real Claude Code engine on the Railway backend.
 Frontend: `src/components/claude/` (ClaudeChat, ChatComposer, ProjectPanel,
 PlaybookList, StandingInstructions, RepoPicker, SplitReview, DecomposeReview,
-ClaudeRunsClient). Server: `server/src/modules/claude/`.
+ClaudeRunsClient, ApprovalsPanel). Server: `server/src/modules/claude/`.
 
 ## Design decisions (don't re-litigate them by accident)
 
@@ -45,6 +45,17 @@ ClaudeRunsClient). Server: `server/src/modules/claude/`.
   because the prompt is a single argv entry (Linux MAX_ARG_STRLEN).
 - **`runOneShot`** runs short prompts (titles, analyses) with no
   `claude_runs` row — a title is not a turn of the conversation.
+- **Autonomy gate** (`actions.ts`, `actions-routes.ts`, `sqlClassify.ts`;
+  design `docs/claude-console/autonomy-safety-gate.md`): repo runs get FULL shell
+  (`--permission-mode bypassPermissions` in `runner.ts`) — reversible work (merge to
+  main after a green build, additive `supabase db push`) is autonomous. The one
+  irreversible action, a DESTRUCTIVE migration, routes through a human: the run calls
+  the m2m `POST /claude-action/request-approval` (internal-secret gated; env injected
+  by the runner), `sqlClassify.ts` classifies the SQL in code (allowlist, fail-closed),
+  and a destructive verdict lands a `claude_action_approvals` row the operator approves
+  from `ApprovalsPanel` (which enqueues the apply run). All run secrets — GitHub token,
+  internal secret, OAuth token, app-access token — are scrubbed from stored events by
+  `redactSecrets` in `runner.ts`.
 - **App access, two layers** (`app-access.ts`): every turn mints a short-lived
   Supabase session for the launching user — injected (1) as `SMRTESY_API_TOKEN`
   for direct API calls, and (2) as `@supabase/ssr` cookies for a REAL headless
@@ -56,12 +67,13 @@ ClaudeRunsClient). Server: `server/src/modules/claude/`.
   signed URLs. Session revoked (`scope:'local'`) when the run ends. Requires
   `INSTALL_CHROMIUM=1` on Railway (same binary as the admin domain-tracker).
 
-## Tables (13, all org-scoped)
+## Tables (14, all org-scoped)
 
 `claude_threads`, `claude_runs`, `claude_run_events`, `claude_instructions`,
 `claude_playbooks`, `claude_attachments`, `claude_actions`, `claude_topics`,
 `claude_thread_topics`, `claude_thread_analyses`, `claude_daily_identity`,
-`claude_known_workers`, `claude_manager_proposals`. Authoritative shapes:
+`claude_known_workers`, `claude_manager_proposals`, `claude_action_approvals`
+(the autonomy gate's destructive-migration approval queue). Authoritative shapes:
 `grep -rn "<table>" supabase/migrations/`.
 
 ## Docs

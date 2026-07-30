@@ -4477,6 +4477,17 @@
       "apply": "Split {count} topics",
       "done": "Split into {count} chats"
     },
+    "approvals": {
+      "banner": "{count} destructive migrations awaiting your approval",
+      "showDetails": "Show details",
+      "affected": "{count} rows will be affected",
+      "noPreview": "No row preview available",
+      "approve": "Approve & run",
+      "reject": "Reject",
+      "approved": "Approved — applying now",
+      "rejected": "Rejected — nothing ran",
+      "decideFailed": "Action failed"
+    },
     "group": {
       "toggle": "Group by topic",
       "now": "Group now",

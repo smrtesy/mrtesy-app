@@ -12,6 +12,7 @@ import { requireAuth, requireOrg, requireSuperAdmin } from "../../middleware";
 import claudeRoutes from "./routes";
 import playbookRoutes from "./playbooks";
 import threadRoutes from "./threads";
+import actionRoutes from "./actions-routes";
 
 const router = Router();
 
@@ -30,6 +31,13 @@ router.use("/claude", requireAuth, requireOrg, requireSuperAdmin);
 router.use(claudeRoutes);
 router.use(playbookRoutes);
 router.use(threadRoutes);
+// The approvals screen — the human side of the autonomy gate. Under the same
+// super-admin chain as the rest of the module.
+router.use(actionRoutes);
 
 export default router;
 export { executeRun } from "./runner";
+// The machine-to-machine surface (the in-app Claude requesting a destructive-migration
+// gate) is exported separately so server/src/index.ts can mount it OUTSIDE the
+// super-admin chain — a CLI child has no JWT, only the shared internal secret.
+export { claudeActionM2MRouter } from "./actions-routes";
