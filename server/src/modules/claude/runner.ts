@@ -556,22 +556,29 @@ async function executeRunBody(runId: string): Promise<void> {
   const nextSeq = () => ++seq;
   let buffer: PendingEvent[] = [];
 
+  // Scrub EVERY secret this run's child holds — not just the GitHub token. The child
+  // env now also carries the shared internal secret (for the approval-gate callback)
+  // and the subscription OAuth token, and a run with full shell can echo any of them
+  // (an accidental `env`, a curl -v, a stack trace). These rows are the permanent
+  // transcript, so all three are replaced with *** before anything is stored. redact
+  // is a no-op for a null/empty value, so an unconfigured secret costs nothing here.
+  const redactSecrets = (s: string): string =>
+    redact(redact(redact(s, ghToken), internalSecret || null), token);
+
   const flush = async () => {
     if (buffer.length === 0) return;
     let batch: unknown[] = buffer.map((e) => ({ ...e, run_id: runId }));
     buffer = [];
     // A run working in a cloned repo can print its tokenised remote URL (git does
-    // this on a failed push), and these rows are the permanent transcript — so the
-    // token is scrubbed from text AND payload before anything is stored. Done on
-    // the serialized batch because the token is alphanumeric and cannot survive
-    // JSON escaping in a different form.
-    if (ghToken) {
-      try {
-        batch = JSON.parse(redact(JSON.stringify(batch), ghToken)) as unknown[];
-      } catch {
-        // Unserializable batch: fall through with the mapped rows rather than
-        // dropping the events entirely.
-      }
+    // this on a failed push), and these rows are the permanent transcript — so every
+    // secret is scrubbed from text AND payload before anything is stored. Done on the
+    // serialized batch because a token is alphanumeric and cannot survive JSON
+    // escaping in a different form.
+    try {
+      batch = JSON.parse(redactSecrets(JSON.stringify(batch))) as unknown[];
+    } catch {
+      // Unserializable batch: fall through with the mapped rows rather than
+      // dropping the events entirely.
     }
     const { error } = await db.from("claude_run_events").insert(batch);
     if (error) console.error("[claude/runner] event insert failed:", error.message);
@@ -767,16 +774,15 @@ async function executeRunBody(runId: string): Promise<void> {
     // Corrected here rather than trusting the value written before the spawn: if the
     // fallback fired, this turn resumed nothing, and the row must say so.
     resumed_session: effectiveResume,
-    result_summary: truncate(lastResult === null ? null : redact(lastResult, ghToken)),
+    result_summary: truncate(lastResult === null ? null : redactSecrets(lastResult)),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
     error: ok
       ? null
       : truncate(
-          redact(
+          redactSecrets(
             `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
-            ghToken,
           ),
           4000,
         ),
