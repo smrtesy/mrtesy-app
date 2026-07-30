@@ -13,6 +13,7 @@
  */
 import type { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { anthropicCostUsd, type AnthropicUsage } from "@/lib/ai/anthropic-pricing";
+import { whatsappApiBase, whatsappBearer } from "@/lib/whatsapp-endpoint";
 
 type SupabaseAdmin = NonNullable<ReturnType<typeof createAdminSupabaseClient>>;
 
@@ -177,9 +178,9 @@ async function sendWhatsApp(
           },
         }
       : { messaging_product: "whatsapp", to, type: "text", text: { body: text } };
-  const res = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`, {
+  const res = await fetch(`${whatsappApiBase()}/${apiVersion}/${phoneNumberId}/messages`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!res.ok) {

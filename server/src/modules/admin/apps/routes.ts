@@ -661,6 +661,10 @@ router.get(
     const token = typeof tokenPlain === "string" ? tokenPlain : null;
     if (!token) return res.status(500).json({ error: "access_token unreadable" });
 
+    // NOTE: intentionally NOT routed through the DualHook proxy
+    // (lib/whatsapp-endpoint.ts). `subscribed_apps` is a Meta System-User
+    // diagnostic and is not one of DualHook's supported relay routes — it must
+    // hit Meta directly with the connection's own Meta token.
     const apiVersion = process.env.META_API_VERSION ?? "v21.0";
     const url = `https://graph.facebook.com/${apiVersion}/${conn.waba_id}/subscribed_apps`;
 
