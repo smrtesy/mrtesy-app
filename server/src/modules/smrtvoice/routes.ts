@@ -2483,8 +2483,9 @@ router.post("/voice/quick-line", async (req: Request, res: Response) => {
   const { data: line, error: lineErr } = await db
     .from("smrtvoice_lines")
     .insert({
+      // NOTE: smrtvoice_lines.project_id was dropped in v2
+      // (20260701140000_smrtvoice_v2.sql:88) — lines are script-scoped now.
       org_id: req.org!.id,
-      project_id: project.id,
       script_id: script.id,
       line_number: lineNumber,
       speaker_name: speakerName,
