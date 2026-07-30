@@ -170,6 +170,7 @@
   },
   "tabsWorkspace": {
     "close": "Close tab",
+    "paneControls": "Pane actions",
     "focusPane": "Focus this tab",
     "resizePane": "Resize",
     "paneError": "Something went wrong in this tab",

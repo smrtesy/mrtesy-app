@@ -170,6 +170,7 @@
   },
   "tabsWorkspace": {
     "close": "סגור טאב",
+    "paneControls": "פעולות טאב",
     "focusPane": "מקד טאב זה",
     "resizePane": "שנה רוחב",
     "paneError": "משהו השתבש בטאב הזה",
