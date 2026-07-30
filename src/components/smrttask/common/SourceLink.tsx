@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Mail, MessageCircle, MessageSquare, FolderOpen, Calendar, FileQuestion, ExternalLink, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useOpenWhatsAppChat } from "@/hooks/useOpenWhatsAppChat";
@@ -64,6 +65,9 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
   // navigating the top window out of the workspace, and never renders a raw
   // `sms:` href (which would fire the OS SMS composer instead).
   const openSms = useOpenSmsChat();
+  // Pane-header labels for the WhatsApp / SMS tab opened beside the current one.
+  const tWa = useTranslations("whatsappPage");
+  const tSms = useTranslations("smsPage");
   const row: SourceRow | null = Array.isArray(source) ? (source[0] ?? null) : (source ?? null);
 
   // In-app email reader, opened on mobile Gmail taps (see handleClick below).
@@ -107,10 +111,17 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
           onNavigate?.();
           // Surface the conversation in the docked side-panel (keeps the
           // current list in place), or — inside a workspace pane where that
-          // panel is CSS-hidden — route to the full /whatsapp reader. The hook
-          // owns that branch so every call site stays in sync; when we know the
-          // exact source message we jump straight to it.
-          openWhatsApp(phone || null, { focusWamid });
+          // panel is CSS-hidden — open the full /whatsapp reader BESIDE the
+          // current pane (preservePane + besideCurrent) so the list you clicked
+          // from stays open and wide instead of being replaced or shrunk to a
+          // rail. The hook owns that branch so every call site stays in sync;
+          // when we know the exact source message we jump straight to it.
+          openWhatsApp(phone || null, {
+            focusWamid,
+            preservePane: true,
+            besideCurrent: true,
+            paneLabel: tWa("title"),
+          });
         }}
         title={`${label} — open in WhatsApp`}
         className={cn(base, interactive, className)}
@@ -137,7 +148,13 @@ export function SourceLink({ source, stopPropagation, onNavigate, className }: S
           // Close the enclosing modal before navigating so it doesn't linger
           // over the SMS reader (and so its dirty-refresh fires cleanly).
           onNavigate?.();
-          openSms(smsPeer);
+          // Open the SMS reader BESIDE the current pane (same rationale as
+          // WhatsApp above) so the list stays open and wide.
+          openSms(smsPeer, {
+            preservePane: true,
+            besideCurrent: true,
+            paneLabel: tSms("title"),
+          });
         }}
         title={`${label} — open in SMS`}
         className={cn(base, interactive, className)}

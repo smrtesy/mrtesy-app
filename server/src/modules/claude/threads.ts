@@ -27,7 +27,7 @@ import { db } from "../../db";
 import { executeRun, cancelRun, runOneShot } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
-import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS } from "./attachments";
+import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
 import { removeThreadWorkspace, sweepWorkspaces } from "./workspace";
 import {
   runSplitAnalysis,
@@ -286,6 +286,17 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
     return res.status(500).json({ error: "could not fetch turns" });
   }
 
+  // Self-heal the queue: a waiting turn with nothing live ahead of it means the
+  // dispatch was lost (backend restart between finish and dispatch). Fire it now,
+  // fire-and-forget — the poll that made this request will see it running.
+  const rows = runs ?? [];
+  if (
+    rows.some((r) => r.status === "waiting") &&
+    !rows.some((r) => r.status === "queued" || r.status === "running")
+  ) {
+    void dispatchNextWaiting(thread.id, req.org!.id);
+  }
+
   const ids = (runs ?? []).map((r) => r.id);
   // One query for every turn's events instead of N: a 40-turn thread would
   // otherwise be 40 round trips before the screen can paint.
@@ -311,10 +322,40 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
 
   const { data: attachments, error: aErr } = await db
     .from("claude_attachments")
-    .select("id, run_id, filename, mime_type, size_bytes")
+    .select("id, run_id, filename, mime_type, size_bytes, source, storage_path")
     .eq("thread_id", thread.id)
     .order("created_at", { ascending: true });
   if (aErr) console.error("[claude/threads] attachments failed:", aErr.message);
+
+  // Run-produced screenshots render as inline images, which needs a fetchable
+  // URL — the bucket is private, so mint short-lived signed URLs here rather
+  // than exposing a public path. Only for images the RUN produced: user uploads
+  // stay filename chips and never need a URL. Best-effort per file (a failed
+  // signature downgrades that one image to a chip, not the whole screen).
+  const signedByPath = new Map<string, string>();
+  await Promise.all(
+    (attachments ?? [])
+      .filter((a) => a.source === "run" && (a.mime_type ?? "").startsWith("image/"))
+      .map(async (a) => {
+        const { data: signed, error: sErr } = await db.storage
+          .from(BUCKET)
+          .createSignedUrl(a.storage_path, 3600);
+        if (sErr || !signed?.signedUrl) {
+          if (sErr) console.error("[claude/threads] sign failed:", sErr.message);
+          return;
+        }
+        signedByPath.set(a.storage_path, signed.signedUrl);
+      }),
+  );
+  const attachmentPayload = (attachments ?? []).map((a) => ({
+    id: a.id,
+    run_id: a.run_id,
+    filename: a.filename,
+    mime_type: a.mime_type,
+    size_bytes: a.size_bytes,
+    source: a.source,
+    signed_url: signedByPath.get(a.storage_path) ?? null,
+  }));
 
   // The open split proposal, if any — the banner the user acts on.
   const { data: splitProposal } = await db
@@ -360,7 +401,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
     turns: (runs ?? []).map((r) => ({
       ...r,
       events: eventsByRun.get(r.id) ?? [],
-      attachments: (attachments ?? []).filter((a) => a.run_id === r.id),
+      attachments: attachmentPayload.filter((a) => a.run_id === r.id),
     })),
     split_proposal: splitProposal ?? null,
     children: children ?? [],
@@ -509,6 +550,52 @@ router.post("/claude/threads/:id/attachments", async (req: Request, res: Respons
   }
 });
 
+/**
+ * A RUN posts a file back into its own turn — the browser helper's screenshot
+ * upload ("here is what the screen actually shows"). Authenticated with the
+ * run's minted user session, so the same superadmin gate as every /claude route
+ * applies; ownership is then pinned to the exact run: it must belong to this
+ * org, be created by this user, and still be running — a finished run must not
+ * be able to grow new content after its reply was rendered.
+ */
+router.post("/claude/runs/:id/attachments", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "run not found" });
+  const { filename, mime_type, base64 } = (req.body ?? {}) as {
+    filename?: string;
+    mime_type?: string;
+    base64?: string;
+  };
+  if (!base64 || typeof base64 !== "string") return res.status(400).json({ error: "base64 is required" });
+  if (base64.length > MAX_BASE64_CHARS) return res.status(413).json({ error: "file is too large" });
+
+  const { data: run, error: rErr } = await db
+    .from("claude_runs")
+    .select("id, thread_id, status, created_by")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (rErr) return res.status(500).json({ error: "could not verify run" });
+  if (!run || run.created_by !== req.user!.id) return res.status(404).json({ error: "run not found" });
+  if (!run.thread_id) return res.status(400).json({ error: "run has no thread" });
+  if (run.status !== "running") return res.status(409).json({ error: "run is not running" });
+
+  try {
+    const attachment = await saveAttachment({
+      orgId: req.org!.id,
+      threadId: run.thread_id,
+      userId: req.user!.id,
+      filename: str(filename, 200) || "screenshot.png",
+      mimeType: str(mime_type, 200) || null,
+      base64,
+      runId: run.id,
+      source: "run",
+    });
+    return res.status(201).json({ attachment });
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 // ── send a message ────────────────────────────────────────────────────────────
 
 router.post("/claude/threads/:id/messages", async (req: Request, res: Response) => {
@@ -538,28 +625,27 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   }
   if (!thread) return res.status(404).json({ error: "thread not found" });
 
-  // One turn at a time — but across the whole WORKSPACE group, not just this thread.
-  // A fork child shares its parent's directory, so a parent turn and a child turn
-  // running at once would be two `claude` processes in one project dir: racing
-  // session writes and file edits. Serialize on the shared workspace id.
-  const workspaceId = thread.workspace_thread_id ?? thread.id;
-  const { data: workspacePeers } = await db
-    .from("claude_threads")
-    .select("id")
-    .eq("org_id", orgId)
-    .or(`id.eq.${workspaceId},workspace_thread_id.eq.${workspaceId}`);
-  const peerIds = (workspacePeers ?? []).map((p) => p.id);
-  const liveScope = peerIds.length > 0 ? peerIds : [thread.id];
+  // One ENGINE PROCESS at a time — across the whole WORKSPACE group, not just this
+  // thread. A fork child shares its parent's directory, so a parent turn and a
+  // child turn running at once would be two `claude` processes in one project dir:
+  // racing session writes and file edits. Serialize on the shared workspace id.
+  //
+  // But a live turn no longer REFUSES a new message (the old 409): the message is
+  // accepted as a 'waiting' turn that sits in line and runs the moment the live
+  // turn finishes — typing while Claude works, like Claude Code.
+  // 'waiting' counts as live here on purpose: after a backend restart a waiting
+  // turn can briefly have nothing executing ahead of it, and a new message that
+  // ran immediately would jump the line — the older turn would then resume a
+  // session that already contains the newer exchange, out of order.
+  const liveScope = await workspaceScope(thread.id, thread.workspace_thread_id, orgId);
   const { data: live, error: lErr } = await db
     .from("claude_runs")
     .select("id")
     .in("thread_id", liveScope)
-    .in("status", ["queued", "running"])
+    .in("status", ["queued", "running", "waiting"])
     .limit(1);
   if (lErr) return res.status(500).json({ error: "could not check thread state" });
-  if (live && live.length > 0) {
-    return res.status(409).json({ error: "a turn is still running", run_id: live[0].id });
-  }
+  const hasLive = Boolean(live && live.length > 0);
 
   const { count: prior, error: cErr } = await db
     .from("claude_runs")
@@ -569,8 +655,10 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   const turnIndex = (prior ?? 0) + 1;
 
   // First turn carries the standing instructions and the working method; later
-  // turns don't, because the resumed session still holds them.
-  const isFirst = !thread.session_id;
+  // turns don't, because the resumed session still holds them. A turn queued
+  // BEHIND a live one is never "first": by the time it runs, the live turn will
+  // have created the session it resumes into.
+  const isFirst = !thread.session_id && !hasLive;
   const composed = isFirst
     ? await composePrompt(orgId, message || "(ראה את הקבצים המצורפים)", thread.playbook_id)
     : { prompt: message || "(ראה את הקבצים המצורפים)", playbook: null };
@@ -614,7 +702,7 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
       effort: thread.effort,
       repo: thread.repo,
       git_branch: thread.git_branch,
-      status: "queued",
+      status: hasLive ? "waiting" : "queued",
     })
     .select("id, turn_index, status, user_prompt, created_at")
     .single();
@@ -624,6 +712,12 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
     // turn index. The check above is advisory; THIS is what actually prevents two
     // engine processes resuming the same session.
     if (error.code === "23505") {
+      return res.status(409).json({ error: "a turn is still running" });
+    }
+    // 23514: the status CHECK does not know 'waiting' yet — the migration
+    // (20260729150000) has not been applied. Degrade to the old behavior instead
+    // of failing with an opaque 500.
+    if (error.code === "23514" && hasLive) {
       return res.status(409).json({ error: "a turn is still running" });
     }
     console.error("[claude/threads] turn insert failed:", error.message);
@@ -642,13 +736,159 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
     if (aErr) console.error("[claude/threads] attachment link failed:", aErr.message);
   }
 
-  void executeRun(run.id)
-    .then(() => maybeTitle(thread.id, orgId))
-    .then(() => maybeAutoSplit(thread.id, orgId))
-    .catch((e) => console.error("[claude/threads] executeRun threw:", e instanceof Error ? e.message : e));
+  // A waiting turn is NOT executed here — the dispatcher promotes it when the live
+  // turn finishes. Executing it now would be two engine processes in one workspace.
+  if (!hasLive) {
+    void executeRun(run.id)
+      .then(() => dispatchNextWaiting(thread.id, orgId))
+      .then(() => maybeTitle(thread.id, orgId))
+      .then(() => maybeAutoSplit(thread.id, orgId))
+      .catch((e) => console.error("[claude/threads] executeRun threw:", e instanceof Error ? e.message : e));
+  }
 
   return res.status(201).json({ run });
 });
+
+/** Resolve the ids of every thread sharing this thread's workspace directory (the
+ *  thread itself, its workspace owner, and any fork children borrowing it). */
+async function workspaceScope(
+  threadId: string,
+  workspaceThreadId: string | null,
+  orgId: string,
+): Promise<string[]> {
+  const workspaceId = workspaceThreadId ?? threadId;
+  const { data: peers } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("org_id", orgId)
+    .or(`id.eq.${workspaceId},workspace_thread_id.eq.${workspaceId}`);
+  const ids = (peers ?? []).map((p) => p.id);
+  return ids.length > 0 ? ids : [threadId];
+}
+
+/**
+ * Promote and execute the next 'waiting' turn of this thread's workspace group.
+ *
+ * Runs after every finished turn (and as a self-heal from the thread GET, for the
+ * case where the backend restarted between the finish and the dispatch). The
+ * guarded update (status='waiting' → 'queued') is what makes concurrent dispatchers
+ * safe: only one caller wins the claim, the rest see nothing to do. Chains itself,
+ * so a queue of three messages drains one by one.
+ *
+ * Never throws into the caller — a dispatch failure must not fail the turn that
+ * triggered it; the self-heal picks the queue up on the next screen load.
+ */
+export async function dispatchNextWaiting(threadId: string, orgId: string): Promise<void> {
+  try {
+    const { data: thread } = await db
+      .from("claude_threads")
+      .select("id, workspace_thread_id")
+      .eq("id", threadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!thread) return;
+    const scope = await workspaceScope(thread.id, thread.workspace_thread_id, orgId);
+
+    // Still busy? Another turn (possibly of a sibling thread) is live — its own
+    // completion will dispatch.
+    const { data: live } = await db
+      .from("claude_runs")
+      .select("id")
+      .in("thread_id", scope)
+      .in("status", ["queued", "running"])
+      .limit(1);
+    if (live && live.length > 0) return;
+
+    // Oldest waiting turn across the group, by arrival time.
+    const { data: next } = await db
+      .from("claude_runs")
+      .select("id, thread_id, turn_index, user_prompt, prompt, created_at")
+      .in("thread_id", scope)
+      .eq("status", "waiting")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!next) return;
+
+    // The claim. Guarded on status so two dispatchers cannot both execute IT.
+    const { data: claimed, error: cErr } = await db
+      .from("claude_runs")
+      .update({ status: "queued", updated_at: new Date().toISOString() })
+      .eq("id", next.id)
+      .eq("status", "waiting")
+      .select("id")
+      .maybeSingle();
+    if (cErr) return;
+    if (!claimed) {
+      // Lost the row (canceled, or another dispatcher took it) — the queue may
+      // still hold more; try the next one instead of abandoning the line.
+      await dispatchNextWaiting(threadId, orgId);
+      return;
+    }
+
+    // The claim protects the ROW; the invariant is "≤1 live per group". Re-check
+    // now that we hold it: a concurrent dispatcher or sender can have gone live in
+    // the gap between our live check and the claim. Survival is by AGE — the older
+    // run proceeds, the newer one steps back in line — so when two dispatchers
+    // each claim a turn, both apply the same rule and exactly one survives (a
+    // genuinely running turn is always older than a fresh claim, so it always wins).
+    const { data: rivals } = await db
+      .from("claude_runs")
+      .select("id, created_at")
+      .in("thread_id", scope)
+      .in("status", ["queued", "running"])
+      .neq("id", next.id);
+    const olderRival = (rivals ?? []).some(
+      (r) =>
+        r.created_at < next.created_at ||
+        (r.created_at === next.created_at && r.id < next.id),
+    );
+    if (olderRival) {
+      // Guarded on 'queued' so a cancel that landed meanwhile is not resurrected.
+      await db
+        .from("claude_runs")
+        .update({ status: "waiting", updated_at: new Date().toISOString() })
+        .eq("id", next.id)
+        .eq("status", "queued");
+      return;
+    }
+
+    // The turn was composed assuming the run ahead of it would create the engine
+    // session (isFirst=false at insert). If that run died sessionless (spawn
+    // failure, missing token, Stop) THIS is really the thread's first engine turn
+    // — recompose so the standing instructions and the environment preamble ride
+    // along instead of being silently lost. The stored prompt (message + any
+    // board attach) becomes the task text, and the DB history rehydrates what the
+    // dead turn(s) said.
+    const { data: tRow } = await db
+      .from("claude_threads")
+      .select("session_id, playbook_id")
+      .eq("id", next.thread_id)
+      .maybeSingle();
+    if (tRow && !tRow.session_id) {
+      const base = next.prompt?.trim() || next.user_prompt?.trim() || "(ראה את הקבצים המצורפים)";
+      const composed = await composePrompt(orgId, base, tRow.playbook_id);
+      let promptText = composed.prompt;
+      if (next.turn_index > 1) {
+        const history = await buildHistoryPreamble(next.thread_id, next.turn_index);
+        if (history) promptText = `${history}\n\n---\n\n${promptText}`;
+      }
+      const { error: pErr } = await db
+        .from("claude_runs")
+        .update({ prompt: promptText, playbook_id: tRow.playbook_id })
+        .eq("id", next.id);
+      if (pErr) console.error("[claude/threads] recompose failed:", pErr.message);
+    }
+
+    await executeRun(next.id);
+    await maybeTitle(next.thread_id, orgId).catch(() => {});
+    await maybeAutoSplit(next.thread_id, orgId);
+    // Keep draining until the queue is empty.
+    await dispatchNextWaiting(next.thread_id, orgId);
+  } catch (e) {
+    console.error("[claude/threads] dispatch failed:", e instanceof Error ? e.message : e);
+  }
+}
 
 /**
  * The split gate (plan §5), run after a turn completes — the moment the thread just
@@ -695,15 +935,14 @@ router.post("/claude/runs/:id/cancel", async (req: Request, res: Response) => {
 
   const signalled = cancelRun(run.id);
 
-  // A queued run that never reached a process still has to leave the live states,
-  // or the screen would poll it forever. The runner's own finish() writes the
-  // terminal row when a signalled child exits, so only the un-started case is
-  // written here.
-  if (!signalled && (run.status === "queued" || run.status === "running")) {
-    // 'running' matters as much as 'queued': a backend restart mid-turn leaves the
-    // row running with no process behind it, and that row keeps the screen polling
-    // forever and the composer disabled — the thread becomes unusable. Nothing else
-    // will ever write it, because the process that would have is gone.
+  // A queued/waiting run that never reached a process still has to leave the live
+  // states, or the screen would poll it forever. The runner's own finish() writes
+  // the terminal row when a signalled child exits, so only the un-started case is
+  // written here. 'waiting' is the remove-from-queue case; 'running' matters as
+  // much as 'queued': a backend restart mid-turn leaves the row running with no
+  // process behind it, and that row keeps the screen polling forever — nothing
+  // else will ever write it, because the process that would have is gone.
+  if (!signalled && (run.status === "queued" || run.status === "running" || run.status === "waiting")) {
     const { error: uErr } = await db
       .from("claude_runs")
       .update({
@@ -712,7 +951,7 @@ router.post("/claude/runs/:id/cancel", async (req: Request, res: Response) => {
         updated_at: new Date().toISOString(),
       })
       .eq("id", run.id)
-      .in("status", ["queued", "running"]);
+      .in("status", ["queued", "running", "waiting"]);
     if (uErr) console.error("[claude/runs] cancel update failed:", uErr.message);
   }
 

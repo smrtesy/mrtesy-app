@@ -9,13 +9,13 @@ import {
 } from "@/lib/apps/server";
 import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
-import { WhatsAppPanelFab } from "@/components/smrttask/whatsapp/WhatsAppPanelFab";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
 import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 import { PullToRefresh } from "@/components/platform/pwa/PullToRefresh";
+import { ClaudeInspector } from "@/components/claude/ClaudeInspector";
 
 export default async function AppLayout({
   children,
@@ -167,8 +167,9 @@ export default async function AppLayout({
         <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} taskAccess={taskAccess} />
         {/* WhatsApp side-panel: lets the operator keep a conversation open
             alongside the task lists. Provider wraps the content so entry points
-            (SourceLink / QuickAction / log) can open it; the docked panel + FAB
-            render only for smrtTask users. */}
+            (SourceLink / QuickAction / log) can open it; the docked panel
+            renders only for smrtTask users. WhatsApp is also reachable from the
+            sidebar and the mobile bottom nav, so there is no floating toggle. */}
         <WhatsAppPanelProvider>
           {/* Main content — data-sidebar-main lets globals.css drop the inline-start
               margin when the user collapses the sidebar from Sidebar.tsx. TabsArea
@@ -179,12 +180,12 @@ export default async function AppLayout({
             {hasSmrtTask && <WorkClockBar />}
             <TabsArea>{children}</TabsArea>
           </main>
-          {hasSmrtTask && (
-            <>
-              <WhatsAppPanel />
-              <WhatsAppPanelFab />
-            </>
-          )}
+          {hasSmrtTask && <WhatsAppPanel />}
+          {/* Inspect mode for the Claude chat ("סמן מקום באפליקציה") — renders
+              nothing until armed, so it is zero chrome and zero cost while idle.
+              Admin-only, matching the /claude routes' requireSuperAdmin gate: for
+              anyone else the capture would land on a screen whose every call 403s. */}
+          {isAdmin && <ClaudeInspector />}
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
       </QueryProvider>

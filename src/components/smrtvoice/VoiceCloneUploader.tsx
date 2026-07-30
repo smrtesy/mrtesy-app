@@ -18,6 +18,19 @@ interface Props {
   onCloned?: (voiceId: string) => void;
 }
 
+// Terminal "voice is usable" states Resemble reports. Kept in sync with the
+// backend's READY set in server/src/modules/smrtvoice/routes.ts (voice-status
+// route) — "finished" is Resemble's terminal state for a trained voice, and
+// its omission here left the progress panel spinning after the clone was ready.
+const READY_STATES = new Set([
+  "ready",
+  "completed",
+  "active",
+  "done",
+  "available",
+  "finished",
+]);
+
 type Mode = "upload" | "drive";
 // Clone lifecycle phases surfaced to the user.
 type Phase = "idle" | "uploading" | "processing" | "training" | "ready";
@@ -61,7 +74,6 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
   // (~minutes); poll for ~3 min while the page is open, then leave it in the bg
   // (the character page reflects readiness on its next focus/refresh).
   async function pollStatus(): Promise<string | null> {
-    const READY = new Set(["ready", "completed", "active", "done", "available"]);
     for (let attempt = 0; attempt < 30; attempt++) {
       await new Promise((r) => setTimeout(r, 6000));
       if (!mountedRef.current) return null;
@@ -69,7 +81,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         const { status } = await api<{ status: string | null }>(
           `/api/voice/characters/${characterId}/voice-status`,
         );
-        if (status && READY.has(status.toLowerCase())) return status;
+        if (status && READY_STATES.has(status.toLowerCase())) return status;
         if (mountedRef.current) setTrainStatus(status ?? "training");
       } catch {
         /* transient — keep polling */
@@ -86,7 +98,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
     setDriveFiles(null);
     setSelected(new Set());
     setFolder("");
-    if (status === "ready") {
+    if (READY_STATES.has(status.toLowerCase())) {
       setPhase("ready");
       toast.success(t("successReady"));
       return;
@@ -245,7 +257,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
             <input
               type="file"
               multiple
-              accept="audio/wav,audio/mpeg,audio/mp4"
+              accept="audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/m4a,audio/aac,audio/ogg,audio/flac,.wav,.mp3,.m4a,.aac,.ogg,.flac"
               onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
               disabled={running}
               className="block w-full text-sm file:me-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-secondary file:text-secondary-foreground"

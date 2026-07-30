@@ -58,8 +58,13 @@ type TabsWorkspaceValue = {
   /** Maximize this pane, or restore the split view if it is already solo. */
   toggleSolo: (id: string) => void;
   /** Open (or focus, if already open) a page as a pane and make it active.
-   *  Every other open tab is parked as a rail so the opened page gets focus. */
-  openTab: (href: string, label: string) => void;
+   *  By default (`focus: true`) every other open tab is parked as a rail so the
+   *  opened page gets focus. Pass `focus: false` to open it BESIDE the current
+   *  panes: the opened pane is expanded and active, but no other pane is parked
+   *  and any maximized (solo) pane is restored to the split — so the pane the
+   *  user opened it FROM stays wide, not collapsed to a rail. Used by "open
+   *  source" links, which must not close/shrink the list you're looking at. */
+  openTab: (href: string, label: string, opts?: { focus?: boolean }) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
   /** Bring a parked (rail) tab back to full size beside the others and focus
@@ -109,8 +114,20 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         // stored id/href to the locale THIS document is actually on; the persist
         // effect then writes the corrected set back.
         const active = window.location.pathname.match(/^\/(he|en)(?=\/|$)/)?.[1];
-        const swap = (s: string) =>
+        const swapLocale = (s: string) =>
           active ? s.replace(/^\/(he|en)(?=\/|$)/, `/${active}`) : s;
+        // `?new=<ts>` is a one-shot "open a blank chat" command (the Claude
+        // button). The pane consumes it and replaces the URL, but a workspace
+        // persisted before that replace would replay the blank chat on every
+        // restore — so it is also stripped here, like the locale fix above.
+        const swap = (s: string) => {
+          const [path, query = ""] = swapLocale(s).split("?");
+          if (!query) return path;
+          const params = new URLSearchParams(query);
+          params.delete("new");
+          const q = params.toString();
+          return q ? `${path}?${q}` : path;
+        };
         if (Array.isArray(parsed.tabs)) {
           const valid = parsed.tabs
             .filter((t) => t && typeof t.id === "string" && typeof t.href === "string")
@@ -166,7 +183,8 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     }
   }, [tabs, activeId, widths, soloId, collapsedIds, hydrated]);
 
-  const openTab = useCallback((href: string, label: string) => {
+  const openTab = useCallback((href: string, label: string, opts?: { focus?: boolean }) => {
+    const focus = opts?.focus ?? true;
     // Dedupe by PAGE (path without query), not by exact href: opening
     // "/he/whatsapp?chat_id=X" while "/he/whatsapp" is already a tab must
     // focus that tab — not open WhatsApp twice. The href update carries the
@@ -181,21 +199,39 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       // is solo used to show nothing at all, since the maximized pane keeps
       // covering the workspace. Either way the page they asked for has to be
       // the one on screen.
+      //
+      // `focus: false` (open BESIDE) is the exception: the caller wants the
+      // pane it opened FROM to stay expanded next to the new one, so we neither
+      // park the other panes nor let a maximized pane keep covering them — we
+      // clear solo so the split is visible and only make sure the opened pane
+      // is expanded.
       const existing = prev.find((t) => pathOf(t.href) === path);
       if (existing) {
         setActiveId(existing.id);
-        setSoloId((cur) => (cur ? existing.id : null));
-        // Focus by default: the opened page is the only expanded pane, every
-        // other open tab is parked as a rail. Clicking a rail brings it back.
-        setCollapsedIds(prev.filter((t) => t.id !== existing.id).map((t) => t.id));
+        if (focus) {
+          setSoloId((cur) => (cur ? existing.id : null));
+          // Focus by default: the opened page is the only expanded pane, every
+          // other open tab is parked as a rail. Clicking a rail brings it back.
+          setCollapsedIds(prev.filter((t) => t.id !== existing.id).map((t) => t.id));
+        } else {
+          setSoloId(null);
+          // Beside: expand the opened pane if it was parked, leave the rest.
+          setCollapsedIds((cids) => cids.filter((c) => c !== existing.id));
+        }
         return href === existing.href
           ? prev
           : prev.map((t) => (t.id === existing.id ? { ...t, href } : t));
       }
       setActiveId(href);
-      setSoloId((cur) => (cur ? href : null));
-      // Park every previously-open tab; the new pane (href) stays expanded.
-      setCollapsedIds(prev.map((t) => t.id));
+      if (focus) {
+        setSoloId((cur) => (cur ? href : null));
+        // Park every previously-open tab; the new pane (href) stays expanded.
+        setCollapsedIds(prev.map((t) => t.id));
+      } else {
+        // Beside: the new pane joins the split expanded (it isn't in
+        // collapsedIds), every existing pane keeps its expanded/parked state.
+        setSoloId(null);
+      }
       // Manual widths are deliberately KEPT. They are keyed by tab id and
       // resolveFractions ignores a partially-explicit set, so the workspace
       // already falls back to the automatic layout while this pane is open —

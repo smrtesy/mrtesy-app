@@ -27,6 +27,14 @@ interface OpenSmsOpts {
   preservePane?: boolean;
   /** Header label for the new pane when `preservePane` opens one. */
   paneLabel?: string;
+  /**
+   * When `preservePane` opens a NEW component pane, open it BESIDE the current
+   * pane (both expanded, side by side) instead of parking the current pane as a
+   * thin rail. Set by "open source" links so clicking an SMS source from the
+   * inbox / a task list keeps that list open and wide. Ignored outside a
+   * component pane.
+   */
+  besideCurrent?: boolean;
 }
 
 /**
@@ -51,7 +59,7 @@ export function useOpenSmsChat() {
 
   return useCallback(
     (peer: string | null, opts: OpenSmsOpts = {}) => {
-      const { preservePane = false, paneLabel } = opts;
+      const { preservePane = false, paneLabel, besideCurrent = false } = opts;
 
       const params = new URLSearchParams();
       if (peer) params.set("chat_id", peer);
@@ -69,7 +77,7 @@ export function useOpenSmsChat() {
       // panes post a message. Fall back to replacing this pane.
       if (preservePane && (inComponentPane || inIframePane)) {
         if (inComponentPane && tabs) {
-          tabs.openTab(href, paneLabel ?? "SMS");
+          tabs.openTab(href, paneLabel ?? "SMS", { focus: !besideCurrent });
           return;
         }
         if (inIframePane && requestOpenTab(href, paneLabel ?? "SMS")) return;

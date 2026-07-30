@@ -15,10 +15,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { useScreenSearchParams } from "@/lib/panes/nav";
+import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
   ChevronDown,
   ChevronRight,
+  Crosshair,
   Loader2,
   MessageSquarePlus,
   PanelLeftClose,
@@ -70,8 +71,21 @@ const DEFAULT_MODEL = "claude-opus-5";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const EFFORT_DEFAULT = "__default__";
 
-const LIVE = ["queued", "running"] as const;
+/** Statuses that keep the screen polling. 'waiting' is a message queued behind a
+ *  live turn — it will start on its own, so the poll must keep watching it. */
+const LIVE = ["queued", "running", "waiting"] as const;
+/** The subset that means an engine process is (about to be) executing — what the
+ *  Stop button targets. A 'waiting' turn has no process to stop; it is removed
+ *  from the queue instead. */
+const EXECUTING = ["queued", "running"] as const;
 const POLL_MS = 1500;
+
+/** 12345 → "12.3K" — the compact way the usage figures read in the chrome. */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
 
 interface Thread {
   id: string;
@@ -96,7 +110,7 @@ interface TurnEvent {
 interface Turn {
   id: string;
   turn_index: number;
-  status: "queued" | "running" | "done" | "failed" | "canceled";
+  status: "queued" | "running" | "waiting" | "done" | "failed" | "canceled";
   user_prompt: string | null;
   result_summary: string | null;
   error: string | null;
@@ -105,9 +119,20 @@ interface Turn {
   resumed_session: string | null;
   /** Set when this turn was moved to a split child — folded away on the parent. */
   moved_to_thread_id: string | null;
+  /** Consumption the engine reported for this turn — what the usage line shows. */
+  input_tokens: number | null;
+  output_tokens: number | null;
+  duration_ms: number | null;
   created_at: string;
   events: TurnEvent[];
-  attachments: { id: string; filename: string }[];
+  attachments: {
+    id: string;
+    filename: string;
+    /** 'user' = sent with the message (chip); 'run' = produced by the run itself
+     *  (browser screenshot — rendered inline when signed_url is present). */
+    source?: "user" | "run";
+    signed_url?: string | null;
+  }[];
 }
 
 interface SplitProposal {
@@ -136,6 +161,10 @@ export function ClaudeChat() {
   const [loading, setLoading] = useState(true);
   const [listOpen, setListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Inside a tabs-workspace pane the floating grip (TabsWorkspace PaneControls)
+  // sits in the top-inline-end corner; reserve room so the end-most header
+  // button (settings) clears it. No reserve on the standalone /claude route.
+  const inPane = useOptionalPaneNav() != null;
   const [renaming, setRenaming] = useState<string | null>(null);
   /** The free-text task router ("עדכון"). It lost its sidebar button to the chat,
    *  so it lives here — inside the collapsed panel, not as new permanent chrome. */
@@ -188,6 +217,80 @@ export function ClaudeChat() {
       activeIdRef.current = tid;
     }
   }, [screenSearch]);
+
+  // Continue-where-you-left-off guard, declared here because the seed effect below
+  // must be able to claim it BEFORE the auto-open effect fires.
+  const autoOpenedRef = useRef(false);
+
+  // The Claude button opens a NEW chat: it navigates to /claude?new=<timestamp>,
+  // and this effect resets to the blank composer. Keyed on the VALUE so every
+  // click is fresh (openTab dedupes the tab by path and only updates its href —
+  // a static param would fire once and never again), and deliberately NOT
+  // touching deepLinkedRef, so a later ?thread=<id> deep-link (corrections'
+  // "continue with Claude") still opens its conversation.
+  const newParamRef = useRef<string | null>(null);
+  const screenRouter = useScreenRouter();
+  const screenPathname = useScreenPathname();
+  useEffect(() => {
+    const fresh = screenSearch.get("new");
+    if (!fresh || fresh === newParamRef.current) return;
+    newParamRef.current = fresh;
+    autoOpenedRef.current = true; // suppress open-latest on arrival
+    setActiveId(null);
+    activeIdRef.current = null;
+    setTurns([]);
+    // Consume the param OUT of the URL: it is a one-shot command, and left in
+    // place it persists (workspace localStorage / mobile history), replaying
+    // "blank chat" on every reload and burying continue-where-you-left-off.
+    const params = new URLSearchParams(screenSearch.toString());
+    params.delete("new");
+    const q = params.toString();
+    screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
+  }, [screenSearch, screenRouter, screenPathname]);
+
+  /** The inspect-mode seed: the user marked an element somewhere in the app and
+   *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
+   *  the mark happened) AND from a live window event (it was — a mount-time read
+   *  would never re-run). Result: fresh chat, the app repo pre-selected, and the
+   *  captured context waiting in the composer for the user to complete and send. */
+  const [seedText, setSeedText] = useState<string | null>(null);
+  const applySeed = useCallback((seed: { text?: string; repo?: string; branch?: string }) => {
+    if (!seed?.text) return;
+    // The seed wins over both the ?thread deep-link and the open-latest default:
+    // the user came here to file THIS, not to resume something else.
+    deepLinkedRef.current = true;
+    autoOpenedRef.current = true;
+    setActiveId(null);
+    activeIdRef.current = null;
+    if (seed.repo) {
+      setPending((prev) => ({ ...prev, repo: seed.repo, git_branch: seed.branch ?? null }));
+    }
+    setSeedText(seed.text);
+  }, []);
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("smrtesy-claude-inspect-seed");
+      if (raw) {
+        sessionStorage.removeItem("smrtesy-claude-inspect-seed");
+        applySeed(JSON.parse(raw) as { text?: string });
+      }
+    } catch {
+      // A malformed seed is a no-op — the screen opens normally.
+    }
+    const onSeed = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { text?: string } | undefined;
+      if (!detail) return;
+      // This pane consumed it live; the stored copy must not re-apply on a later mount.
+      try {
+        sessionStorage.removeItem("smrtesy-claude-inspect-seed");
+      } catch {
+        // Nothing stored / storage blocked — the live application already happened.
+      }
+      applySeed(detail);
+    };
+    window.addEventListener("smrtesy:claude-inspect-seed", onSeed);
+    return () => window.removeEventListener("smrtesy:claude-inspect-seed", onSeed);
+  }, [applySeed]);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -243,8 +346,8 @@ export function ClaudeChat() {
   // arrival, so the screen is a running chat rather than a blank one every time.
   // Fires ONCE (autoOpenedRef) — after that, "New chat" (activeId=null) and the poll
   // that keeps refreshing `threads` must not yank the user back into a thread.
-  // A ?thread deep-link and an already-open thread both win over the auto-open.
-  const autoOpenedRef = useRef(false);
+  // A ?thread deep-link, an inspect seed, and an already-open thread all win over
+  // the auto-open.
   useEffect(() => {
     if (autoOpenedRef.current || loading) return;
     autoOpenedRef.current = true;
@@ -340,17 +443,22 @@ export function ClaudeChat() {
       const id = await ensureThread();
       if (!id) return;
       setSending(true);
-      // Shown immediately with a queued status, so the message appears the moment
-      // Enter is pressed instead of after the round trip.
+      // Shown immediately, so the message appears the moment Enter is pressed
+      // instead of after the round trip. 'waiting' when a turn is already live —
+      // the server will queue it exactly the same way.
+      const behindLive = turns.some((x) => (EXECUTING as readonly string[]).includes(x.status));
       const optimistic: Turn = {
         id: `pending-${Date.now()}`,
         turn_index: turns.length + 1,
-        status: "queued",
+        status: behindLive ? "waiting" : "queued",
         user_prompt: message,
         result_summary: null,
         error: null,
         resumed_session: null,
         moved_to_thread_id: null,
+        input_tokens: null,
+        output_tokens: null,
+        duration_ms: null,
         created_at: new Date().toISOString(),
         events: [],
         attachments: [],
@@ -383,15 +491,28 @@ export function ClaudeChat() {
         // The poll picks it up.
       }
     },
-    [ensureThread, turns.length, loadThread, attachBoard],
+    [ensureThread, turns, loadThread, attachBoard],
   );
 
-  const liveTurn = turns.find((x) => (LIVE as readonly string[]).includes(x.status));
+  /** The turn an engine process is executing (what Stop signals). Distinct from
+   *  the LIVE poll set: a 'waiting' turn is live for polling but has no process. */
+  const runningTurn = turns.find((x) => (EXECUTING as readonly string[]).includes(x.status));
 
   async function stop() {
-    if (!liveTurn || liveTurn.id.startsWith("pending-")) return;
+    if (!runningTurn || runningTurn.id.startsWith("pending-")) return;
     try {
-      await api(`/api/claude/runs/${liveTurn.id}/cancel`, { method: "POST" });
+      await api(`/api/claude/runs/${runningTurn.id}/cancel`, { method: "POST" });
+      if (activeId) await loadThread(activeId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** Remove a queued ('waiting') message from the line before it runs. */
+  async function cancelWaiting(runId: string) {
+    if (runId.startsWith("pending-")) return;
+    try {
+      await api(`/api/claude/runs/${runId}/cancel`, { method: "POST" });
       if (activeId) await loadThread(activeId);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -489,6 +610,19 @@ export function ClaudeChat() {
 
   const title = thread?.title?.trim() || t("untitled");
 
+  // "כמות טוקנים בשימוש" — the conversation's own consumption, summed from what the
+  // engine reported per turn. Shown as a quiet chip in the header; the tooltip
+  // carries the exact split.
+  const usage = useMemo(() => {
+    let input = 0;
+    let output = 0;
+    for (const x of turns) {
+      input += x.input_tokens ?? 0;
+      output += x.output_tokens ?? 0;
+    }
+    return { input, output, total: input + output };
+  }, [turns]);
+
   return (
     <div className="flex h-full min-h-0">
       {/* Thread list — a rail, closed by default. */}
@@ -559,7 +693,7 @@ export function ClaudeChat() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Header: the title, and two quiet buttons. Everything configurable is
             behind the second one. */}
-        <div className="flex items-center gap-1 border-b p-2">
+        <div className={cn("flex items-center gap-1 border-b p-2", inPane && "pe-10")}>
           <Button
             size="sm"
             variant="ghost"
@@ -602,6 +736,34 @@ export function ClaudeChat() {
               )}
             </button>
           )}
+
+          {/* Tokens used in this conversation — always visible, one quiet number. */}
+          {usage.total > 0 && (
+            <span
+              dir="ltr"
+              className="shrink-0 rounded px-1.5 text-[11px] tabular-nums text-muted-foreground"
+              title={t("usage.tooltip", {
+                input: usage.input.toLocaleString(),
+                output: usage.output.toLocaleString(),
+              })}
+            >
+              {fmtTokens(usage.total)}
+            </span>
+          )}
+
+          {/* Mark a place in the app: arms the global inspect mode (ClaudeInspector,
+              mounted in the app layout). Click a component in a neighboring pane /
+              any screen, and the captured context lands here as a draft message. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 w-8 p-0"
+            onClick={() => window.dispatchEvent(new CustomEvent("smrtesy:claude-inspect-arm"))}
+            aria-label={t("inspect.arm")}
+            title={t("inspect.arm")}
+          >
+            <Crosshair className="size-4" />
+          </Button>
 
           <Button
             size="sm"
@@ -728,7 +890,7 @@ export function ClaudeChat() {
             <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
           ) : (
             <div className="mx-auto flex max-w-3xl flex-col gap-3">
-              {renderTurns(turns, children, t, (id) => setActiveId(id))}
+              {renderTurns(turns, children, t, (id) => setActiveId(id), (id) => void cancelWaiting(id))}
             </div>
           )}
           <div ref={bottomRef} />
@@ -761,7 +923,9 @@ export function ClaudeChat() {
         <ChatComposer
           threadId={activeId}
           ensureThread={ensureThread}
-          busy={sending || !!liveTurn}
+          busy={sending}
+          running={!!runningTurn}
+          seedText={seedText}
           onSend={send}
           onStop={() => void stop()}
           models={MODELS}
@@ -937,6 +1101,7 @@ function renderTurns(
   children: ChildThread[],
   t: ReturnType<typeof useTranslations>,
   openThread: (id: string) => void,
+  onCancelWaiting: (id: string) => void,
 ): ReactNode[] {
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
@@ -944,7 +1109,7 @@ function renderTurns(
   while (i < turns.length) {
     const turn = turns[i];
     if (!turn.moved_to_thread_id) {
-      out.push(<TurnView key={turn.id} turn={turn} />);
+      out.push(<TurnView key={turn.id} turn={turn} onCancelWaiting={onCancelWaiting} />);
       i += 1;
       continue;
     }
@@ -972,7 +1137,7 @@ function renderTurns(
 }
 
 /** One exchange: what you said, then what came back. */
-function TurnView({ turn }: { turn: Turn }) {
+function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id: string) => void }) {
   const t = useTranslations("claudeChat");
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -991,10 +1156,22 @@ function TurnView({ turn }: { turn: Turn }) {
   }, [turn.events, turn.result_summary]);
 
   const live = turn.status === "queued" || turn.status === "running";
+  const waiting = turn.status === "waiting";
+  const turnTokens = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0);
+  // Two kinds of files on one turn: what the user SENT (chips on their message)
+  // and what the run PRODUCED — browser screenshots posted back mid-run, shown
+  // as inline images with the reply. `source` is absent on rows created before
+  // the column existed; those are all user uploads.
+  const userAttachments = turn.attachments.filter((a) => a.source !== "run");
+  const runAttachments = turn.attachments.filter((a) => a.source === "run");
+  const screenshots = runAttachments.filter((a) => a.signed_url);
+  // A run file whose signed URL failed to mint still gets named — invisible
+  // evidence is worse than an unclickable filename.
+  const unsignedRunFiles = runAttachments.filter((a) => !a.signed_url);
 
   return (
     <div className="flex flex-col gap-2">
-      {(turn.user_prompt || turn.attachments.length > 0) && (
+      {(turn.user_prompt || userAttachments.length > 0) && (
         <div className="group/msg flex items-start justify-end gap-1">
           {/* Copy sits OUTSIDE the bubble, on its leading edge, so it never
               overlaps the text and reads for the whole message. */}
@@ -1016,9 +1193,9 @@ function TurnView({ turn }: { turn: Turn }) {
                 {turn.user_prompt}
               </p>
             )}
-            {turn.attachments.length > 0 && (
+            {userAttachments.length > 0 && (
               <p className="mt-1 text-[11px] text-muted-foreground" dir="auto">
-                {turn.attachments.map((a) => a.filename).join(" · ")}
+                {userAttachments.map((a) => a.filename).join(" · ")}
               </p>
             )}
           </div>
@@ -1072,10 +1249,59 @@ function TurnView({ turn }: { turn: Turn }) {
             </div>
           )}
 
+          {unsignedRunFiles.length > 0 && (
+            <p className="text-[11px] text-muted-foreground" dir="auto">
+              {unsignedRunFiles.map((a) => a.filename).join(" · ")}
+            </p>
+          )}
+
+          {screenshots.length > 0 && (
+            // What the run SAW: browser screenshots it posted back. Thumbnails,
+            // not full-size — a click opens the real image (signed URL, ~1h).
+            <div className="flex flex-wrap gap-2">
+              {screenshots.map((s) => (
+                <a
+                  key={s.id}
+                  href={s.signed_url!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={s.filename}
+                  className="block overflow-hidden rounded-lg border border-border"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- signed
+                      Supabase URL with ~1h expiry; next/image optimization would
+                      cache/proxy a URL that dies, and these are ephemeral proofs,
+                      not site assets. */}
+                  <img
+                    src={s.signed_url!}
+                    alt={s.filename}
+                    loading="lazy"
+                    className="max-h-48 w-auto max-w-full"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+
           {live && (
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
               {t("thinking")}
+            </p>
+          )}
+
+          {/* Queued behind the live turn — it will run on its own; the one action
+              it offers is leaving the line. */}
+          {waiting && (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span>{t("queue.waiting")}</span>
+              <button
+                type="button"
+                onClick={() => onCancelWaiting(turn.id)}
+                className="rounded px-1 text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
+              >
+                {t("queue.remove")}
+              </button>
             </p>
           )}
 
@@ -1086,6 +1312,16 @@ function TurnView({ turn }: { turn: Turn }) {
           )}
           {turn.status === "canceled" && (
             <p className="text-xs text-muted-foreground">{t("stopped")}</p>
+          )}
+
+          {/* The turn's own consumption, stated quietly once it finished. */}
+          {!live && !waiting && turnTokens > 0 && (
+            <p dir="ltr" className="text-[10px] tabular-nums text-muted-foreground/70 text-start">
+              {fmtTokens(turnTokens)} {t("usage.tokens")}
+              {typeof turn.duration_ms === "number" && turn.duration_ms > 0
+                ? ` · ${Math.round(turn.duration_ms / 1000)}s`
+                : ""}
+            </p>
           )}
 
           {/* Said out loud rather than hidden: a turn past the first that resumed

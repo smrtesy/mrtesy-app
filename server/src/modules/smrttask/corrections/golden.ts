@@ -25,7 +25,7 @@
  */
 
 import { db } from "../../../db";
-import { runOneShot } from "../../claude/runner";
+import { runOneShot, AUTOMATION_ACCOUNT } from "../../claude/runner";
 
 /** One labelled row the rule is measured against. */
 interface Conflict {
@@ -135,7 +135,11 @@ export async function validateRuleAgainstGoldenSet(
       "רק הודעות שהכלל היה משנה את סיווגן לרעה נכנסות ל-conflicts. אם אין — החזר conflicts ריק.",
     ].join("\n");
 
-    const raw = await runOneShot(prompt, { timeoutMs: 120_000 });
+    const raw = await runOneShot(prompt, {
+      timeoutMs: 120_000,
+      // Automated classification check — route to the second subscription account.
+      account: AUTOMATION_ACCOUNT,
+    });
     if (!raw) return unknown(`נבדק מול ${sample.length} מקרים — הבדיקה לא הצליחה לרוץ`);
 
     const start = raw.indexOf("{");

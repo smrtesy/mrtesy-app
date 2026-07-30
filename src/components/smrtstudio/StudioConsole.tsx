@@ -22,6 +22,7 @@ import { useLocale } from "next-intl";
 import { api } from "@/lib/api/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 
 import type {
   StudioItem,
@@ -212,6 +213,7 @@ const CSS = `
 }
 
 .ss-top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.ss-in-pane .ss-top{padding-inline:16px}
 .ss-brand{display:flex;align-items:center;gap:13px}
 .ss-title{font-size:20px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .ss-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
@@ -813,6 +815,11 @@ export function StudioConsole() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
+  // This console forces dir="ltr", but the pane's floating grip follows the
+  // pane (app) direction — so in Hebrew it lands over the LTR title (start) and
+  // in English over the progress chip (end). Reserve on both inline sides of the
+  // top row when in a pane; no-op as a routed page.
+  const inPane = useOptionalPaneNav() != null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -873,7 +880,7 @@ export function StudioConsole() {
   const overallPct = computeStats(overview).overallPct;
 
   return (
-    <div className="ss-app" dir="ltr">
+    <div className={`ss-app${inPane ? " ss-in-pane" : ""}`} dir="ltr">
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       <div className="ss-inner">

@@ -27,6 +27,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
 import { fileLastCommitDate, blobUrl, getGitHubToken, isValidRepo } from "./github";
+import { BROWSER_HELPER_PATH } from "./app-access";
 
 const router = Router();
 
@@ -546,7 +547,11 @@ export async function composePrompt(
     // The autonomy protocol — the operational half of docs/claude-console/
     // autonomy-safety-gate.md, stated where the run will actually read it. The rule
     // in one line: reversible → do it yourself; irreversible → route through a human.
+    // The first bullet (from origin/main) is repo orientation; the rest is the gate.
     envLines.push(
+      "- **התמצאות מהירה בריפו:** לפני שאתה חוקר עץ קבצים, קרא בשורש הריפו את `CLAUDE.md` ואת " +
+        'מפת הקודבייס `docs/codebase-map.md` (אם קיימת) — "איפה X" כמעט תמיד נענה משם. ' +
+        "בריפו המחובר לצ'אט ה-CLAUDE.md כבר נטען אוטומטית — והמפה איתו, כשהיא קיימת.",
       "",
       "## מה מותר לך לעשות לבד (ומה לא)",
       "הכלל: **פעולה הפיכה — עשה לבד; פעולה בלתי-הפיכה — עצור לאישור אנושי.**",
@@ -585,6 +590,51 @@ export async function composePrompt(
   }
   envLines.push(
     "- תיקיית העבודה שלך נשמרת לאורך כל השיחה — לכן קובץ ששכפלת או ערכת בתור אחד קיים בתור הבא.",
+  );
+
+  // App API access — whether the run will actually carry a token is decided at
+  // spawn time (runner.ts mints one per turn, best-effort), so the instruction is
+  // phrased against the environment variables themselves: present means usable.
+  envLines.push(
+    "",
+    "## גישה לאפליקציה עצמה (שימוש רגיל, כמו משתמש)",
+    "",
+    "- אם מוגדרים בסביבה `SMRTESY_API_URL` + `SMRTESY_API_TOKEN` (בדוק עם `env | grep SMRTESY`), " +
+      "יש לך סשן אמיתי וקצר-מועד של המשתמש שפתח את הצ'אט. אתה יכול לקרוא ל-API של הפלטפורמה " +
+      "בדיוק כמו שהפרונטאנד קורא לו:",
+    "  `curl -sS \"$SMRTESY_API_URL/api/<route>\" -H \"Authorization: Bearer $SMRTESY_API_TOKEN\" -H \"X-Org-Id: $SMRTESY_ORG_ID\"`",
+    "- זה מיועד לבדיקה אמיתית של התנהגות: לקרוא נתונים, להריץ פעולה, ולראות מה באמת חוזר — " +
+      "במקום להסיק מהקוד בלבד. הטוקן מתחדש בכל תור, אז הוא תמיד בתוקף בזמן שאתה רץ.",
+    "- זהירות: הקריאות פועלות על נתוני אמת של המשתמש. פעולות קריאה — חופשי; פעולות שכותבות או " +
+      "מוחקות — רק אם המשתמש ביקש זאת במפורש בצ'אט.",
+    "",
+    "## דפדפן אמיתי על האפליקציה (לראות מסכים כמו המשתמש)",
+    "",
+    "- אם מוגדר `SMRTESY_APP_URL` בסביבה, יש לך דפדפן Chrome ללא-ראש שכבר **מחובר לאפליקציה " +
+      "כמשתמש שפתח את הצ'אט**. שלוש פקודות (זו פקודת המעטפת היחידה שמאושרת לך מראש — הרץ אותה " +
+      "**בדיוק בצורה הזו**, עם הנתיב המלא, כי האישור מותאם לטקסט הפקודה המילולי):",
+    `  - \`node ${BROWSER_HELPER_PATH} shot <נתיב-במערכת> --out shot.png --attach\` — פותח מסך ומצלם; ` +
+      "`--attach` שולח את הצילום לצ'אט כך שהמשתמש רואה אותו בתשובה שלך. נתיב יחסי (כמו `/he/tasks`) נפתח על האפליקציה.",
+    `  - \`node ${BROWSER_HELPER_PATH} text <נתיב> --selector <css>\` — מדפיס את הטקסט המרונדר של מסך או רכיב.`,
+    `  - \`node ${BROWSER_HELPER_PATH} run <script.mjs>\` — שליטה מלאה ב-Playwright: כתוב סקריפט עם ` +
+      "`export default async ({ page, goto, shot, log }) => { … }` והרץ אותו (אין לייבא playwright — הוא מגיע מוזרק). " +
+      "כתיבת הסקריפט דורשת הרשאת עריכה, שקיימת רק בצ'אט שמחובר לריפו.",
+    "- כל פקודה מדווחת בסופה גם את שגיאות הקונסול של הדפדפן ואת ה-URL הסופי — קרא אותם; הם חלק מהראיה.",
+    "- מתי להשתמש: לוודא שתיקון UI באמת נראה נכון, לראות מה המשתמש רואה כשהוא מדווח על בעיה, " +
+      "ולצרף צילום כהוכחה במקום לתאר במילים. אחרי תיקון קוד — עדיף לצלם את המסך הפרוס רק אם התיקון כבר נפרס; " +
+      "ציין ליד הצילום איזו גרסה הוא משקף.",
+    "- אותם כללי זהירות כמו ה-API: לנווט, לקרוא ולצלם — חופשי; ללחוץ על פעולות שכותבות או מוחקות " +
+      "נתונים — רק אם המשתמש ביקש זאת במפורש.",
+    "",
+    "## כשהמשתמש מסמן מקום באפליקציה",
+    "",
+    "- למשתמש יש 'מצב סימון': הוא לוחץ על רכיב במסך, וההודעה שתקבל תכיל את הנתיב (route), " +
+      "תיאור הרכיב (תגית, מחלקות CSS, טקסט) ושרשרת האבות שלו.",
+    "- כשמגיעה הודעה כזו: שכפל את ריפו האפליקציה (אם לא משוכפל), אתר את הקומפוננטה לפי " +
+      "הטקסט/המחלקות/הנתיב (חיפוש בקוד — המסכים תחת `src/app` והקומפוננטות תחת `src/components`), " +
+      "הבן מה קורה שם, ותקן או הסבר לפי מה שהמשתמש ביקש.",
+    "- הנתיב שבהודעת הסימון עובד ישירות בדפדפן: `shot <הנתיב> --attach` מראה לך (ולמשתמש) " +
+      "את המסך המדובר בפועל.",
   );
   parts.push(envLines.join("\n"));
 
