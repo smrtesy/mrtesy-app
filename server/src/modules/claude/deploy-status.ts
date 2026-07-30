@@ -23,7 +23,7 @@
  * exact secret to set — never a thrown error.
  */
 
-import { getAppSecret } from "../../db";
+import { db, getAppSecret } from "../../db";
 
 const TOKEN_APP_SLUG = "smrttask";
 const SECRET_LOCATION = "/admin/apps/smrttask/secrets";
@@ -34,7 +34,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 type ProviderState = "building" | "ready" | "error" | "unknown";
 
 export interface DeployStatus {
-  provider: "vercel" | "railway";
+  provider: "vercel" | "railway" | "supabase";
   configured: boolean;
   /** Normalized across providers so a caller (and the screen) reads one vocabulary. */
   state?: ProviderState;
@@ -286,7 +286,7 @@ export async function railwayLatestStatus(): Promise<DeployStatus> {
 
     const query = `query deployments($input: DeploymentListInput!, $first: Int) {
       deployments(input: $input, first: $first) {
-        edges { node { id status createdAt url staticUrl } }
+        edges { node { id status createdAt url staticUrl meta } }
       }
     }`;
     const { ok, status, data, errors } = await railwayGraphql(token, query, {
@@ -306,11 +306,20 @@ export async function railwayLatestStatus(): Promise<DeployStatus> {
       return { provider: "railway", configured: true, state: "unknown", error: "no deployment found" };
     }
     const rawStatus = String(node.status ?? "");
+    // Railway's deployment `meta` is a JSON blob from the git provider; the commit is
+    // under one of these depending on provider/age. First 7 chars = the version tag.
+    const meta = (node.meta ?? {}) as Record<string, unknown>;
+    const commitSha =
+      (typeof meta.commitHash === "string" && meta.commitHash) ||
+      (typeof meta.commitSHA === "string" && meta.commitSHA) ||
+      (typeof meta.commit === "string" && meta.commit) ||
+      null;
     return {
       provider: "railway",
       configured: true,
       state: railwayState(rawStatus),
       rawState: rawStatus,
+      commitSha,
       url:
         (typeof node.staticUrl === "string" && node.staticUrl) ||
         (typeof node.url === "string" && node.url) ||
@@ -322,8 +331,92 @@ export async function railwayLatestStatus(): Promise<DeployStatus> {
   }
 }
 
-/** Both surfaces at once — what the screen and the run's verify step read. */
-export async function deployStatus(sha?: string): Promise<{ vercel: DeployStatus; railway: DeployStatus }> {
-  const [vercel, railway] = await Promise.all([vercelProductionStatus(sha), railwayLatestStatus()]);
-  return { vercel, railway };
+// ── Supabase (database / project health) ────────────────────────────────────────
+
+/** Supabase project lifecycle status → our vocabulary. Unlike Vercel/Railway this is
+ *  NOT about a build — it's whether the database project itself is up and healthy. */
+function supabaseState(status: string): ProviderState {
+  switch (status) {
+    case "ACTIVE_HEALTHY":
+      return "ready";
+    case "COMING_UP":
+    case "RESTARTING":
+    case "UPGRADING":
+    case "RESTORING":
+    case "PAUSING":
+    case "INIT_READ_REPLICA":
+      return "building"; // transitional — amber
+    case "ACTIVE_UNHEALTHY":
+    case "INACTIVE":
+    case "PAUSED":
+    case "GOING_DOWN":
+    case "INIT_FAILED":
+    case "REMOVED":
+      return "error";
+    default:
+      return "unknown";
+  }
+}
+
+/** The project ref, taken from SUPABASE_URL (`https://<ref>.supabase.co`). */
+function supabaseRef(): string | null {
+  const url = process.env.SUPABASE_URL || "";
+  return /https?:\/\/([a-z0-9]+)\.supabase\./i.exec(url)?.[1] ?? null;
+}
+
+/**
+ * Database health for our own Supabase project — the third dot (DB).
+ *
+ * Two levels, best-to-cheapest:
+ *  1. If a Management API token (SUPABASE_ACCESS_TOKEN, `sbp_…`) is configured, ask the
+ *     Management API for the project's real lifecycle status — this catches PAUSED /
+ *     UPGRADING / UNHEALTHY even when the DB briefly can't be queried.
+ *  2. Otherwise fall back to a live reachability ping through the service-role client:
+ *     one trivial indexed read. Success → healthy; an error (project paused, network,
+ *     auth) → error. Needs no extra secret, so the DB dot is always meaningful.
+ */
+export async function supabaseStatus(): Promise<DeployStatus> {
+  const ref = supabaseRef();
+  const token = await secret("SUPABASE_ACCESS_TOKEN");
+
+  // Level 1 — Management API (real project lifecycle state).
+  if (token && ref) {
+    try {
+      const { ok, status, body } = await fetchJson(`https://api.supabase.com/v1/projects/${ref}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (ok) {
+        const raw = String((body as { status?: unknown })?.status ?? "");
+        return { provider: "supabase", configured: true, state: supabaseState(raw), rawState: raw };
+      }
+      // A 401/403 means the token is wrong — fall through to the ping rather than
+      // reporting the project down when it's really an auth problem with the token.
+    } catch {
+      // network/timeout — fall through to the ping.
+    }
+  }
+
+  // Level 2 — reachability ping (always available, no token).
+  try {
+    const { error } = await db.from("apps").select("id").limit(1);
+    if (error) {
+      return { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: error.message };
+    }
+    return { provider: "supabase", configured: true, state: "ready", rawState: "reachable" };
+  } catch (e) {
+    return { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** All three surfaces at once — frontend (Vercel), backend (Railway), database
+ *  (Supabase). What the sidebar's system-status strip and the run's verify step read. */
+export async function deployStatus(
+  sha?: string,
+): Promise<{ vercel: DeployStatus; railway: DeployStatus; supabase: DeployStatus }> {
+  const [vercel, railway, supabase] = await Promise.all([
+    vercelProductionStatus(sha),
+    railwayLatestStatus(),
+    supabaseStatus(),
+  ]);
+  return { vercel, railway, supabase };
 }

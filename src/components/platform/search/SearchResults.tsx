@@ -97,7 +97,7 @@ export default function SearchResults() {
     let cancelled = false;
     setLoading(true);
     setError(false);
-    api<SearchResponse>(`/search?q=${encodeURIComponent(q)}`)
+    api<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`)
       .then((res) => {
         if (!cancelled) setData(res);
       })
