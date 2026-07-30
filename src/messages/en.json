@@ -1155,6 +1155,9 @@
     "checkinTitle": "Daily report",
     "checkinSave": "Save report",
     "checkinSaved": "Report saved",
+    "checkinAutosaveHint": "Saved automatically · {answered}/{total}",
+    "checkinAllSaved": "All answers saved",
+    "checkinDone": "Done",
     "cancel": "Cancel",
     "noQuestions": "No questions defined yet. Add questions in the tool settings.",
     "segmentEnd": "End of day",
@@ -4488,6 +4491,17 @@
       "cancel": "Cancel",
       "apply": "Split {count} topics",
       "done": "Split into {count} chats"
+    },
+    "approvals": {
+      "banner": "{count} destructive migrations awaiting your approval",
+      "showDetails": "Show details",
+      "affected": "{count} rows will be affected",
+      "noPreview": "No row preview available",
+      "approve": "Approve & run",
+      "reject": "Reject",
+      "approved": "Approved — applying now",
+      "rejected": "Rejected — nothing ran",
+      "decideFailed": "Action failed"
     },
     "group": {
       "toggle": "Group by topic",

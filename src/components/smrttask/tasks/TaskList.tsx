@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslations } from "next-intl";
-import { useScreenSearchParams, useScreenRouter, useScreenPathname } from "@/lib/panes/nav";
+import { useScreenSearchParams, useScreenRouter, useScreenPathname, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
   DndContext,
   closestCorners,
@@ -159,6 +159,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
   const searchParams = useScreenSearchParams();
   const router = useScreenRouter();
   const pathname = useScreenPathname();
+  // Inside a workspace pane the floating grip sits in the top-inline-end corner;
+  // reserve room so the context-filter chips clear it (no-op as a routed page).
+  const inPane = useOptionalPaneNav() != null;
   const blocked = useWorkCalendar();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -933,7 +936,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     <>
     {/* Title + context filter — ABOVE the search row (which CombinedSearch
         renders right under this). */}
-    <div className="mb-3 flex items-center gap-3">
+    <div className={cn("mb-3 flex items-center gap-3", inPane && "pe-9")}>
       {title && <h1 className="text-2xl font-bold">{title}</h1>}
       {/* Quick jump to the source log. Inside a workspace pane this opens the
           log as its OWN tab rather than replacing the current pane. */}

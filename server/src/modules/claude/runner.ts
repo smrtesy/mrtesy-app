@@ -499,6 +499,23 @@ async function executeRunBody(runId: string): Promise<void> {
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
+  // Callback channel for the autonomy gate. The in-app Claude runs with full shell in
+  // its checkout (see the permission mode below), so for a DESTRUCTIVE migration it
+  // must NOT apply the SQL itself — it calls the machine-to-machine approval endpoint
+  // to open a human-approval card and stops. These are what let it make that call from
+  // inside the run: which org/thread/run it is, the shared internal secret, and the
+  // backend base URL. Only set when all the pieces exist, so a misconfigured backend
+  // degrades to "the gate isn't reachable" rather than a half-formed request.
+  const internalSecret = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET || "";
+  const backendUrl = process.env.SMRTESY_PUBLIC_URL || process.env.SMRTESY_BACKEND_URL || "";
+  if (internalSecret && backendUrl) {
+    env.SMRTESY_BACKEND_URL = backendUrl;
+    env.SMRTBOT_INTERNAL_SECRET = internalSecret;
+    env.CLAUDE_RUN_ID = run.id;
+    env.CLAUDE_ORG_ID = run.org_id;
+    if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
+  }
+
   // App access — a real short-lived session for the launching user, minted fresh
   // per turn, so the run can call the platform's own API the way the frontend does
   // (the env preamble in composePrompt tells it how). Best-effort: a mint failure
@@ -579,23 +596,27 @@ async function executeRunBody(runId: string): Promise<void> {
     // the CLI's current default instead of being pinned to a model that will age.
     if (run.model) a.push("--model", run.model);
     if (run.effort) a.push("--effort", run.effort);
-    // In a cloned workspace the run needs to be able to edit files, and print mode
-    // has no way to answer a permission prompt — an un-answerable prompt is a denial,
-    // so without this a repo run could only read. acceptEdits covers edits but NOT
-    // shell commands: pushing a branch requires the operator to opt into a stronger
-    // mode via CLAUDE_RUN_EXTRA_ARGS, which is deliberate. Skipped entirely when the
-    // operator already set a permission flag there, so their choice wins.
+    // In a cloned workspace the run needs full agency: edit files, run the build,
+    // git-merge to main, and run `supabase db push` for migrations — the whole
+    // developer loop. Print mode cannot answer a permission prompt (an un-answerable
+    // prompt is a denial), so anything short of bypassPermissions would silently block
+    // shell and leave a repo run able only to read/edit. The operator chose "full
+    // access, like a developer on the team" (autonomy-safety-gate.md), so repo runs
+    // default to bypassPermissions. The real red line — a DESTRUCTIVE migration — is
+    // NOT held here; it is held by the approval gate the run itself routes through
+    // (env vars above), which is why widening shell here is safe. Skipped entirely
+    // when the operator already set a permission flag in CLAUDE_RUN_EXTRA_ARGS, so
+    // their choice always wins.
     if (run.repo && !extra.some((x) => x.startsWith("--permission-mode") || x === "--dangerously-skip-permissions")) {
-      a.push("--permission-mode", "acceptEdits");
+      a.push("--permission-mode", "bypassPermissions");
     }
-    // The ONE shell command a run may execute without a prompt: the browser
-    // helper (headless Chromium logged in as the user). Scoped to the helper's
-    // literal absolute path — the permission matcher compares literal command
-    // text, so this pre-approves `node <helper> …` and nothing else; general
-    // shell stays gated behind CLAUDE_RUN_EXTRA_ARGS exactly as before. Both
-    // quoting spellings are listed because each produces different literal text.
-    // --allowedTools is additive with --permission-mode and with any operator
-    // flags in `extra` (verified against CLI docs, 2026-07-29).
+    // The browser helper (headless Chromium logged in as the user), pre-approved by
+    // its literal absolute path. Under bypassPermissions above this is REDUNDANT —
+    // full shell already covers `node <helper> …` — but it is kept as belt-and-braces
+    // so the helper still runs if a run ever narrows the permission mode via
+    // CLAUDE_RUN_EXTRA_ARGS. Both quoting spellings are listed because each produces
+    // different literal command text. --allowedTools is additive with
+    // --permission-mode and with any operator flags in `extra` (CLI docs, 2026-07-29).
     if (appAccess?.browser) {
       // Flag repeated per rule (not one flag with two values): repetition is
       // documented-additive, while variadic parsing of a second value is not.
@@ -613,25 +634,33 @@ async function executeRunBody(runId: string): Promise<void> {
   const nextSeq = () => ++seq;
   let buffer: PendingEvent[] = [];
 
+  // Scrub EVERY secret this run's child holds — not just the GitHub token. The child
+  // env also carries the shared internal secret (approval-gate callback), the
+  // subscription OAuth token, and the minted app-access session token, and a run with
+  // full shell can echo any of them (an accidental `env`, a curl -v, a stack trace).
+  // These rows are the permanent transcript, so all of them are replaced with ***
+  // before anything is stored. redact is a no-op for a null/empty value, so an
+  // unconfigured secret costs nothing here.
+  const redactSecrets = (s: string): string =>
+    redact(
+      redact(redact(redact(s, ghToken), internalSecret || null), token),
+      appAccess?.token ?? null,
+    );
+
   const flush = async () => {
     if (buffer.length === 0) return;
     let batch: unknown[] = buffer.map((e) => ({ ...e, run_id: runId }));
     buffer = [];
     // A run working in a cloned repo can print its tokenised remote URL (git does
-    // this on a failed push), and these rows are the permanent transcript — so the
-    // token is scrubbed from text AND payload before anything is stored. Done on
-    // the serialized batch because the token is alphanumeric and cannot survive
-    // JSON escaping in a different form. The app-access token gets the same
-    // treatment: a run that echoes its environment must not persist a live session.
-    if (ghToken || appAccess) {
-      try {
-        batch = JSON.parse(
-          redact(redact(JSON.stringify(batch), ghToken), appAccess?.token ?? null),
-        ) as unknown[];
-      } catch {
-        // Unserializable batch: fall through with the mapped rows rather than
-        // dropping the events entirely.
-      }
+    // this on a failed push), and these rows are the permanent transcript — so every
+    // secret is scrubbed from text AND payload before anything is stored. Done on the
+    // serialized batch because a token is alphanumeric and cannot survive JSON
+    // escaping in a different form.
+    try {
+      batch = JSON.parse(redactSecrets(JSON.stringify(batch))) as unknown[];
+    } catch {
+      // Unserializable batch: fall through with the mapped rows rather than
+      // dropping the events entirely.
     }
     const { error } = await db.from("claude_run_events").insert(batch);
     if (error) console.error("[claude/runner] event insert failed:", error.message);
@@ -827,21 +856,15 @@ async function executeRunBody(runId: string): Promise<void> {
     // Corrected here rather than trusting the value written before the spawn: if the
     // fallback fired, this turn resumed nothing, and the row must say so.
     resumed_session: effectiveResume,
-    result_summary: truncate(
-      lastResult === null ? null : redact(redact(lastResult, ghToken), appAccess?.token ?? null),
-    ),
+    result_summary: truncate(lastResult === null ? null : redactSecrets(lastResult)),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
     error: ok
       ? null
       : truncate(
-          redact(
-            redact(
-              `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
-              ghToken,
-            ),
-            appAccess?.token ?? null,
+          redactSecrets(
+            `${spawnError || stderrTail || lastResult || `exit code ${String(exitCode)}`}${hint}`,
           ),
           4000,
         ),

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { MessageSquare, ArrowRight, ArrowLeft, RefreshCw, CheckSquare, Search, X, Paperclip } from "lucide-react";
@@ -142,6 +143,11 @@ export function SmsReader({
 }) {
   const t = useTranslations("smsPage");
   const { locale } = useParams() as { locale: string };
+  // Inside a workspace pane the floating grip sits in the top-inline-end corner.
+  // Single-column (narrow) the list fills the width, so its header controls run
+  // under the grip — reserve room there, dropped at @2xl (two-column, list not on
+  // the end edge). No-op outside a pane.
+  const inPane = useOptionalPaneNav() != null;
 
   const [threads, setThreads] = useState<SmsThread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
@@ -295,14 +301,14 @@ export function SmsReader({
             }}
             placeholder={t("searchPlaceholder")}
             aria-label={t("searchPlaceholder")}
-            className="w-full rounded-md border bg-card py-1.5 ps-9 pe-8 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+            className={cn("w-full rounded-md border bg-card py-1.5 ps-9 text-sm outline-none focus:ring-2 focus:ring-primary/40", inPane ? "pe-16 @2xl:pe-8" : "pe-8")}
           />
           <button
             type="button"
             onClick={closeSearch}
             aria-label={t("searchClose")}
             title={t("searchClose")}
-            className="absolute top-1/2 -translate-y-1/2 end-4 rounded p-0.5 text-muted-foreground hover:bg-muted"
+            className={cn("absolute top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted", inPane ? "end-14 @2xl:end-4" : "end-4")}
           >
             <X className="h-4 w-4" />
           </button>
@@ -310,7 +316,7 @@ export function SmsReader({
       ) : (
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b bg-muted/30">
           <span className="text-sm font-semibold">{t("conversations")}</span>
-          <div className="flex items-center gap-0.5">
+          <div className={cn("flex items-center gap-0.5", inPane && "me-10 @2xl:me-0")}>
             <Button
               variant="ghost"
               size="icon"
