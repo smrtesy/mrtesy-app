@@ -45,6 +45,16 @@ ClaudeRunsClient). Server: `server/src/modules/claude/`.
   because the prompt is a single argv entry (Linux MAX_ARG_STRLEN).
 - **`runOneShot`** runs short prompts (titles, analyses) with no
   `claude_runs` row — a title is not a turn of the conversation.
+- **App access, two layers** (`app-access.ts`): every turn mints a short-lived
+  Supabase session for the launching user — injected (1) as `SMRTESY_API_TOKEN`
+  for direct API calls, and (2) as `@supabase/ssr` cookies for a REAL headless
+  Chromium (`browser-helper.ts`, shipped in dist; shot/text/run commands). The
+  ONLY pre-approved shell command is `node <helper path>` (repeated
+  `--allowedTools` rules scoped to the literal path in `runner.ts`). Run
+  screenshots post back via `POST /claude/runs/:id/attachments`
+  (`source='run'`, running-status gate) and render inline in ClaudeChat via
+  signed URLs. Session revoked (`scope:'local'`) when the run ends. Requires
+  `INSTALL_CHROMIUM=1` on Railway (same binary as the admin domain-tracker).
 
 ## Tables (13, all org-scoped)
 
