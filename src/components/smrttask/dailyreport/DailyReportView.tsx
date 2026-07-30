@@ -375,12 +375,12 @@ export function DailyReportView() {
         )}
       </div>
 
-      {/* The same check-in dialog the pinned row opens, here in edit mode: the
-          server pre-fills the day's saved answers and a partial save is allowed. */}
+      {/* The same auto-saving check-in dialog the pinned row opens, here in edit
+          mode: the server pre-fills the day's saved answers and each change is
+          saved on the spot. */}
       <DailyReportCheckin
         open={editDate != null}
         fillDate={editDate}
-        allowPartialSave
         onClose={() => setEditDate(null)}
         onSaved={onEditSaved}
       />
