@@ -43,7 +43,7 @@ route group `src/app/[locale]/(app)/(<slug>)/…`, components
 | smrtplan | `/plan` | Planning engine (plans, dependency matrix, experiments) |
 | smrtvault | `/vault` | Vault |
 | smrtinfo | `/info` | Info extraction center |
-| smrtstudio | `/studio` | Content studio |
+| smrtstudio | `/studio` (console), `/studio/projects` (+`/[id]` — voice/image/video tabs), `/studio/models`, `/studio/research` | Content studio — build plan: `docs/studio-build-plan.md` |
 
 **Platform (cross-app), route group `(platform)`:** `/inbox` (notifications),
 `/suggestions`, `/settings`, `/account`, `/admin`, `/search` (global content

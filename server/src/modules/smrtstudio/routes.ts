@@ -530,4 +530,221 @@ router.get("/studio/models/detail", async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Stage A (docs/studio-build-plan.md) — the unified project spine.
+ *
+ * The video tab is the explicit motion set — never "everything that isn't an
+ * image": stage is nullable and a null must not masquerade as a video.
+ */
+const VIDEO_STAGES = new Set(["video", "lipsync", "produce"]);
+
+/**
+ * Drain a PostgREST query past the server's silent 1000-row page cap.
+ * Produce batches can push an org's run count far past one page, and a capped
+ * read here would silently shrink tab counts — no error, just missing rows.
+ */
+async function pageAll<T>(
+  build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<{ rows: T[]; error: { message: string } | null }> {
+  const PAGE = 1000;
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await build(from, from + PAGE - 1);
+    if (error) return { rows, error };
+    rows.push(...(data ?? []));
+    if (!data || data.length < PAGE) return { rows, error: null };
+  }
+}
+
+/**
+ * GET /studio/projects — the org's projects with per-tab counts (voice
+ * projects, image runs, video runs), newest first. `?status=archived` lists
+ * the archive; default is active.
+ */
+router.get("/studio/projects", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const status = req.query.status === "archived" ? "archived" : "active";
+  const [projects, voice, runs] = await Promise.all([
+    db.from("studio_projects").select("*")
+      .eq("org_id", orgId).eq("status", status)
+      .order("created_at", { ascending: false }),
+    pageAll<Row>((from, to) =>
+      db.from("smrtvoice_projects").select("id, studio_project_id")
+        .eq("org_id", orgId).order("id").range(from, to)),
+    pageAll<Row>((from, to) =>
+      db.from("experiment_runs").select("id, studio_project_id, stage")
+        .eq("org_id", orgId).order("id").range(from, to)),
+  ]);
+  const err = projects.error || voice.error || runs.error;
+  if (err) return res.status(500).json({ error: err.message });
+
+  const voiceCount = new Map<string, number>();
+  for (const v of voice.rows) {
+    if (!v.studio_project_id) continue;
+    const key = v.studio_project_id as string;
+    voiceCount.set(key, (voiceCount.get(key) ?? 0) + 1);
+  }
+  const runCount = new Map<string, { image: number; video: number }>();
+  for (const r of runs.rows) {
+    if (!r.studio_project_id) continue;
+    const key = r.studio_project_id as string;
+    const c = runCount.get(key) ?? { image: 0, video: 0 };
+    if (r.stage === "image") c.image += 1;
+    else if (VIDEO_STAGES.has(r.stage as string)) c.video += 1;
+    runCount.set(key, c);
+  }
+  res.json({
+    projects: (projects.data ?? []).map((p: Row) => ({
+      ...p,
+      counts: {
+        voice: voiceCount.get(p.id as string) ?? 0,
+        image: runCount.get(p.id as string)?.image ?? 0,
+        video: runCount.get(p.id as string)?.video ?? 0,
+      },
+    })),
+  });
+});
+
+/** POST /studio/projects — create a project. Body: { name_he, name_en? }. */
+router.post("/studio/projects", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const nameHe = typeof req.body?.name_he === "string" ? req.body.name_he.trim() : "";
+  if (!nameHe) return res.status(400).json({ error: "name_he is required" });
+  const { data, error } = await db.from("studio_projects").insert({
+    org_id: orgId,
+    created_by: req.user!.id,
+    name_he: nameHe,
+    name_en: typeof req.body?.name_en === "string" ? req.body.name_en.trim() : "",
+  }).select("*").single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ project: data });
+});
+
+/**
+ * GET /studio/projects/:id — one project with its three tabs' content:
+ * linked voice projects, and the project's runs split image/video (the run
+ * cards reuse the fields the scoring grid already renders).
+ */
+router.get("/studio/projects/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const id = req.params.id;
+  const [project, voice, runs] = await Promise.all([
+    db.from("studio_projects").select("*")
+      .eq("org_id", orgId).eq("id", id).maybeSingle(),
+    db.from("smrtvoice_projects")
+      .select("id, name, status, total_lines, completed_lines, total_cost_usd, updated_at")
+      .eq("org_id", orgId).eq("studio_project_id", id)
+      .order("updated_at", { ascending: false }),
+    pageAll<Row>((from, to) =>
+      db.from("experiment_runs")
+        .select("id, code, model, method, stage, prompt, seed, cost_usd, output_url, qc_status, qc_score, qc_reason, meta, created_at")
+        .eq("org_id", orgId).eq("studio_project_id", id)
+        .order("created_at", { ascending: false }).range(from, to)),
+  ]);
+  const err = project.error || voice.error || runs.error;
+  if (err) return res.status(500).json({ error: err.message });
+  if (!project.data) return res.status(404).json({ error: "project not found" });
+  res.json({
+    project: project.data,
+    voice_projects: voice.data ?? [],
+    image_runs: runs.rows.filter((r: Row) => r.stage === "image"),
+    video_runs: runs.rows.filter((r: Row) => VIDEO_STAGES.has(r.stage as string)),
+  });
+});
+
+/**
+ * Stage B (docs/studio-build-plan.md) — the deterministic recommendation
+ * layer behind the creation form. No LLM call, no cost: candidates come from
+ * the indexed catalog (studio_models), the written method from MODEL_RECIPES
+ * (synced from video-lab), and the input fields from fal's live OpenAPI
+ * schema — "written method here, live contract there".
+ *
+ * GET /studio/recommendation?kind=image|video|lipsync|voice
+ * Returns ranked candidates and the recommended model expanded with its
+ * recipe and live schema. No winner-*.json exists yet in video-lab, so the
+ * ranking is shortlist_rank (nulls last) with recipe-holders preferred —
+ * `basis` says so explicitly instead of pretending a winner was locked.
+ */
+const RECOMMEND_KINDS = new Set(["image", "video", "lipsync", "voice"]);
+
+router.get("/studio/recommendation", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const kind = String(req.query.kind ?? "");
+  if (!RECOMMEND_KINDS.has(kind)) {
+    return res.status(400).json({ error: "kind must be one of image|video|lipsync|voice" });
+  }
+  const { data, error } = await db.from("studio_models")
+    .select("endpoint_id, title, category, vendor, price_usd, price_unit, price_note, shortlist_rank, verified_schema, recipe_path, flags")
+    .eq("org_id", orgId).eq("kind", kind).eq("deprecated", false)
+    .order("shortlist_rank", { ascending: true, nullsFirst: false })
+    .order("endpoint_id")
+    .limit(24);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const rows: Row[] = (data ?? []).map((m: Row) => ({
+    ...m,
+    has_recipe: Boolean(MODEL_RECIPES[m.endpoint_id as string]),
+  }));
+  // Recipe-holders first within equal footing: a model whose method we wrote
+  // down beats a bare catalog row at the same rank.
+  rows.sort((a: Row, b: Row) => {
+    const ra = (a.shortlist_rank as number | null) ?? Number.MAX_SAFE_INTEGER;
+    const rb = (b.shortlist_rank as number | null) ?? Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    return Number(b.has_recipe) - Number(a.has_recipe);
+  });
+  const candidates = rows.slice(0, 8);
+  const top = candidates.find((m: Row) => m.has_recipe) ?? candidates[0];
+  if (!top) {
+    return res.json({ kind, basis: "empty_catalog", candidates: [], recommended: null });
+  }
+
+  // fetchModelSchema never throws — a fal failure comes back as
+  // { available: false } (indexer.ts:742). Surface that explicitly so the
+  // form degrades to prompt-only loudly, not behind a null error.
+  const schema = await fetchModelSchema(top.endpoint_id as string);
+  const schemaError =
+    (schema as { available?: boolean }).available === false
+      ? "fal schema unavailable for this endpoint"
+      : null;
+  res.json({
+    kind,
+    // A CODE, not prose — the client maps it to an i18n string. Values:
+    // "shortlist_rank" (no locked winner yet) | future: "locked_winner".
+    basis: "shortlist_rank",
+    candidates,
+    recommended: {
+      endpoint_id: top.endpoint_id,
+      recipe: MODEL_RECIPES[top.endpoint_id as string] ?? null,
+      schema,
+      schema_error: schemaError,
+    },
+  });
+});
+
+/** PATCH /studio/projects/:id — rename / describe / archive. */
+router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const patch: Row = {};
+  for (const key of ["name_he", "name_en", "description_he", "description_en"]) {
+    if (typeof req.body?.[key] === "string") patch[key] = req.body[key].trim();
+  }
+  // A project must keep a Hebrew name — an all-whitespace rename is dropped,
+  // not written as "".
+  if (patch.name_he === "") delete patch.name_he;
+  if (req.body?.status === "active" || req.body?.status === "archived") {
+    patch.status = req.body.status;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "nothing to update" });
+  }
+  patch.updated_at = new Date().toISOString();
+  const { data, error } = await db.from("studio_projects").update(patch)
+    .eq("org_id", orgId).eq("id", req.params.id)
+    .select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "project not found" });
+  res.json({ project: data });
+});
+
 export default router;
