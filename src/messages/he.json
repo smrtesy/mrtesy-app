@@ -4620,6 +4620,20 @@
     "billingMonth": "הוצאות fal החודש",
     "billingTotal": "סה\"כ fal מאז ומעולם",
     "billingTopUp": "טעינת קרדיט (fal → Billing)",
-    "projectCost": "עלות בפועל: {fal} וידאו/תמונה (fal) · {voice} קול"
+    "projectCost": "עלות בפועל: {fal} וידאו/תמונה (fal) · {voice} קול",
+    "qcNotChecked": "טרם נבדק",
+    "qcPass": "עבר QC",
+    "qcRejected": "נפסל ב-QC",
+    "qcManual": "ידני",
+    "qcRunVlm": "בדיקת שופט-VLM",
+    "qcVlmConfirm": "הבדיקה מחויבת לפי טוקנים ולא ניתנת לאומדן מדויק מראש (וידאו יקר מתמונה). העלות בפועל תירשם על ההרצה ותיכלל בחשבון. לאשר?",
+    "qcVlmRunning": "בודק…",
+    "qcVlmGo": "אשר ובדוק",
+    "qcOverridePass": "אשר ידנית",
+    "runFailed": "נכשל",
+    "runInProgress": "בהרצה…",
+    "qcBorderline": "גבולי",
+    "qcVlmFailed": "בדיקה קודמת נכשלה",
+    "qcCostSuffix": "‏+ {usd} בדיקות QC"
   }
 }
