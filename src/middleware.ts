@@ -1,6 +1,13 @@
 import createMiddleware from "next-intl/middleware";
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { withTimeout } from "@/lib/withTimeout";
+
+// Cap each in-middleware DB lookup so a slow Supabase can never hang the
+// middleware to a 504. On timeout we fail open (proceed) — except the admin
+// grant, which fails closed (deny). See the incident doc
+// docs/supabase-io-incident-2026-07-30.md.
+const MW_QUERY_TIMEOUT_MS = 1200;
 
 const intlMiddleware = createMiddleware({
   locales: ["he", "en"],
@@ -78,25 +85,36 @@ export async function middleware(request: NextRequest) {
   const { orgSlug, isPlatform } = extractSubdomain(host);
 
   // Update Supabase session (mutates request.cookies in place)
-  const { user, supabase, response } = await updateSession(request);
+  const { user, supabase, response, authTimedOut } = await updateSession(request);
 
   // Unknown org subdomain → redirect to main app
   if (orgSlug) {
-    const { data: org } = await supabase
-      .from("organizations")
-      .select("id")
-      .eq("slug", orgSlug)
-      .maybeSingle();
+    // Fail OPEN: only redirect when we *definitively* learned the org doesn't
+    // exist. If the lookup times out we can't tell, so we proceed rather than
+    // bounce a valid tenant to the main app on a DB blip.
+    let org: { id: string } | null = null;
+    let orgLookupFailed = false;
+    try {
+      const { data } = await withTimeout(
+        supabase.from("organizations").select("id").eq("slug", orgSlug).maybeSingle(),
+        MW_QUERY_TIMEOUT_MS,
+      );
+      org = data;
+    } catch {
+      orgLookupFailed = true;
+    }
 
-    if (!org) {
+    if (!org && !orgLookupFailed) {
       const target = appDomain ? `https://app.${appDomain}` : new URL("/", request.url).toString();
       return NextResponse.redirect(target);
     }
 
-    // Org found — write the org ID into request cookies so the layout and
-    // server components can read it via `cookies()` from next/headers.
-    request.cookies.set("smrt_org_id", org.id);
-    request.cookies.set("smrt_org_slug", orgSlug);
+    if (org) {
+      // Org found — write the org ID into request cookies so the layout and
+      // server components can read it via `cookies()` from next/headers.
+      request.cookies.set("smrt_org_id", org.id);
+      request.cookies.set("smrt_org_slug", orgSlug);
+    }
   } else {
     // Not an org subdomain — clear any stale org cookie from request
     request.cookies.delete("smrt_org_id");
@@ -170,11 +188,22 @@ export async function middleware(request: NextRequest) {
       if (resp) return resp;
     } else {
       // Slow path: DB lookup on first visit or after cookie expiry.
-      const { data: settings } = await supabase
-        .from("user_settings")
-        .select("preferred_language")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      // Fail open: a timeout here just skips the language redirect this hop
+      // (the page still renders in the url's locale) rather than hanging.
+      let settings: { preferred_language?: string | null } | null = null;
+      try {
+        const { data } = await withTimeout(
+          supabase
+            .from("user_settings")
+            .select("preferred_language")
+            .eq("user_id", user.id)
+            .maybeSingle(),
+          MW_QUERY_TIMEOUT_MS,
+        );
+        settings = data;
+      } catch {
+        settings = null;
+      }
       const pref = settings?.preferred_language;
       if (pref === "he" || pref === "en") {
         const resp = toPreferred(pref, true);
@@ -202,12 +231,16 @@ export async function middleware(request: NextRequest) {
     const emailMatches = ADMIN_EMAILS.includes(user.email?.toLowerCase() || "");
     let hasAccess = emailMatches;
     if (!hasAccess) {
-      const { data: row } = await supabase
-        .from("super_admins")
-        .select("user_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      hasAccess = !!row;
+      // Fail CLOSED: if we can't verify super-admin (timeout/error), deny.
+      try {
+        const { data: row } = await withTimeout(
+          supabase.from("super_admins").select("user_id").eq("user_id", user.id).maybeSingle(),
+          MW_QUERY_TIMEOUT_MS,
+        );
+        hasAccess = !!row;
+      } catch {
+        hasAccess = false;
+      }
     }
     if (!hasAccess) {
       return NextResponse.redirect(new URL(`/${locale}`, request.url));
@@ -215,8 +248,20 @@ export async function middleware(request: NextRequest) {
   }
 
   // Protected route check
+  // Fail OPEN: when auth is *undetermined* (Supabase getUser timed out) we do
+  // NOT redirect to login — that would bounce a real logged-in user on a DB
+  // blip. We let the request through; the page/layout re-checks auth and the
+  // backend still requires a valid JWT for any data, so nothing leaks.
+  //
+  // This is safe because `(app)/layout.tsx` is an independent second auth gate
+  // (getClaims → redirect to login when absent). That gate stays UP during a DB
+  // outage only because the project uses ASYMMETRIC JWT signing keys (ES256,
+  // verified via the JWKS endpoint), so getClaims verifies the token locally
+  // without an auth-server round-trip. If the project ever reverts to a
+  // symmetric JWT secret, getClaims would hit the network again and this
+  // resilience would regress — wrap that call in withTimeout if so.
   const isPublicRoute = pathname.includes("/login") || pathname.includes("/onboarding") || pathname.includes("/invite/") || pathname.includes("/privacy") || pathname.includes("/terms");
-  if (!isPublicRoute && !isAdminRoute && user === null) {
+  if (!isPublicRoute && !isAdminRoute && user === null && !authTimedOut) {
     const localePrefix = pathnameLocale === "en" ? "/en" : "/he";
     if (
       pathname !== `${localePrefix}/login` &&
