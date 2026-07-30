@@ -535,6 +535,11 @@ export async function composePrompt(
       "- אם נבחר ריפו לצ'אט הזה (בהגדרות), הוא כבר משוכפל לתיקיית העבודה שלך. אם לא — שכפל בעצמך " +
         "את הריפו הרלוונטי, או הצע למשתמש לבחור אותו בהגדרות הצ'אט.",
     );
+    envLines.push(
+      "- **התמצאות מהירה בריפו:** לפני שאתה חוקר עץ קבצים, קרא בשורש הריפו את `CLAUDE.md` ואת " +
+        'מפת הקודבייס `docs/codebase-map.md` (אם קיימת) — "איפה X" כמעט תמיד נענה משם. ' +
+        "בריפו שנבחר מראש לצ'אט ה-CLAUDE.md כבר נטען אוטומטית — והמפה איתו, כשהיא קיימת.",
+    );
   } else {
     // No token: say so plainly and point at where to set it, instead of promising
     // access. This is the honest state, and it tells the user how to enable it.

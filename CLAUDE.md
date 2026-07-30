@@ -3,6 +3,40 @@
 Operating instructions for Claude working in this repo. Read this at the start
 of every session before touching code.
 
+## Codebase map — loaded into every session; keep it fresh
+
+@docs/codebase-map.md
+
+The line above imports `docs/codebase-map.md` — the platform-wide "where is
+what" index (the three engines, the apps, server/frontend layout, core
+tables) — into **every** session on every surface, including the in-app
+Claude console (repo threads clone this repo, so the import rides along).
+Answer "where is X" from the map instead of re-exploring the tree, and open
+the deep-dive doc it points to when you need more.
+
+**Freshness is enforced, not remembered** (same lesson as the Stop-hook
+session summaries): any structural change — an app, server module,
+components dir, screen/route-group dir, or edge function added, removed, or
+moved — updates `docs/codebase-map.md` (content **and** its `Verified:`
+date) **in the same commit**, like the two-i18n-files rule. Enforcement is
+the PreToolUse hook `.claude/hooks/map-guard.sh`: it blocks any `git push`
+whose commits change the directory tree at the exact levels the map
+enumerates without touching the map in the same range (deterministic
+`ls-tree` diff vs `origin/main`, zero AI, fail-open on any infra error;
+emergency bypass `MAP_GUARD_SKIP=1 git push …` — then fix the map in the
+next commit). The hook cannot see *semantic* drift — a new core table, a
+screen whose meaning changed, a responsibility that moved — those are
+covered by the same-commit rule and the pre-push protocol check (Step 2).
+
+Area detail deliberately lives OUT of the always-loaded map, in path-scoped
+rules that load only when a session touches matching files:
+`.claude/rules/claude-console.md`, `panes.md`, `smrttask-server.md`,
+`edge-functions.md`. When an area grows its own conventions, add/extend a
+rule file there — don't grow the map past its ~200-line budget.
+`PROJECT_GUIDE.md` is superseded by the map (it froze on 2026-05-06 and had
+drifted into misinformation; the stub that remains says where everything
+moved).
+
 ## Response language — always Hebrew
 
 Always respond to the user in **Hebrew**, in every reply, regardless of the
@@ -463,6 +497,7 @@ one go — every one was preventable with a 30-second grep).
 | API defaults I'm relying on without knowing them | Read the docs page or local wrapper for any Google/Supabase/SDK call whose filter behavior I just changed | Gmail `q` searching all labels by default would have caught the missing `in:inbox` |
 | Semantic mismatch between UI strings and backend filter direction | Read the i18n key the user-visible label resolves to, then trace the trigger value all the way through `parseSkipRules` (or the equivalent runtime check) | The skip-rule `to=` vs `from=` bug |
 | Insert/update without `{ error }` destructuring | `grep -n "await supabase.from.*\\.\\(insert\\|update\\|upsert\\)(" -A0` in changed files | Silent CHECK violations, silent RLS denials |
+| Structural drift vs the codebase map | Did the branch add/move/remove an app, server module, components dir, screen/route-group dir, or edge function? If yes — `docs/codebase-map.md` must change in the same range | The map loads into every session; a stale map misleads them all. `map-guard.sh` auto-blocks the tree-visible cases at push time; semantic drift (a new core table, a moved responsibility) only this check catches |
 
 ### Step 3 — Sub-agent code review
 
@@ -601,35 +636,18 @@ All product names follow the pattern **`smrt` + English word**:
 ## Project conventions worth remembering
 
 - **Tabs-workspace panes (router-based)**: sidebar screens render as
-  component panes via `src/lib/panes/registry.tsx`; unregistered routes
-  fall back to an iframe pane automatically (this fallback is permanent —
-  detail routes, /projects, /settings and /admin use it by design). When
-  you add or change a screen that can render in a pane:
-  - Register it in the registry with a wrapper that mirrors the route
-    page's markup 1:1.
-  - Use `useScreenSearchParams` / `useScreenPathname` / `useScreenRouter`
-    and `PaneLink` from `@/lib/panes/nav` instead of next/navigation and
-    next/link — they are byte-identical outside a pane.
-  - Never write `document.body` / `documentElement` attributes without a
-    `useOptionalPaneNav()` guard (in a pane they leak onto the top window).
-  - No `100dvh`/viewport heights inside pane-capable screens — use
-    `h-full` (chat-style screens get `fullHeight: true` in the registry).
-  - Links that should open a SIBLING tab (not swap the pane) go through
-    `OpenTabLink`. See docs/router-panes-plan.md for the full picture.
+  component panes via `src/lib/panes/registry.tsx`. The hard rules for any
+  screen work (registry wrapper, `useScreen*`/`PaneLink` nav,
+  `useOptionalPaneNav()` guard, no viewport heights, `OpenTabLink` for
+  sibling tabs) live in `.claude/rules/panes.md` — loaded automatically when
+  touching `src/app/**`, `src/components/**`, or `src/lib/panes/**`. Full
+  picture: docs/router-panes-plan.md.
 
-- **Edge function imports — NEVER use `https://esm.sh/...`**. The
-  `Deploy to Supabase` GitHub Action (`.github/workflows/*.yml`) bundles
-  every function on each push to `main` by hitting esm.sh, which
-  intermittently returns HTTP 522 (Cloudflare Tunnel down) and breaks the
-  whole deploy with `Error: failed to create the graph` /
-  `Import 'https://esm.sh/...' failed: 522`. Use the Deno-native
-  specifiers Supabase Edge Runtime supports directly instead:
-  - Supabase client → `import { createClient } from "npm:@supabase/supabase-js@2";`
-  - Type-only edge runtime decl → `import "jsr:@supabase/functions-js/edge-runtime.d.ts";`
-  - Anthropic SDK / Google APIs → `npm:@anthropic-ai/sdk`, `npm:googleapis`, etc.
-  This bug has now bitten us twice; if you ever see `Error: failed to create
-  the graph ... Import 'https://esm.sh/... failed: 522`, the fix is a
-  one-line `sed` across `supabase/functions/*/index.ts`.
+- **Edge function imports — NEVER use `https://esm.sh/...`** — use the
+  Deno-native specifiers (`npm:…` / `jsr:…`) instead. The why (esm.sh 522s
+  break the whole deploy Action) and the exact substitutions live in
+  `.claude/rules/edge-functions.md` — loaded automatically when touching
+  `supabase/functions/**`.
 - **i18n**: every user-visible string goes through `useTranslations()` /
   `getTranslations()` and resolves to a key in `src/messages/{he,en}.json`.
   Never write `locale === "he" ? "..." : "..."` ternaries. If a key is
