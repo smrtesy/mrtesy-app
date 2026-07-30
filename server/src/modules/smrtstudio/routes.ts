@@ -18,6 +18,9 @@ import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middlew
 import { fetchModelSchema } from "./indexer";
 import { runSweep, sweepToCompletion, SweepError } from "./sweep";
 import { MODEL_RECIPES } from "./recipes";
+import {
+  estimateRunCost, falKey, newRunCode, newWebhookToken, queueSubmit, webhookUrlFor,
+} from "./runner";
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
@@ -720,6 +723,104 @@ router.get("/studio/recommendation", async (req: Request, res: Response) => {
       schema_error: schemaError,
     },
   });
+});
+
+/**
+ * Stage C (docs/studio-build-plan.md) — running from the screen, behind the
+ * minimal cost gate (rule 2 embodied): the client first asks for an estimate,
+ * shows it, and the submit is refused without `cost_approved: true`.
+ *
+ * POST /studio/runs/estimate  { endpoint_id, args } → { usd, basis }
+ * POST /studio/runs           { studio_project_id, endpoint_id, prompt, args,
+ *                               cost_approved } → { run }
+ */
+router.post("/studio/runs/estimate", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const endpointId = String(req.body?.endpoint_id ?? "");
+  const { data: model, error } = await db.from("studio_models")
+    .select("endpoint_id, price_usd, price_unit, kind")
+    .eq("org_id", orgId).eq("endpoint_id", endpointId).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!model) return res.status(404).json({ error: "endpoint not in the org catalog" });
+  const est = estimateRunCost(model, (req.body?.args as Record<string, unknown>) ?? {});
+  res.json({ endpoint_id: endpointId, ...est, fal_key_configured: Boolean(falKey()) });
+});
+
+router.post("/studio/runs", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!falKey()) {
+    return res.status(503).json({ error: "FAL_KEY is not configured on the backend" });
+  }
+  const projectId = String(req.body?.studio_project_id ?? "");
+  const endpointId = String(req.body?.endpoint_id ?? "");
+  const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+  const args = ((req.body?.args as Record<string, unknown>) ?? {});
+
+  const [project, model] = await Promise.all([
+    db.from("studio_projects").select("id").eq("org_id", orgId).eq("id", projectId).maybeSingle(),
+    db.from("studio_models").select("endpoint_id, kind, price_usd, price_unit")
+      .eq("org_id", orgId).eq("endpoint_id", endpointId).maybeSingle(),
+  ]);
+  if (project.error || model.error) {
+    return res.status(500).json({ error: (project.error || model.error)!.message });
+  }
+  if (!project.data) return res.status(404).json({ error: "project not found" });
+  if (!model.data) return res.status(404).json({ error: "endpoint not in the org catalog" });
+
+  // The cost gate. An unestimable price (tokens/megapixels) still requires the
+  // ack — the client shows "cannot be estimated up front" and the user
+  // approves running on real billing.
+  const est = estimateRunCost(model.data, args);
+  // The approval is FOR A NUMBER, not a blank cheque: the client echoes back
+  // the estimate it displayed (approved_usd), and any drift — args edited
+  // after the 402, price changed — re-gates with a fresh estimate instead of
+  // spending an amount the user never saw.
+  const approvedUsd = req.body?.approved_usd as number | null | undefined;
+  const approvalMatches =
+    approvedUsd !== undefined &&
+    ((est.usd == null && approvedUsd == null) ||
+      (est.usd != null && typeof approvedUsd === "number" &&
+        Math.abs(est.usd - approvedUsd) < 0.0005));
+  if (req.body?.cost_approved !== true || !approvalMatches) {
+    return res.status(402).json({ error: "cost approval required", estimate: est });
+  }
+
+  const code = newRunCode();
+  const token = newWebhookToken();
+  const input: Record<string, unknown> = { ...args };
+  if (prompt) input.prompt = prompt;
+
+  const { data: run, error: insErr } = await db.from("experiment_runs").insert({
+    org_id: orgId,
+    studio_project_id: projectId,
+    stage: model.data.kind === "image" ? "image" : model.data.kind === "voice" ? "voice" : "video",
+    test_label: "studio-ui",
+    code,
+    model: endpointId,
+    endpoint_id: endpointId,
+    method: "studio creation form",
+    prompt: prompt || null,
+    seed: typeof args.seed === "number" ? args.seed : null,
+    input_args: input,
+    run_status: "pending",
+    cost_usd: est.usd,
+    meta: { kind: model.data.kind, webhook_token: token, cost_basis: est.basis, params: input },
+  }).select("*").single();
+  if (insErr) return res.status(500).json({ error: insErr.message });
+
+  try {
+    const { request_id } = await queueSubmit(endpointId, input, webhookUrlFor(run.id, token));
+    const { error: upErr } = await db.from("experiment_runs")
+      .update({ fal_request_id: request_id, run_status: "submitted" })
+      .eq("id", run.id);
+    if (upErr) console.error(`[studio] run ${code} request-id update:`, upErr.message);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await db.from("experiment_runs")
+      .update({ run_status: "failed", error: msg }).eq("id", run.id);
+    return res.status(502).json({ error: `fal submit failed: ${msg}` });
+  }
+  res.status(201).json({ run: { id: run.id, code, run_status: "submitted", estimate: est } });
 });
 
 /** PATCH /studio/projects/:id — rename / describe / archive. */
