@@ -4573,6 +4573,16 @@
     "voiceEmpty": "No linked voice project.",
     "imageEmpty": "No image outputs in this project yet.",
     "videoEmpty": "No video outputs in this project yet.",
-    "costPending": "cost pending"
+    "costPending": "cost pending",
+    "createTitle": "Create output",
+    "createModel": "Model",
+    "createBasis": "Recommendation basis",
+    "createRecipeHint": "Recommended prompt structure (from the recipe)",
+    "createPrompt": "Prompt",
+    "createMoreSettings": "More settings",
+    "createNoCandidates": "No catalog candidates for this kind — run a catalog sync.",
+    "createSchemaUnavailable": "Field schema currently unavailable from fal — prompt-only mode.",
+    "createRunDisabled": "Run",
+    "createRunDisabledWhy": "Running opens in stage C — once the cost-approval gate is built."
   }
 }

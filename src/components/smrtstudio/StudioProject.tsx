@@ -9,11 +9,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { Plus } from "lucide-react";
 
 import { api } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
 
 type Project = {
   id: string;
@@ -51,6 +54,30 @@ type Detail = {
   image_runs: Run[];
   video_runs: Run[];
 };
+
+/** Quiet entry point (house compact-UI rule): a small + button; the full
+ *  creation form expands only on click and collapses back to nothing. */
+function CreateToggle({ kind }: { kind: "image" | "video" }) {
+  const t = useTranslations("studioProjects");
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-3">
+      {open ? (
+        <StudioCreateForm kind={kind} onClose={() => setOpen(false)} />
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1"
+          onClick={() => setOpen(true)}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          {t("createTitle")}
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function RunGrid({ runs, empty }: { runs: Run[]; empty: string }) {
   const t = useTranslations("studioProjects");
@@ -158,10 +185,12 @@ export function StudioProject({ projectId }: { projectId: string }) {
         </TabsContent>
 
         <TabsContent value="image">
+          <CreateToggle kind="image" />
           <RunGrid runs={image_runs} empty={t("imageEmpty")} />
         </TabsContent>
 
         <TabsContent value="video">
+          <CreateToggle kind="video" />
           <RunGrid runs={video_runs} empty={t("videoEmpty")} />
         </TabsContent>
       </Tabs>
