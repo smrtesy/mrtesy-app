@@ -43,6 +43,7 @@ import { StandingInstructions } from "./StandingInstructions";
 import { SplitReview, type ProposedTopic } from "./SplitReview";
 import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
+import { ApprovalsPanel } from "./ApprovalsPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { Scissors, FolderTree, ExternalLink, ListTree } from "lucide-react";
 
@@ -676,6 +677,12 @@ export function ClaudeChat() {
             </Button>
           </div>
         )}
+
+        {/* Pending destructive-migration approvals — the human side of the autonomy
+            gate. Renders nothing when the queue is empty, so it adds no permanent
+            chrome; it is org-wide (not per-thread), which is why it sits here rather
+            than inside a thread's conversation. */}
+        <ApprovalsPanel />
 
         {/* The one collapsed panel that holds everything else. Model and effort used
             to live here; they moved down to the composer toolbar (like Claude Code),
