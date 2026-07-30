@@ -21,6 +21,10 @@ import { MODEL_RECIPES } from "./recipes";
 import {
   estimateRunCost, falKey, newRunCode, newWebhookToken, queueSubmit, webhookUrlFor,
 } from "./runner";
+import {
+  pollVlmJudge, submitVlmJudge, vlmJudgeEnabled, vlmJudgeModel,
+  type VlmJudgeHandle,
+} from "./qc";
 
 const router = Router();
 router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
@@ -640,7 +644,7 @@ router.get("/studio/projects/:id", async (req: Request, res: Response) => {
       .order("updated_at", { ascending: false }),
     pageAll<Row>((from, to) =>
       db.from("experiment_runs")
-        .select("id, code, model, method, stage, prompt, seed, cost_usd, output_url, qc_status, qc_score, qc_reason, meta, created_at")
+        .select("id, code, model, method, stage, prompt, seed, cost_usd, output_url, run_status, error, qc_status, qc_score, qc_reason, qc_scores, qc_cost_usd, overridden, meta, created_at")
         .eq("org_id", orgId).eq("studio_project_id", id)
         .order("created_at", { ascending: false }).range(from, to)),
   ]);
@@ -652,6 +656,9 @@ router.get("/studio/projects/:id", async (req: Request, res: Response) => {
     voice_projects: voice.data ?? [],
     image_runs: runs.rows.filter((r: Row) => r.stage === "image"),
     video_runs: runs.rows.filter((r: Row) => VIDEO_STAGES.has(r.stage as string)),
+    // Stage E: the VLM judge is opt-in on the backend (explicit flag) — the
+    // client hides the button entirely when it cannot possibly run.
+    vlm_qc_enabled: vlmJudgeEnabled() && Boolean(falKey()),
   });
 });
 
@@ -824,6 +831,246 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
 });
 
 /**
+ * Stage E (docs/studio-build-plan.md) — the VLM judge, behind the explicit
+ * STUDIO_VLM_JUDGE flag, and the human override that always trumps it.
+ *
+ * POST /studio/runs/:id/qc-vlm { cost_approved } — judge one finished
+ * artifact with a broken-down rubric. Token-priced, so the 402 estimate is an
+ * honest null; the REAL billed cost from the response is recorded in
+ * qc_cost_usd either way — including when the judge's answer fails to parse,
+ * because the tokens were spent either way.
+ *
+ * Money-safety shape (review findings 1+2, 2026-07-30):
+ *   1. CLAIM a slot in qc_scores.vlm_pending with a guarded update — two
+ *      concurrent clicks cannot both submit (the loser gets 409);
+ *   2. submit, then IMMEDIATELY persist the fal request id into the claim —
+ *      from that point the spend is reconcilable no matter what dies;
+ *   3. poll; on deadline leave the pending record and tell the user to click
+ *      again — the retry RESUMES the same request, it never pays twice;
+ *   4. settle from a FRESH read of qc_cost_usd/qc_scores, clearing the claim.
+ */
+type VlmPendingRecord = Partial<VlmJudgeHandle> & { at?: string };
+
+router.post("/studio/runs/:id/qc-vlm", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!vlmJudgeEnabled()) {
+    return res.status(503).json({ error: "STUDIO_VLM_JUDGE is not enabled on the backend" });
+  }
+  if (!falKey()) {
+    return res.status(503).json({ error: "FAL_KEY is not configured on the backend" });
+  }
+  const { data: run, error } = await db.from("experiment_runs")
+    .select("id, code, stage, prompt, output_url, run_status, qc_status, qc_scores, input_args")
+    .eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!run) return res.status(404).json({ error: "run not found" });
+
+  const kind = run.stage === "image" ? "image"
+    : VIDEO_STAGES.has(run.stage as string) ? "video" : null;
+  if (!kind) return res.status(409).json({ error: "only image/video artifacts can be judged" });
+  // Judgeable = there is an output to look at, and the run is not still in
+  // flight / failed. Legacy harness rows (run_status NULL) qualify — their
+  // fal-hosted URL may have expired, in which case the judge fails loudly.
+  const rs = (run.run_status as string | null) ?? null;
+  if (!run.output_url || rs === "pending" || rs === "submitted" || rs === "failed") {
+    return res.status(409).json({ error: "run has no finished output to judge" });
+  }
+  // The tier-0 principle scaled to the studio: never pay to judge a known
+  // non-starter. A human override (back to pass) re-opens judging.
+  if (run.qc_status === "rejected") {
+    return res.status(409).json({ error: "run is already rejected — override it first if you disagree" });
+  }
+  if (req.body?.cost_approved !== true) {
+    return res.status(402).json({
+      error: "cost approval required",
+      estimate: { usd: null, basis: "per_token" },
+      judge_model: vlmJudgeModel(),
+    });
+  }
+
+  const scores = ((run.qc_scores as Row | null) ?? {}) as Row;
+  const pendingRaw = scores.vlm_pending as VlmPendingRecord | undefined;
+  const pendingAgeMs = pendingRaw?.at ? Date.now() - Date.parse(pendingRaw.at) : Infinity;
+  // A claim that never got its request id and is old is a crash leftover —
+  // ignore it. One WITH a request id stays valid forever (the money is out).
+  const pending: VlmPendingRecord | null =
+    pendingRaw && (pendingRaw.request_id || pendingAgeMs < 10 * 60_000) ? pendingRaw : null;
+
+  let handle: VlmJudgeHandle;
+  if (pending?.request_id && pending.endpoint_id && pending.model && pending.criteria) {
+    // Resume the already-paid request — no new submit, no new charge.
+    handle = pending as VlmJudgeHandle;
+  } else if (pending) {
+    return res.status(409).json({ error: "a judge request is already being submitted for this run" });
+  } else {
+    // Claim the slot BEFORE submitting, guarded on the slot being free, so a
+    // double-click cannot submit (and pay) twice. `select` makes the win
+    // visible: zero rows back = lost the race.
+    const claimAt = new Date().toISOString();
+    const claimScores = { ...scores, vlm_pending: { at: claimAt } };
+    let claimQuery = db.from("experiment_runs").update({ qc_scores: claimScores })
+      .eq("id", run.id);
+    claimQuery = pendingRaw
+      ? claimQuery.eq("qc_scores->vlm_pending->>at", pendingRaw.at ?? "")
+      : claimQuery.is("qc_scores->vlm_pending", null);
+    const { data: claimed, error: claimErr } = await claimQuery.select("id");
+    if (claimErr) return res.status(500).json({ error: claimErr.message });
+    if (!claimed?.length) {
+      return res.status(409).json({ error: "a judge request is already running for this run" });
+    }
+
+    // Reference for the identity criterion: the run's own input image (i2v /
+    // edit), when it was given by URL. Absent → identity is left out of the
+    // rubric rather than scored against nothing.
+    const args = (run.input_args as Row | null) ?? {};
+    const referenceUrl =
+      typeof args.image_url === "string" ? args.image_url
+      : Array.isArray(args.image_urls) && typeof args.image_urls[0] === "string"
+        ? args.image_urls[0] : null;
+
+    try {
+      handle = await submitVlmJudge({
+        kind,
+        outputUrl: run.output_url as string,
+        prompt: (run.prompt as string | null) ?? null,
+        referenceUrl,
+      });
+    } catch (e) {
+      // Submit failed → nothing was billed. Release the claim by REMOVING
+      // the key — writing `vlm_pending: null` would leave a JSON null, which
+      // the `is null` claim guard (SQL NULL) never matches, locking the run
+      // out of judging forever.
+      const released = { ...scores } as Row;
+      delete released.vlm_pending;
+      const { error: relErr } = await db.from("experiment_runs")
+        .update({ qc_scores: released }).eq("id", run.id);
+      if (relErr) console.error(`[studio-qc] ${run.code} claim release:`, relErr.message);
+      return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+    // Money is now committed on fal's side — persist the request id FIRST,
+    // so a crash/timeout from here on leaves a reconcilable record.
+    const { error: pendErr } = await db.from("experiment_runs")
+      .update({ qc_scores: { ...scores, vlm_pending: { ...handle, at: claimAt } } })
+      .eq("id", run.id);
+    if (pendErr) console.error(`[studio-qc] ${run.code} pending record:`, pendErr.message);
+  }
+
+  const verdict = await pollVlmJudge(handle);
+  if (verdict.ok === "in_progress") {
+    // The request is still running (and already paid). The pending record
+    // stays; the next click resumes it for free.
+    return res.status(504).json({
+      error: "the judge is still running — try again in a minute; the same request will be picked up without paying again",
+    });
+  }
+
+  // Settle from a FRESH read — the claim serializes judges, but overrides
+  // and webhooks may have touched the row while we polled.
+  const { data: fresh, error: freshErr } = await db.from("experiment_runs")
+    .select("qc_scores, qc_cost_usd").eq("id", run.id).maybeSingle();
+  if (freshErr || !fresh) {
+    console.error(`[studio-qc] ${run.code} fresh read failed:`, freshErr?.message);
+    return res.status(500).json({ error: "settle read failed — the check is recorded in vlm_pending" });
+  }
+  const freshScores = { ...((fresh.qc_scores as Row | null) ?? {}) } as Row;
+  delete freshScores.vlm_pending;
+  const spentBefore = fresh.qc_cost_usd == null ? 0 : Number(fresh.qc_cost_usd);
+  const qcCost = Math.round((spentBefore + (verdict.cost ?? 0)) * 1e6) / 1e6;
+  const at = new Date().toISOString();
+
+  if (!verdict.ok) {
+    const qcScores = {
+      ...freshScores,
+      vlm_error: {
+        model: verdict.model,
+        error: verdict.error,
+        request_id: handle.request_id,
+        cost_usd: verdict.cost,
+        // usage.cost is required by the schema, so null here means the money
+        // went out but the amount is unknown — flagged, never silently zero.
+        cost_unknown: verdict.cost == null,
+        at,
+      },
+    };
+    const { error: upErr } = await db.from("experiment_runs")
+      .update({ qc_scores: qcScores, qc_cost_usd: qcCost })
+      .eq("id", run.id);
+    if (upErr) console.error(`[studio-qc] ${run.code} failure record:`, upErr.message);
+    return res.status(502).json({ error: `judge answer unusable: ${verdict.error}`, cost_usd: verdict.cost });
+  }
+
+  const qcScores = {
+    ...freshScores,
+    vlm: {
+      model: verdict.model,
+      verdict: verdict.verdict,
+      criteria: verdict.criteria,
+      summary: verdict.summary,
+      request_id: handle.request_id,
+      cost_usd: verdict.cost,
+      cost_unknown: verdict.cost == null,
+      at,
+    },
+  };
+  const { error: upErr } = await db.from("experiment_runs").update({
+    qc_status: verdict.verdict === "fail" ? "rejected" : "pass",
+    qc_score: verdict.overall,
+    qc_reason: verdict.summary || null,
+    qc_scores: qcScores,
+    qc_cost_usd: qcCost,
+  }).eq("id", run.id);
+  if (upErr) return res.status(500).json({ error: upErr.message });
+
+  res.json({
+    qc_status: verdict.verdict === "fail" ? "rejected" : "pass",
+    qc_score: verdict.overall,
+    verdict: verdict.verdict,
+    criteria: verdict.criteria,
+    summary: verdict.summary,
+    cost_usd: verdict.cost,
+    judge_model: verdict.model,
+  });
+});
+
+/**
+ * PATCH /studio/runs/:id/qc { status: pass|rejected, reason? } — the human
+ * override. Always available (rule 13: the QC is a filter, never the arbiter
+ * — it mis-judges stylized characters and Hebrew). The machine's verdict and
+ * reasons stay in qc_scores untouched; `overridden` marks who decided.
+ */
+router.patch("/studio/runs/:id/qc", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const status = req.body?.status;
+  if (status !== "pass" && status !== "rejected") {
+    return res.status(400).json({ error: "status must be pass|rejected" });
+  }
+  const { data: run, error } = await db.from("experiment_runs")
+    .select("id, qc_scores")
+    .eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!run) return res.status(404).json({ error: "run not found" });
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : null;
+  const qcScores = {
+    ...((run.qc_scores as Row | null) ?? {}),
+    human_override: {
+      status,
+      reason,
+      by: req.user!.id,
+      at: new Date().toISOString(),
+    },
+  };
+  // qc_reason follows the HUMAN decision — leaving the machine's rejection
+  // text on an overridden-to-pass card reads as a contradiction. The machine
+  // verdict survives verbatim in qc_scores.vlm.
+  const { error: upErr } = await db.from("experiment_runs")
+    .update({ qc_status: status, overridden: true, qc_scores: qcScores, qc_reason: reason })
+    .eq("id", run.id);
+  if (upErr) return res.status(500).json({ error: upErr.message });
+  res.json({ qc_status: status, overridden: true });
+});
+
+/**
  * Stage D (docs/studio-build-plan.md) — the real-money surface.
  *
  * GET /studio/billing — fal credit balance (live, via FAL_ADMIN_KEY) + spend
@@ -873,7 +1120,7 @@ router.get("/studio/billing",
     }).format(monthStart);
     if (hourInNy !== "00") monthStart = new Date(Date.UTC(nyYear, nyMonth - 1, 1, 5));
     const runs = await pageAll<Row>((from, to) =>
-      db.from("experiment_runs").select("studio_project_id, cost_usd, created_at")
+      db.from("experiment_runs").select("studio_project_id, cost_usd, qc_cost_usd, created_at")
         .eq("org_id", orgId).order("id").range(from, to));
     if (runs.error) return res.status(500).json({ error: runs.error.message });
 
@@ -881,8 +1128,12 @@ router.get("/studio/billing",
     let monthUsd = 0;
     const perProject = new Map<string, number>();
     for (const r of runs.rows) {
-      const c = r.cost_usd == null ? 0 : Number(r.cost_usd);
-      if (!Number.isFinite(c)) continue;
+      // QC judge checks (stage E) are billed by fal exactly like the run
+      // itself — a spend report that hides them under-reports real money.
+      const gen = r.cost_usd == null ? 0 : Number(r.cost_usd);
+      const qc = r.qc_cost_usd == null ? 0 : Number(r.qc_cost_usd);
+      const c = (Number.isFinite(gen) ? gen : 0) + (Number.isFinite(qc) ? qc : 0);
+      if (!c) continue;
       totalUsd += c;
       if (typeof r.created_at === "string" && r.created_at >= monthStart.toISOString()) monthUsd += c;
       if (r.studio_project_id) {
