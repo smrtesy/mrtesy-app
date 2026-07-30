@@ -15,7 +15,7 @@
  */
 
 import { db } from "../../../db";
-import { embedText } from "../../../services/voyage";
+import { embedText, embedTexts } from "../../../services/voyage";
 import { DESTINATIONS } from "./destinations";
 
 const DEFAULT_CAP = 500;
@@ -75,6 +75,81 @@ async function upsertDoc(input: SearchDocInput, userIdForUsage?: string): Promis
   //  or the incremental queue would grow unbounded while the feature is off.)
   if (voyageConfigured && text && !embedding) return "embed_failed";
   return "upserted";
+}
+
+// ── Row → SearchDocInput builders (shared by single-row + batch indexers) ─────
+// One place per source type maps a fetched DB row to its search document, so the
+// single-row and batched paths can never drift.
+
+interface TaskRow {
+  id: string;
+  user_id: string | null;
+  title: string | null;
+  title_he: string | null;
+  description: string | null;
+  serial_display: string | null;
+}
+interface MsgRow {
+  id: string;
+  user_id: string | null;
+  subject: string | null;
+  body_text: string | null;
+  source_url: string | null;
+  sender: string | null;
+  sender_email: string | null;
+  sender_phone: string | null;
+}
+interface ThreadRow {
+  id: string;
+  org_id: string | null;
+  title: string | null;
+}
+
+function taskInput(t: TaskRow): SearchDocInput {
+  return {
+    org_id: null,
+    user_id: t.user_id,
+    source_type: "task",
+    source_id: t.id,
+    title: t.title_he?.trim() || t.title?.trim() || "משימה",
+    snippet: t.description ? t.description.slice(0, 300) : null,
+    url: `/tasks?focus=${t.id}`,
+    keywords: [t.title, t.title_he, t.serial_display].filter(Boolean).join(" ") || null,
+    language: null,
+  };
+}
+function msgInput(m: MsgRow): SearchDocInput {
+  return {
+    org_id: null,
+    user_id: m.user_id,
+    source_type: "info",
+    source_id: m.id,
+    title: m.subject?.trim() || m.sender?.trim() || "הודעה",
+    snippet: m.body_text ? m.body_text.slice(0, 300) : null,
+    url: m.source_url || "/info",
+    keywords:
+      [m.sender, m.sender_email, m.sender_phone, m.subject].filter(Boolean).join(" ") || null,
+    language: null,
+  };
+}
+function threadInput(th: ThreadRow): SearchDocInput {
+  const title = th.title?.trim() || "שיחת קלוד";
+  return {
+    org_id: th.org_id,
+    user_id: null,
+    source_type: "claude_thread",
+    source_id: th.id,
+    title,
+    snippet: null,
+    url: `/claude?thread=${th.id}`,
+    keywords: title,
+    language: null,
+  };
+}
+
+/** The text a document is embedded on. */
+function docText(i: SearchDocInput): string {
+  return [i.title, i.snippet ?? "", i.keywords ?? ""].join(" ").trim();
 }
 
 /** Index the curated navigation destinations (global rows). */
@@ -219,114 +294,120 @@ export async function indexClaudeThreadsForOrg(orgId: string, cap = DEFAULT_CAP)
   return n;
 }
 
-// ── Single-row indexers (used by the incremental drain worker) ───────────────
-// Each fetches ONE source row by id and upserts it. Returns "upserted" (indexed),
-// "missing" (row gone — nothing to index; the worker still clears the queue),
-// or "error". The row→SearchDocInput mapping mirrors the batch functions above;
-// keep the two in step if a field changes.
+// ── Batch indexer (used by the incremental drain worker) ─────────────────────
+// Indexes a batch of queued items in ONE Voyage request (embedTexts), so a bulk
+// pass costs ~1 request per batch instead of one per item — minutes vs days when
+// Voyage is rate-limited. Per item it returns:
+//   "upserted"     — indexed with (or legitimately without) an embedding
+//   "embed_failed" — Voyage configured but returned null for this one → retry
+//   "missing"      — source row gone → clear from the queue
+//   "error"        — the fetch/upsert failed → retry
 
 export type IndexOneResult = "upserted" | "embed_failed" | "missing" | "error";
 
-export async function indexOneTask(id: string): Promise<IndexOneResult> {
-  const { data, error } = await db
-    .from("tasks")
-    .select("id, user_id, title, title_he, description, serial_display")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) {
-    console.error("[search/indexer] indexOneTask load failed:", error.message);
-    return "error";
-  }
-  if (!data) return "missing";
-  const t = data as {
-    id: string;
-    user_id: string | null;
-    title: string | null;
-    title_he: string | null;
-    description: string | null;
-    serial_display: string | null;
-  };
-  const ok = await upsertDoc(
-    {
-      org_id: null,
-      user_id: t.user_id,
-      source_type: "task",
-      source_id: t.id,
-      title: (t.title_he || t.title || "משימה").trim(),
-      snippet: t.description ? t.description.slice(0, 300) : null,
-      url: `/tasks?focus=${t.id}`,
-      keywords: [t.title, t.title_he, t.serial_display].filter(Boolean).join(" ") || null,
-      language: null,
-    },
-    t.user_id ?? undefined,
-  );
-  return ok;
+interface BatchItem {
+  source_type: string;
+  source_id: string;
 }
 
-export async function indexOneInfo(id: string): Promise<IndexOneResult> {
-  const { data, error } = await db
-    .from("source_messages")
-    .select("id, user_id, subject, body_text, source_url, sender, sender_email, sender_phone")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) {
-    console.error("[search/indexer] indexOneInfo load failed:", error.message);
-    return "error";
-  }
-  if (!data) return "missing";
-  const m = data as {
-    id: string;
-    user_id: string | null;
-    subject: string | null;
-    body_text: string | null;
-    source_url: string | null;
-    sender: string | null;
-    sender_email: string | null;
-    sender_phone: string | null;
-  };
-  const ok = await upsertDoc(
-    {
-      org_id: null,
-      user_id: m.user_id,
-      source_type: "info",
-      source_id: m.id,
-      title: (m.subject || m.sender || "הודעה").trim(),
-      snippet: m.body_text ? m.body_text.slice(0, 300) : null,
-      url: m.source_url || "/info",
-      keywords:
-        [m.sender, m.sender_email, m.sender_phone, m.subject].filter(Boolean).join(" ") || null,
-      language: null,
-    },
-    m.user_id ?? undefined,
-  );
-  return ok;
+const SOURCE_TABLE: Record<string, string> = {
+  task: "tasks",
+  info: "source_messages",
+  claude_thread: "claude_threads",
+};
+const SOURCE_SELECT: Record<string, string> = {
+  task: "id, user_id, title, title_he, description, serial_display",
+  info: "id, user_id, subject, body_text, source_url, sender, sender_email, sender_phone",
+  claude_thread: "id, org_id, title",
+};
+
+function inputForRow(sourceType: string, row: Record<string, unknown>): SearchDocInput | null {
+  if (sourceType === "task") return taskInput(row as unknown as TaskRow);
+  if (sourceType === "info") return msgInput(row as unknown as MsgRow);
+  if (sourceType === "claude_thread") return threadInput(row as unknown as ThreadRow);
+  return null;
 }
 
-export async function indexOneClaudeThread(id: string): Promise<IndexOneResult> {
-  const { data, error } = await db
-    .from("claude_threads")
-    .select("id, org_id, title")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) {
-    console.error("[search/indexer] indexOneClaudeThread load failed:", error.message);
-    return "error";
+/** Index a batch of (source_type, source_id) items. Returns a per-item result
+ *  keyed by `${source_type}:${source_id}`. */
+export async function indexBatch(items: BatchItem[]): Promise<Map<string, IndexOneResult>> {
+  const out = new Map<string, IndexOneResult>();
+  const key = (t: string, i: string) => `${t}:${i}`;
+  if (items.length === 0) return out;
+
+  // Group ids by source type.
+  const idsByType: Record<string, string[]> = {};
+  for (const it of items) (idsByType[it.source_type] ??= []).push(it.source_id);
+
+  // Fetch rows per type, build the inputs to embed.
+  const inputs: SearchDocInput[] = [];
+  const inputKeys: string[] = [];
+  for (const [type, ids] of Object.entries(idsByType)) {
+    const table = SOURCE_TABLE[type];
+    if (!table) {
+      for (const id of ids) out.set(key(type, id), "missing"); // unknown type → drop
+      continue;
+    }
+    const { data, error } = await db.from(table).select(SOURCE_SELECT[type]).in("id", ids);
+    if (error) {
+      console.error("[search/indexer] batch load failed:", type, error.message);
+      for (const id of ids) out.set(key(type, id), "error"); // retry next drain
+      continue;
+    }
+    const found = new Map<string, Record<string, unknown>>();
+    for (const r of (data ?? []) as unknown as Record<string, unknown>[]) found.set(String(r.id), r);
+    for (const id of ids) {
+      const row = found.get(id);
+      if (!row) {
+        out.set(key(type, id), "missing");
+        continue;
+      }
+      const input = inputForRow(type, row);
+      if (!input) {
+        out.set(key(type, id), "missing");
+        continue;
+      }
+      inputs.push(input);
+      inputKeys.push(key(type, id));
+    }
   }
-  if (!data) return "missing";
-  const th = data as { id: string; org_id: string | null; title: string | null };
-  const title = (th.title || "שיחת קלוד").trim();
-  const ok = await upsertDoc({
-    org_id: th.org_id,
-    user_id: null,
-    source_type: "claude_thread",
-    source_id: th.id,
-    title,
-    snippet: null,
-    url: `/claude?thread=${th.id}`,
-    keywords: title,
-    language: null,
-  });
-  return ok;
+  if (inputs.length === 0) return out;
+
+  // ONE Voyage request for the whole batch.
+  const voyageConfigured = !!process.env.VOYAGE_API_KEY;
+  const embeddings = await embedTexts(inputs.map(docText), "document");
+
+  // ONE upsert for the whole batch.
+  const now = new Date().toISOString();
+  const rows = inputs.map((inp, k) => ({
+    ...inp,
+    embedding: embeddings[k] ? JSON.stringify(embeddings[k]) : null,
+    updated_at: now,
+  }));
+  const classify = (k: number): IndexOneResult => {
+    const embedded = !!embeddings[k];
+    const hasText = docText(inputs[k]).length > 0;
+    return voyageConfigured && hasText && !embedded ? "embed_failed" : "upserted";
+  };
+
+  const { error: upErr } = await db
+    .from("search_documents")
+    .upsert(rows, { onConflict: "source_type,source_id" });
+  if (!upErr) {
+    inputs.forEach((_, k) => out.set(inputKeys[k], classify(k)));
+    return out;
+  }
+
+  // Batch upsert failed — fall back to per-row so ONE bad row can't block the
+  // whole chunk (and, drained oldest-first, the entire backlog behind it).
+  console.error("[search/indexer] batch upsert failed, retrying per-row:", upErr.message);
+  for (let k = 0; k < rows.length; k++) {
+    const { error: rowErr } = await db
+      .from("search_documents")
+      .upsert(rows[k], { onConflict: "source_type,source_id" });
+    out.set(inputKeys[k], rowErr ? "error" : classify(k));
+  }
+  return out;
 }
 
 export interface ReindexResult {
