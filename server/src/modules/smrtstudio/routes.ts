@@ -1467,17 +1467,9 @@ router.post("/studio/projects/:id/voice-projects", async (req: Request, res: Res
   if (pErr) return res.status(500).json({ error: pErr.message });
   if (!project) return res.status(404).json({ error: "project not found" });
 
-  // The voice screens the tab links into are still guarded by the smrtvoice
-  // entitlement (until stage G flips it to smrtstudio) — creating a project
-  // an org cannot open would be a dead link, so check first.
-  const { data: voiceApp } = await db.from("apps").select("id").eq("slug", "smrtvoice").maybeSingle();
-  const { data: voiceEntitled, error: entErr } = await db.from("app_memberships")
-    .select("org_id").eq("org_id", orgId).eq("app_id", voiceApp?.id ?? "").maybeSingle();
-  if (entErr) return res.status(500).json({ error: entErr.message });
-  if (!voiceEntitled) {
-    return res.status(409).json({ error: "smrtvoice is not enabled for this org yet" });
-  }
-
+  // Stage G: the voice screens are guarded by the same smrtstudio entitlement
+  // as this route (the absorption flipped the voice router's requireApp), so
+  // reaching here already proves the org can open what gets created.
   const { data, error } = await db.from("smrtvoice_projects").insert({
     org_id: orgId,
     created_by: req.user!.id,

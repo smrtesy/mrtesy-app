@@ -2,7 +2,9 @@
  * smrtVoice — Express routes (v2: folders → scripts → per-script casting).
  *
  * Every route below requires the standard chain:
- *   requireAuth → requireOrg → requireApp("smrtvoice")
+ *   requireAuth → requireOrg → requireAnyApp("smrtstudio", "smrtvoice")
+ * (stage G of docs/studio-build-plan.md: smrtVoice was absorbed into
+ * smrtStudio, so the studio entitlement now covers the voice engine).
  *
  * The unauthenticated webhook endpoint lives in webhook-handler.ts and
  * is mounted separately at app level (before the auth guards).
@@ -15,7 +17,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireApp, requireRole } from "../../middleware";
+import { requireAuth, requireOrg, requireAnyApp, requireRole } from "../../middleware";
 import { emitEvent, notify, notifyError } from "../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../anthropic";
 import { getOAuthClient } from "../../services/token-refresh";
@@ -236,8 +238,13 @@ function parseFolderId(raw: string): string | null {
 
 const router = Router();
 
-// Every smrtVoice route requires auth + active org + smrtvoice enabled for that org.
-router.use(requireAuth, requireOrg, requireApp("smrtvoice"));
+// Every voice route requires auth + active org + the studio entitlement —
+// the voice engine is part of smrtStudio since the stage-G absorption
+// (migration 20260730190000 moves the app_memberships rows). The old
+// smrtvoice slug is accepted TRANSITIONALLY so the code deploy and the
+// membership migration don't have to land in the same instant; drop it to
+// requireApp("smrtstudio") once the migration has run everywhere.
+router.use(requireAuth, requireOrg, requireAnyApp("smrtstudio", "smrtvoice"));
 
 // ============================================================
 // CHARACTERS

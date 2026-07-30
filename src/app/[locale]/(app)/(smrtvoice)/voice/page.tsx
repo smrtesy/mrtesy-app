@@ -1,41 +1,17 @@
-export const dynamic = "force-dynamic";
+import { redirect } from "next/navigation";
 
-import Link from "next/link";
-import { getTranslations } from "next-intl/server";
-import { Plus } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
-import { VoiceNav } from "@/components/smrtvoice/VoiceNav";
-import { ProjectsList } from "@/components/smrtvoice/ProjectsList";
-import { BudgetIndicator } from "@/components/smrtvoice/BudgetIndicator";
-
-export default async function VoiceDashboardPage({
+/**
+ * Stage G (docs/studio-build-plan.md): smrtVoice was absorbed into smrtStudio.
+ * The voice front door is now the studio's project list — voice work starts
+ * from a project's voice tab. The deep screens (/voice/projects/:id,
+ * /voice/scripts/:id, /voice/characters, /voice/library …) keep their URLs and
+ * keep working; only the app's home moved.
+ */
+export default async function VoiceHomeRedirect({
   params,
 }: {
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  const t = await getTranslations("smrtVoice.folders");
-
-  return (
-    <div className="p-6 space-y-6">
-      <VoiceNav />
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">{t("title")}</h1>
-          <p className="text-muted-foreground">{t("subtitle")}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <BudgetIndicator />
-          <Link href={`/${locale}/voice/projects/new`}>
-            <Button>
-              <Plus className="w-4 h-4 me-2" />
-              {t("new")}
-            </Button>
-          </Link>
-        </div>
-      </div>
-      <ProjectsList />
-    </div>
-  );
+  redirect(`/${locale}/studio/projects`);
 }

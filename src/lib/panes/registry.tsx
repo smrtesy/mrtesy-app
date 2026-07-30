@@ -18,11 +18,9 @@
 import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, Plus } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
-import { PaneLink } from "@/lib/panes/nav";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
@@ -45,8 +43,6 @@ import { TeamViewClient } from "@/components/smrtplan/TeamViewClient";
 import { PlanRepositoryClient } from "@/components/smrtplan/PlanRepositoryClient";
 import { ExperimentScoringPane } from "@/components/smrtplan/ExperimentScoringPane";
 import { VoiceNav } from "@/components/smrtvoice/VoiceNav";
-import { ProjectsList } from "@/components/smrtvoice/ProjectsList";
-import { BudgetIndicator } from "@/components/smrtvoice/BudgetIndicator";
 import { CharactersList } from "@/components/smrtvoice/CharactersList";
 import { BotsClient } from "@/components/smrtbot/BotsClient";
 import { CampaignsClient } from "@/components/smrtreach/CampaignsClient";
@@ -186,31 +182,6 @@ function SmsPane() {
   return <SmsPageClient title={t("title")} />;
 }
 
-function VoicePane({ locale }: { locale: string }) {
-  const t = useTranslations("smrtVoice.folders");
-  return (
-    <div className="p-6 space-y-6">
-      <VoiceNav />
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">{t("title")}</h1>
-          <p className="text-muted-foreground">{t("subtitle")}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <BudgetIndicator />
-          <PaneLink href={`/${locale}/voice/projects/new`}>
-            <Button>
-              <Plus className="w-4 h-4 me-2" />
-              {t("new")}
-            </Button>
-          </PaneLink>
-        </div>
-      </div>
-      <ProjectsList />
-    </div>
-  );
-}
-
 function VoiceCharactersPane() {
   const t = useTranslations("smrtVoice");
   return (
@@ -284,7 +255,6 @@ const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/studio/projects", render: () => <StudioProjects /> },
   { match: (p) => p === "/studio/models", render: () => <StudioModels /> },
   { match: (p) => p === "/studio/research", render: () => <StudioResearchScreen /> },
-  { match: (p) => p === "/voice", render: (locale) => <VoicePane locale={locale} /> },
   { match: (p) => p === "/voice/characters", render: () => <VoiceCharactersPane /> },
   { match: (p) => p === "/bots", render: () => <BotsPane /> },
   { match: (p) => p === "/reach", render: () => <ReachPane /> },

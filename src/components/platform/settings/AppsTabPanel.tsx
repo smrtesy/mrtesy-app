@@ -30,8 +30,11 @@ export function AppsTabPanel({ enabledApps, appSlug }: Props) {
   // transiently-undefined enabledApps (e.g. mid-load right after a deploy) so
   // the whole settings page never crashes on `.includes`.
   const orderedEnabled = Object.keys(APPS).filter((slug) => (enabledApps ?? []).includes(slug));
-  const initialSlug = appSlug && orderedEnabled.includes(appSlug)
-    ? appSlug
+  // Old /settings/apps/smrtvoice deep links keep working: the voice settings
+  // moved under the studio tab in the stage-G absorption.
+  const requestedSlug = appSlug === "smrtvoice" ? "smrtstudio" : appSlug;
+  const initialSlug = requestedSlug && orderedEnabled.includes(requestedSlug)
+    ? requestedSlug
     : orderedEnabled[0];
   const [selectedSlug, setSelectedSlug] = useState<string | undefined>(initialSlug);
 
@@ -89,10 +92,14 @@ function AppSettings({ slug, locale, pathname }: {
   locale: string;
   pathname: string;
 }) {
+  const tTabs = useTranslations("settingsTabs");
   if (slug === "smrttask") {
     return <SmrtTaskSettings locale={locale} pathname={pathname} />;
   }
-  if (slug === "smrtvoice") {
+  // Stage G (studio-build-plan): smrtVoice was absorbed into smrtStudio, so
+  // the voice-engine settings, the pronunciation lexicon and the voice guide
+  // now live under the studio's settings tab.
+  if (slug === "smrtstudio") {
     return (
       <div className="space-y-4">
         <Card>
@@ -105,6 +112,12 @@ function AppSettings({ slug, locale, pathname }: {
             <SmrtVoiceLexiconManager />
           </CardContent>
         </Card>
+        <Link
+          href={`/${locale}/voice/guide`}
+          className="inline-block text-sm text-primary underline"
+        >
+          {tTabs("voiceGuide")}
+        </Link>
       </div>
     );
   }

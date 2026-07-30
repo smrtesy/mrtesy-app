@@ -263,7 +263,8 @@
     "platform": "פלטפורמה",
     "noAppsEnabled": "אין אפליקציות מאופשרות בארגון הזה",
     "openPlatformAdmin": "פתח פאנל ניהול-על",
-    "platformDescription": "ניהול ברמת המערכת — משתמשים, ארגונים, אפליקציות, לוגים ושימוש."
+    "platformDescription": "ניהול ברמת המערכת — משתמשים, ארגונים, אפליקציות, לוגים ושימוש.",
+    "voiceGuide": "מדריך הקול (smrtVoice)"
   },
   "whatsappAutoreply": {
     "title": "מענה אוטומטי בוואטסאפ",
