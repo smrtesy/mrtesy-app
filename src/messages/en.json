@@ -4503,6 +4503,15 @@
       "rejected": "Rejected — nothing ran",
       "decideFailed": "Action failed"
     },
+    "deploy": {
+      "label": "Deploy status",
+      "frontend": "FE",
+      "backend": "BE",
+      "building": "building",
+      "ready": "ready",
+      "error": "failed",
+      "unknown": "unknown"
+    },
     "group": {
       "toggle": "Group by topic",
       "now": "Group now",
