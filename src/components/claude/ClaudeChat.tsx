@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { useScreenSearchParams } from "@/lib/panes/nav";
+import { useScreenPathname, useScreenRouter, useScreenSearchParams } from "@/lib/panes/nav";
 import {
   ChevronDown,
   ChevronRight,
@@ -124,7 +124,14 @@ interface Turn {
   duration_ms: number | null;
   created_at: string;
   events: TurnEvent[];
-  attachments: { id: string; filename: string }[];
+  attachments: {
+    id: string;
+    filename: string;
+    /** 'user' = sent with the message (chip); 'run' = produced by the run itself
+     *  (browser screenshot — rendered inline when signed_url is present). */
+    source?: "user" | "run";
+    signed_url?: string | null;
+  }[];
 }
 
 interface SplitProposal {
@@ -209,6 +216,32 @@ export function ClaudeChat() {
   // Continue-where-you-left-off guard, declared here because the seed effect below
   // must be able to claim it BEFORE the auto-open effect fires.
   const autoOpenedRef = useRef(false);
+
+  // The Claude button opens a NEW chat: it navigates to /claude?new=<timestamp>,
+  // and this effect resets to the blank composer. Keyed on the VALUE so every
+  // click is fresh (openTab dedupes the tab by path and only updates its href —
+  // a static param would fire once and never again), and deliberately NOT
+  // touching deepLinkedRef, so a later ?thread=<id> deep-link (corrections'
+  // "continue with Claude") still opens its conversation.
+  const newParamRef = useRef<string | null>(null);
+  const screenRouter = useScreenRouter();
+  const screenPathname = useScreenPathname();
+  useEffect(() => {
+    const fresh = screenSearch.get("new");
+    if (!fresh || fresh === newParamRef.current) return;
+    newParamRef.current = fresh;
+    autoOpenedRef.current = true; // suppress open-latest on arrival
+    setActiveId(null);
+    activeIdRef.current = null;
+    setTurns([]);
+    // Consume the param OUT of the URL: it is a one-shot command, and left in
+    // place it persists (workspace localStorage / mobile history), replaying
+    // "blank chat" on every reload and burying continue-where-you-left-off.
+    const params = new URLSearchParams(screenSearch.toString());
+    params.delete("new");
+    const q = params.toString();
+    screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
+  }, [screenSearch, screenRouter, screenPathname]);
 
   /** The inspect-mode seed: the user marked an element somewhere in the app and
    *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
@@ -1114,10 +1147,20 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
   const live = turn.status === "queued" || turn.status === "running";
   const waiting = turn.status === "waiting";
   const turnTokens = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0);
+  // Two kinds of files on one turn: what the user SENT (chips on their message)
+  // and what the run PRODUCED — browser screenshots posted back mid-run, shown
+  // as inline images with the reply. `source` is absent on rows created before
+  // the column existed; those are all user uploads.
+  const userAttachments = turn.attachments.filter((a) => a.source !== "run");
+  const runAttachments = turn.attachments.filter((a) => a.source === "run");
+  const screenshots = runAttachments.filter((a) => a.signed_url);
+  // A run file whose signed URL failed to mint still gets named — invisible
+  // evidence is worse than an unclickable filename.
+  const unsignedRunFiles = runAttachments.filter((a) => !a.signed_url);
 
   return (
     <div className="flex flex-col gap-2">
-      {(turn.user_prompt || turn.attachments.length > 0) && (
+      {(turn.user_prompt || userAttachments.length > 0) && (
         <div className="group/msg flex items-start justify-end gap-1">
           {/* Copy sits OUTSIDE the bubble, on its leading edge, so it never
               overlaps the text and reads for the whole message. */}
@@ -1139,9 +1182,9 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
                 {turn.user_prompt}
               </p>
             )}
-            {turn.attachments.length > 0 && (
+            {userAttachments.length > 0 && (
               <p className="mt-1 text-[11px] text-muted-foreground" dir="auto">
-                {turn.attachments.map((a) => a.filename).join(" · ")}
+                {userAttachments.map((a) => a.filename).join(" · ")}
               </p>
             )}
           </div>
@@ -1192,6 +1235,40 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
                 reveal="msg"
                 className="mt-0.5 shrink-0"
               />
+            </div>
+          )}
+
+          {unsignedRunFiles.length > 0 && (
+            <p className="text-[11px] text-muted-foreground" dir="auto">
+              {unsignedRunFiles.map((a) => a.filename).join(" · ")}
+            </p>
+          )}
+
+          {screenshots.length > 0 && (
+            // What the run SAW: browser screenshots it posted back. Thumbnails,
+            // not full-size — a click opens the real image (signed URL, ~1h).
+            <div className="flex flex-wrap gap-2">
+              {screenshots.map((s) => (
+                <a
+                  key={s.id}
+                  href={s.signed_url!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={s.filename}
+                  className="block overflow-hidden rounded-lg border border-border"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- signed
+                      Supabase URL with ~1h expiry; next/image optimization would
+                      cache/proxy a URL that dies, and these are ephemeral proofs,
+                      not site assets. */}
+                  <img
+                    src={s.signed_url!}
+                    alt={s.filename}
+                    loading="lazy"
+                    className="max-h-48 w-auto max-w-full"
+                  />
+                </a>
+              ))}
             </div>
           )}
 

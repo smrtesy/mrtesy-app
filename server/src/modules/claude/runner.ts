@@ -28,7 +28,7 @@ import { db, getAppSecret } from "../../db";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
-import { mintAppAccess, revokeAppAccess } from "./app-access";
+import { mintAppAccess, revokeAppAccess, BROWSER_HELPER_PATH } from "./app-access";
 
 /**
  * Where the subscription token is stored.
@@ -45,6 +45,46 @@ import { mintAppAccess, revokeAppAccess } from "./app-access";
  */
 const TOKEN_APP_SLUG = "smrttask";
 const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/**
+ * A SECOND, independent Claude subscription account, dedicated to automated
+ * background work.
+ *
+ * The primary token above authenticates the interactive runs the user drives from
+ * the console. The automated workloads — the corrections triage/autofix and the
+ * thread split/group suggestions — burn through a subscription's rolling usage
+ * window on their own, and while they share the primary account they eat into the
+ * budget the interactive work needs. Routing them to their own account keeps the
+ * two usage windows separate.
+ *
+ * A run opts in by carrying `claude_account === AUTOMATION_ACCOUNT`. When this
+ * token is not configured `loadAccountToken` falls back to the primary token, so
+ * the routing is a harmless no-op until the operator adds the second account under
+ * /admin/apps/smrttask/secrets (key CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION).
+ */
+export const AUTOMATION_ACCOUNT = "automation";
+const AUTOMATION_TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION";
+
+/**
+ * Resolve the subscription token for a run's account.
+ *
+ * Returns the token together with the key it came from, so a failure message can
+ * name the exact secret the operator has to fix. The automation account falls back
+ * to the primary token when its own key is unset — automated work keeps running
+ * rather than failing loudly on a credential that hasn't been added yet.
+ */
+async function loadAccountToken(
+  account: string | null | undefined,
+): Promise<{ token: string | null; key: string }> {
+  if ((account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT) {
+    const auto =
+      (await getAppSecret(TOKEN_APP_SLUG, AUTOMATION_TOKEN_KEY, AUTOMATION_TOKEN_KEY))?.trim() ||
+      null;
+    if (auto) return { token: auto, key: AUTOMATION_TOKEN_KEY };
+  }
+  const primary = (await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY))?.trim() || null;
+  return { token: primary, key: TOKEN_KEY };
+}
 
 /**
  * Locate the Claude Code binary.
@@ -299,7 +339,7 @@ export async function executeRun(runId: string): Promise<void> {
 async function executeRunBody(runId: string): Promise<void> {
   const { data: run, error: loadError } = await db
     .from("claude_runs")
-    .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id, created_by, org_id")
+    .select("id, prompt, cwd, status, model, effort, repo, git_branch, thread_id, created_by, org_id, claude_account")
     .eq("id", runId)
     .maybeSingle();
 
@@ -326,14 +366,15 @@ async function executeRunBody(runId: string): Promise<void> {
   };
 
   // Trimmed because this value is pasted by a human through an admin form, where a
-  // stray newline or space rides along easily and would be sent verbatim.
-  const token = (await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY))?.trim() || null;
+  // stray newline or space rides along easily and would be sent verbatim. The key
+  // depends on the run's account: automated runs route to the second subscription.
+  const { token, key: tokenKey } = await loadAccountToken(run.claude_account);
   if (!token) {
     // Fail loudly rather than let Claude Code fall through to a billed credential.
     await finish({
       status: "failed",
       error:
-        `${TOKEN_KEY} is not configured. Generate one with ` +
+        `${tokenKey} is not configured. Generate one with ` +
         "`npx @anthropic-ai/claude-code setup-token` (it authenticates with the Claude " +
         `subscription), then save it under /admin/apps/${TOKEN_APP_SLUG}/secrets — or ` +
         "set an environment variable of the same name on the backend.",
@@ -467,6 +508,18 @@ async function executeRunBody(runId: string): Promise<void> {
     env.SMRTESY_API_URL = appAccess.url;
     env.SMRTESY_API_TOKEN = appAccess.token;
     if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
+    // Real-browser access: the helper script logs a headless Chromium into the
+    // app as the user (same session as the API token, as cookies) and can post
+    // screenshots back into this very turn — hence the run id. The helper is
+    // shipped with the server build, next to this file's compiled form, so its
+    // require('playwright') resolves from the server's own node_modules no
+    // matter which workspace directory the turn runs in.
+    if (appAccess.browser) {
+      env.SMRTESY_APP_URL = appAccess.browser.appUrl;
+      env.SMRTESY_BROWSER_COOKIES = JSON.stringify(appAccess.browser.cookies);
+      env.SMRTESY_BROWSER_HELPER = BROWSER_HELPER_PATH;
+      env.SMRTESY_RUN_ID = runId;
+    }
   }
 
   // Attachments: downloaded into the working directory, then named in the prompt.
@@ -534,6 +587,20 @@ async function executeRunBody(runId: string): Promise<void> {
     // operator already set a permission flag there, so their choice wins.
     if (run.repo && !extra.some((x) => x.startsWith("--permission-mode") || x === "--dangerously-skip-permissions")) {
       a.push("--permission-mode", "acceptEdits");
+    }
+    // The ONE shell command a run may execute without a prompt: the browser
+    // helper (headless Chromium logged in as the user). Scoped to the helper's
+    // literal absolute path — the permission matcher compares literal command
+    // text, so this pre-approves `node <helper> …` and nothing else; general
+    // shell stays gated behind CLAUDE_RUN_EXTRA_ARGS exactly as before. Both
+    // quoting spellings are listed because each produces different literal text.
+    // --allowedTools is additive with --permission-mode and with any operator
+    // flags in `extra` (verified against CLI docs, 2026-07-29).
+    if (appAccess?.browser) {
+      // Flag repeated per rule (not one flag with two values): repetition is
+      // documented-additive, while variadic parsing of a second value is not.
+      a.push("--allowedTools", `Bash(node ${BROWSER_HELPER_PATH}:*)`);
+      a.push("--allowedTools", `Bash(node "${BROWSER_HELPER_PATH}":*)`);
     }
     a.push(...extra);
     return a;
@@ -749,7 +816,7 @@ async function executeRunBody(runId: string): Promise<void> {
   const authLooksWrong =
     !ok && /401|invalid bearer|authenticat/i.test(failureText) && !token.startsWith("sk-ant-");
   const hint = authLooksWrong
-    ? ` — hint: the configured ${TOKEN_KEY} does not start with 'sk-ant-', which is ` +
+    ? ` — hint: the configured ${tokenKey} does not start with 'sk-ant-', which is ` +
       "unusual for a Claude credential. Check that the saved value is the token " +
       "printed by `claude setup-token`."
     : "";
@@ -816,15 +883,16 @@ async function executeRunBody(runId: string): Promise<void> {
  * conversation, and putting it in the thread would show the user an exchange they
  * never had.
  *
- * Runs on CLAUDE_CODE_OAUTH_TOKEN like every other run, so it costs subscription
+ * Runs on a subscription token like every other run, so it costs subscription
  * usage and ZERO paid API tokens. Returns null on any failure — a missing title is
- * a cosmetic loss and must never break the turn that triggered it.
+ * a cosmetic loss and must never break the turn that triggered it. Pass
+ * `account: AUTOMATION_ACCOUNT` to route the call to the second subscription.
  */
 export async function runOneShot(
   prompt: string,
-  opts: { model?: string; timeoutMs?: number } = {},
+  opts: { model?: string; timeoutMs?: number; account?: string } = {},
 ): Promise<string | null> {
-  const token = (await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY))?.trim() || null;
+  const { token } = await loadAccountToken(opts.account);
   if (!token) return null;
 
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };

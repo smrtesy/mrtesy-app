@@ -197,6 +197,12 @@ const SMRTTASK_PLATFORM_KEYS = [
   // in modules/claude. Listed here so it can be set from this screen instead of a
   // hosting dashboard; getAppSecret still falls back to the same-named env var.
   { key: "CLAUDE_CODE_OAUTH_TOKEN", is_secret: true, default_value: null },
+  // A SECOND Claude subscription account, dedicated to automated background work —
+  // the corrections triage/autofix and the thread split/group suggestions route
+  // here so they stay off the primary account's rolling usage window. Generated the
+  // same way (`npx @anthropic-ai/claude-code setup-token`). Optional: when unset the
+  // runner falls back to CLAUDE_CODE_OAUTH_TOKEN, so nothing breaks until it's added.
+  { key: "CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION", is_secret: true, default_value: null },
   // GitHub personal access token ('repo' scope) — lets a Claude chat pick a
   // repository and work in a clone of it (modules/claude/github.ts).
   //
