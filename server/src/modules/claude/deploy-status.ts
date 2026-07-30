@@ -31,7 +31,9 @@ const SECRET_LOCATION = "/admin/apps/smrttask/secrets";
  *  asking "is it ready yet" — bounded so a slow provider fails fast and readably. */
 const FETCH_TIMEOUT_MS = 10_000;
 
-type ProviderState = "building" | "ready" | "error" | "unknown";
+// warn = amber "a problem is approaching" — distinct from `building`. Used by the DB
+// dot when the project is up but the hourly db_health_watchdog reported pressure.
+type ProviderState = "building" | "ready" | "warn" | "error" | "unknown";
 
 export interface DeployStatus {
   provider: "vercel" | "railway" | "supabase";
@@ -44,6 +46,9 @@ export interface DeployStatus {
   url?: string | null;
   inspectorUrl?: string | null;
   createdAt?: string | null;
+  /** For the DB dot: the latest db_health_watchdog warning text + when it fired. */
+  warning?: string | null;
+  warnedAt?: string | null;
   /** When not configured (or misconfigured): which secret to set and where. */
   hint?: string;
   /** A provider/network error, surfaced rather than swallowed. */
@@ -375,19 +380,51 @@ function supabaseRef(): string | null {
  *     one trivial indexed read. Success → healthy; an error (project paused, network,
  *     auth) → error. Needs no extra secret, so the DB dot is always meaningful.
  */
+/** Window we look back for a db_health warning. The watchdog re-writes hourly while a
+ *  problem persists, so a window comfortably longer than the 60-min cron means a live
+ *  problem always shows amber, and a resolved one clears within ~this long. */
+const DB_WARN_WINDOW_MS = 90 * 60 * 1000;
+
+/**
+ * The latest early-warning from the hourly `db_health_watchdog()` (migration
+ * 20260730203000): a `log_entries` row with `category='db_health'` inside the window.
+ * The watchdog writes ONLY on pressure (connections/stuck-query/cache-hit/dead-tuples),
+ * so its presence IS the "a problem is approaching" signal. Absence → nothing to warn.
+ */
+async function recentDbHealthWarning(): Promise<{ message: string; at: string } | null> {
+  try {
+    const since = new Date(Date.now() - DB_WARN_WINDOW_MS).toISOString();
+    const { data, error } = await db
+      .from("log_entries")
+      .select("error_message, created_at")
+      .eq("category", "db_health")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return null;
+    const row = data[0] as { error_message: string | null; created_at: string };
+    return { message: row.error_message ?? "אזהרת בריאות DB", at: row.created_at };
+  } catch {
+    return null;
+  }
+}
+
 export async function supabaseStatus(): Promise<DeployStatus> {
   const ref = supabaseRef();
   const token = await secret("SUPABASE_ACCESS_TOKEN");
 
+  // ── base state: is the project up? ──
+  let base: DeployStatus | null = null;
+
   // Level 1 — Management API (real project lifecycle state).
   if (token && ref) {
     try {
-      const { ok, status, body } = await fetchJson(`https://api.supabase.com/v1/projects/${ref}`, {
+      const { ok, body } = await fetchJson(`https://api.supabase.com/v1/projects/${ref}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (ok) {
         const raw = String((body as { status?: unknown })?.status ?? "");
-        return { provider: "supabase", configured: true, state: supabaseState(raw), rawState: raw };
+        base = { provider: "supabase", configured: true, state: supabaseState(raw), rawState: raw };
       }
       // A 401/403 means the token is wrong — fall through to the ping rather than
       // reporting the project down when it's really an auth problem with the token.
@@ -397,15 +434,34 @@ export async function supabaseStatus(): Promise<DeployStatus> {
   }
 
   // Level 2 — reachability ping (always available, no token).
-  try {
-    const { error } = await db.from("apps").select("id").limit(1);
-    if (error) {
-      return { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: error.message };
+  if (!base) {
+    try {
+      const { error } = await db.from("apps").select("id").limit(1);
+      base = error
+        ? { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: error.message }
+        : { provider: "supabase", configured: true, state: "ready", rawState: "reachable" };
+    } catch (e) {
+      base = { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: e instanceof Error ? e.message : String(e) };
     }
-    return { provider: "supabase", configured: true, state: "ready", rawState: "reachable" };
-  } catch (e) {
-    return { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: e instanceof Error ? e.message : String(e) };
   }
+
+  // ── early-warning overlay ──
+  // A hard down/unhealthy state already dominates — leave it red. Only when the project
+  // is otherwise up do we surface the watchdog's "approaching problem" as amber, so the
+  // dot escalates green → amber (pressure) → red (down).
+  if (base.state === "ready") {
+    const warn = await recentDbHealthWarning();
+    if (warn) {
+      return {
+        ...base,
+        state: "warn",
+        rawState: "pressure",
+        warning: warn.message,
+        warnedAt: warn.at,
+      };
+    }
+  }
+  return base;
 }
 
 /** All three surfaces at once — frontend (Vercel), backend (Railway), database
