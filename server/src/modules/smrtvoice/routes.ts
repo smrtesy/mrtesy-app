@@ -2349,10 +2349,17 @@ router.post("/voice/scripts/:id/regenerate-redos", async (req: Request, res: Res
 
 // POST /voice/quick-line — the studio's fast path: pick a project + voice, type
 // text, hear a take. NO Google Doc and NO visible "script": it reuses the
-// doc-less regenerate path (line_overrides carry the verbatim text to the
-// engine, routes.ts:queueRegeneration). Per the agreed "Way A", the script is
-// an invisible per-project container holding the language/model/casting the
-// engine requires — the user never sees it. See docs/studio-quick-line-plan.md.
+// doc-less regenerate path (routes.ts:queueRegeneration). Per the agreed "Way A",
+// the script is an invisible per-project container holding the
+// language/model/casting the engine requires — the user never sees it.
+//
+// The typed text is run through the SAME LLM preprocessing a full script gets
+// (emotion + niqqud + tone tags), via the engine's reprocess path
+// (orchestrator.py:_process_regenerate, the `reprocess_line_numbers` branch) —
+// NOT the verbatim line_override path, which would skip the LLM and speak the
+// raw text flat. Per-model behavior matches a full script exactly:
+// resolveEmotionEnabled() → resemble-ultra processes, chatterbox skips the LLM.
+// See docs/studio-quick-line-plan.md.
 const QUICK_MODELS = new Set(["resemble-ultra", "chatterbox", "chatterbox-turbo"]);
 const QUICK_SCRIPT_NAME = "__quick__";
 
@@ -2501,16 +2508,19 @@ router.post("/voice/quick-line", async (req: Request, res: Response) => {
     return res.status(500).json({ error: lineErr?.message ?? "line insert failed" });
   }
 
-  // 6) Render via the existing doc-less override path. queueRegeneration sends
-  //    the HTTP response (the queued job, or an error), with script_id + line
-  //    merged in so the client can show the take with the standard tools.
+  // 6) Render through the engine's reprocess path so the typed text gets the
+  //    full LLM preprocessing (emotion/niqqud/tone), same as a full script. The
+  //    line's text_clean (set to `text` above) is the LLM's input — no
+  //    line_override, since that path speaks verbatim and skips the LLM.
+  //    queueRegeneration sends the HTTP response (the queued job, or an error),
+  //    with script_id + line merged in so the client can show the take.
   return queueRegeneration(
     req,
     res,
     script,
     [lineNumber],
-    [{ line_number: lineNumber, text_for_tts: text }],
     [],
+    [lineNumber],
     { script_id: script.id, line_id: line.id, line_number: lineNumber },
   );
 });
