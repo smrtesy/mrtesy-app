@@ -48,7 +48,8 @@ create trigger studio_runs_write_once
   for each row execute function public.studio_runs_write_once();
 
 -- The studio media shelf: outputs are downloaded here IMMEDIATELY on
--- completion (fal links die after 24h). Path convention: <org_id>/<code>/<n>.
+-- completion (fal links die after 24h). Path convention: <org_id>/<run_uuid>/<n>
+-- — keyed by run UUID, never the short display code (codes can collide).
 insert into storage.buckets (id, name, public)
 values ('studio-media', 'studio-media', false)
 on conflict (id) do nothing;
