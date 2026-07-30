@@ -652,6 +652,74 @@ router.get("/studio/projects/:id", async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Stage B (docs/studio-build-plan.md) — the deterministic recommendation
+ * layer behind the creation form. No LLM call, no cost: candidates come from
+ * the indexed catalog (studio_models), the written method from MODEL_RECIPES
+ * (synced from video-lab), and the input fields from fal's live OpenAPI
+ * schema — "written method here, live contract there".
+ *
+ * GET /studio/recommendation?kind=image|video|lipsync|voice
+ * Returns ranked candidates and the recommended model expanded with its
+ * recipe and live schema. No winner-*.json exists yet in video-lab, so the
+ * ranking is shortlist_rank (nulls last) with recipe-holders preferred —
+ * `basis` says so explicitly instead of pretending a winner was locked.
+ */
+const RECOMMEND_KINDS = new Set(["image", "video", "lipsync", "voice"]);
+
+router.get("/studio/recommendation", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const kind = String(req.query.kind ?? "");
+  if (!RECOMMEND_KINDS.has(kind)) {
+    return res.status(400).json({ error: "kind must be one of image|video|lipsync|voice" });
+  }
+  const { data, error } = await db.from("studio_models")
+    .select("endpoint_id, title, category, vendor, price_usd, price_unit, price_note, shortlist_rank, verified_schema, recipe_path, flags")
+    .eq("org_id", orgId).eq("kind", kind).eq("deprecated", false)
+    .order("shortlist_rank", { ascending: true, nullsFirst: false })
+    .order("endpoint_id")
+    .limit(24);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const rows: Row[] = (data ?? []).map((m: Row) => ({
+    ...m,
+    has_recipe: Boolean(MODEL_RECIPES[m.endpoint_id as string]),
+  }));
+  // Recipe-holders first within equal footing: a model whose method we wrote
+  // down beats a bare catalog row at the same rank.
+  rows.sort((a: Row, b: Row) => {
+    const ra = (a.shortlist_rank as number | null) ?? Number.MAX_SAFE_INTEGER;
+    const rb = (b.shortlist_rank as number | null) ?? Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    return Number(b.has_recipe) - Number(a.has_recipe);
+  });
+  const candidates = rows.slice(0, 8);
+  const top = candidates.find((m: Row) => m.has_recipe) ?? candidates[0];
+  if (!top) {
+    return res.json({ kind, basis: "empty_catalog", candidates: [], recommended: null });
+  }
+
+  // fetchModelSchema never throws — a fal failure comes back as
+  // { available: false } (indexer.ts:742). Surface that explicitly so the
+  // form degrades to prompt-only loudly, not behind a null error.
+  const schema = await fetchModelSchema(top.endpoint_id as string);
+  const schemaError =
+    (schema as { available?: boolean }).available === false
+      ? "fal schema unavailable for this endpoint"
+      : null;
+  res.json({
+    kind,
+    basis: "shortlist_rank+recipe (no locked winner-*.json in video-lab yet)",
+    candidates,
+    recommended: {
+      endpoint_id: top.endpoint_id,
+      recipe: MODEL_RECIPES[top.endpoint_id as string] ?? null,
+      schema,
+      schema_error: schemaError,
+    },
+  });
+});
+
 /** PATCH /studio/projects/:id — rename / describe / archive. */
 router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
