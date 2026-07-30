@@ -13,6 +13,7 @@ import appsRouter from "./apps/routes";
 import meRouter from "./me/routes";
 import messagingRouter from "./messaging/routes";
 import pushRouter from "./push/routes";
+import searchRouter from "./search/routes";
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use(appsRouter);
 router.use(meRouter);
 router.use(messagingRouter);
 router.use(pushRouter);
+router.use(searchRouter);
 
 export default router;

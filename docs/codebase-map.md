@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-07-30.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-07-31.
 
 ## The three engines
 
@@ -46,11 +46,14 @@ route group `src/app/[locale]/(app)/(<slug>)/…`, components
 | smrtstudio | `/studio` | Content studio |
 
 **Platform (cross-app), route group `(platform)`:** `/inbox` (notifications),
-`/suggestions`, `/settings`, `/account`, `/admin`, and **`/claude`** — the in-app
-Claude console (components `src/components/claude/`, server
-`server/src/modules/claude/`, detail in `.claude/rules/claude-console.md`).
-Server side: `server/src/modules/platform/` (organizations, members, me,
-messaging, push, apps) and `server/src/modules/admin/`.
+`/suggestions`, `/settings`, `/account`, `/admin`, `/search` (global content
+search — components `src/components/platform/search/`, server
+`server/src/modules/platform/search/`, detail in `docs/global-search-plan.md`),
+and **`/claude`** — the in-app Claude console (components
+`src/components/claude/`, server `server/src/modules/claude/`, detail in
+`.claude/rules/claude-console.md`). Server side:
+`server/src/modules/platform/` (organizations, members, me, messaging, push,
+apps, search) and `server/src/modules/admin/`.
 
 ## Server layout (`server/src/`)
 
@@ -110,6 +113,9 @@ Rules & AI: `rules_memory` (skip rules — parser lives in
 `server/src/modules/smrttask/lib/rule-filters.ts` with a Deno twin in
 `supabase/functions/_shared/rule-filters.ts`; the two must stay in sync),
 `ai_prompts`, `log_entries`, `run_sessions`, `sync_state`, `sync_schedules`.
+Global search: `search_documents` (unified pgvector index over destinations/
+tasks/info/claude threads; `match_search_documents` hybrid RPC —
+`server/src/modules/platform/search/`).
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`
