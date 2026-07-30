@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, Minimize2, PanelLeftClose, PanelRightClose, X } from "lucide-react";
+import { Maximize2, Minimize2, MoreVertical, PanelLeftClose, PanelRightClose, X } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import {
@@ -71,6 +71,127 @@ type DragState = {
 };
 
 /**
+ * Per-pane controls, collapsed into a single grip in the pane's top-inline-end
+ * corner. Design goals (user, 2026-07): the grip is the ONLY thing that
+ * reserves the corner — grip-sized, drawn on top (z-70) so page content can
+ * never hide it — and the positioning wrapper is `pointer-events-none`, so a
+ * click anywhere in the corner except the grip itself falls through to the
+ * page beneath. Hover / keyboard-focus / touch-tap the grip and the actions
+ * drop straight DOWN in a narrow column (close, park-to-rail when another
+ * expanded pane remains, maximize), keeping the always-on footprint tiny.
+ *
+ * The reveal is driven by a single `open` state (not CSS :hover), because the
+ * pointer-events-none wrapper would swallow hover events on its transparent
+ * area; the interactive inner column carries the mouse/focus handlers, and the
+ * action buttons are only mounted while open so the collapsed grip reserves
+ * nothing below it. A maximized (solo) pane shows only the restore control,
+ * always visible — it is the way back (Escape also restores, see TabsWorkspace).
+ */
+function PaneControls({
+  tab,
+  solo,
+  canCollapse,
+  onClose,
+  onCollapse,
+  onToggleSolo,
+}: {
+  tab: WorkspaceTab;
+  solo: boolean;
+  canCollapse: boolean;
+  onClose: () => void;
+  onCollapse: () => void;
+  onToggleSolo: () => void;
+}) {
+  const t = useTranslations("tabsWorkspace");
+  const locale = useLocale();
+  const CollapseIcon = locale === "he" ? PanelRightClose : PanelLeftClose;
+  const [open, setOpen] = useState(false);
+
+  const actionBtn =
+    "pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/90 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-foreground";
+
+  // Solo: one always-visible restore button — the only way back besides Escape.
+  if (solo) {
+    return (
+      <div className="pointer-events-none absolute end-0 top-0 z-[70] p-1.5">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
+          aria-label={t("restorePane")}
+          title={t("restorePane")}
+          className={actionBtn}
+        >
+          <Minimize2 className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+
+  const closeTitle = tab.label ? `${t("close")} · ${tab.label}` : t("close");
+
+  return (
+    <div className="pointer-events-none absolute end-0 top-0 z-[70] p-1.5">
+      {/* Only this inner column is interactive. Collapsed it is exactly the
+          grip's size; the action buttons mount only while open, so nothing
+          below the grip captures clicks meant for the page. */}
+      <div
+        className="pointer-events-auto flex w-7 flex-col items-end gap-1"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+        }}
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+          aria-label={t("paneControls")}
+          title={t("paneControls")}
+          aria-expanded={open}
+          className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-md bg-background/60 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+        {open && (
+          <>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onClose(); }}
+              aria-label={t("close")}
+              title={closeTitle}
+              className={actionBtn}
+            >
+              <X className="h-4 w-4" />
+            </button>
+            {canCollapse && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onCollapse(); }}
+                aria-label={t("collapsePane")}
+                title={t("collapsePane")}
+                className={actionBtn}
+              >
+                <CollapseIcon className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
+              aria-label={t("maximizePane")}
+              title={t("maximizePane")}
+              className={actionBtn}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Side-by-side panes for the open sidebar tabs (desktop only).
  *
  * Opening a page focuses it and parks every other tab as a narrow "rail" that
@@ -99,7 +220,6 @@ export function TabsWorkspace() {
   const t = useTranslations("tabsWorkspace");
   const locale = useLocale();
   const isRtl = locale === "he";
-  const CollapseIcon = isRtl ? PanelRightClose : PanelLeftClose;
 
   // Escape leaves maximized view — the pane covers the whole workspace, so the
   // way back has to be reachable without hunting for the button.
@@ -300,50 +420,18 @@ export function TabsWorkspace() {
                     className="absolute inset-0 z-[60] cursor-pointer bg-transparent"
                   />
                 )}
-                {/* Floating controls — top-start corner, above the focus overlay
-                    (z-70) so they work on inactive panes too. Hidden even on the
-                    active pane; revealed only when the pointer enters this corner
-                    zone (group/ctl). Always visible on touch, where there is no
-                    hover. Maximize stays visible while solo: it is the way back. */}
-                <div className="group/ctl absolute left-0 top-0 z-[70] flex items-center gap-1 p-2">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                    aria-label={t("close")}
-                    title={tab.label ? `${t("close")} · ${tab.label}` : t("close")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover/ctl:opacity-100"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                  {/* Park this pane back into a rail — only when another expanded
-                      pane would remain to fill the workspace. */}
-                  {canCollapse && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); collapseTab(tab.id); }}
-                      aria-label={t("collapsePane")}
-                      title={t("collapsePane")}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground opacity-100 md:opacity-0 md:group-hover/ctl:opacity-100"
-                    >
-                      <CollapseIcon className="h-4 w-4" />
-                    </button>
-                  )}
-                  {/* Wide screens (the model-comparison grid) are unusable in a
-                      half-width pane. This gives one pane the whole workspace
-                      without closing the working set. */}
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); toggleSolo(tab.id); }}
-                    aria-label={solo ? t("restorePane") : t("maximizePane")}
-                    title={solo ? t("restorePane") : t("maximizePane")}
-                    className={cn(
-                      "inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-opacity hover:bg-accent hover:text-foreground",
-                      solo ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover/ctl:opacity-100",
-                    )}
-                  >
-                    {solo ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-                  </button>
-                </div>
+                {/* Collapsed grip in the top-inline-end corner (above the focus
+                    overlay at z-70 so it works on inactive panes too). Reserves
+                    only its own footprint; hovering/tapping drops the actions
+                    down. See PaneControls for the full rationale. */}
+                <PaneControls
+                  tab={tab}
+                  solo={!!solo}
+                  canCollapse={canCollapse}
+                  onClose={() => closeTab(tab.id)}
+                  onCollapse={() => collapseTab(tab.id)}
+                  onToggleSolo={() => toggleSolo(tab.id)}
+                />
               </div>
             </section>
             {showDivider && (
