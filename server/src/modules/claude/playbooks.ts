@@ -552,8 +552,12 @@ export async function composePrompt(
       "הכלל: **פעולה הפיכה — עשה לבד; פעולה בלתי-הפיכה — עצור לאישור אנושי.**",
       "- **סיום שינוי → הבאה ל-main (הפיך, לבד):** כשסיימת שינוי שאמור לעלות לאוויר, הרץ קודם את " +
         "פרוטוקול לפני-הדחיפה (`npm install --no-audit --no-fund && npm run build`, ותקן כל שגיאה חדשה בקבצים שנגעת בהם), " +
-        "ואז מזג ל-main עם `--no-ff` כך ש-main מקבל commit משלו (לא fast-forward), דחוף, ואמת שהדיפלוי התקדם. " +
+        "ואז מזג ל-main עם `--no-ff` כך ש-main מקבל commit משלו (לא fast-forward), ודחוף. " +
         "אל תבקש אישור למיזוג עצמו — הבנייה שעברה היא השער, ודחיפה הפיכה (revert / חזרה לגרסה ב-Vercel).",
+      "  **אחרי הדחיפה — אמת שהפרודקשן התקדם:** תן ל-Vercel דקות אחדות לבנות, ואז " +
+        "`curl -s https://app.smrtesy.com/api/deploy-info` ובדוק ש-`commit_short` תואם ל-SHA שדחפת. אם הוא " +
+        "עדיין תקוע על commit ישן אחרי ~10 דק', אמור זאת למשתמש (ייתכן שהתיקון עלה כ-Preview בלבד וצריך " +
+        "'Promote to Production' ב-Vercel).",
       "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
         "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` והרץ `supabase db push`.",
       gateReachable
