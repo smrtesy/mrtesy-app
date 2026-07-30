@@ -4522,5 +4522,20 @@
     "anchor": "Link to section {title}",
     "copyCode": "Copy code",
     "copied": "Copied"
+  },
+  "studioProjects": {
+    "title": "Projects",
+    "newProject": "New project",
+    "namePlaceholder": "Project name",
+    "create": "Create",
+    "cancel": "Cancel",
+    "empty": "No projects yet — create the first one with the plus button.",
+    "tabVoice": "Voice",
+    "tabImage": "Image",
+    "tabVideo": "Video",
+    "voiceEmpty": "No linked voice project.",
+    "imageEmpty": "No image outputs in this project yet.",
+    "videoEmpty": "No video outputs in this project yet.",
+    "costPending": "cost pending"
   }
 }
