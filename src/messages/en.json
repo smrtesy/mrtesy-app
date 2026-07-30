@@ -4653,6 +4653,10 @@
     "consultNoEstimate": "Cannot estimate",
     "consultApproveRun": "Approve & run",
     "consultRunning": "Running…",
-    "consultPartialFail": "Some runs failed"
+    "consultPartialFail": "Some runs failed",
+    "voiceCreate": "Create voice project",
+    "voiceCreatePlaceholder": "Voice project name",
+    "voiceCreatePrefixPlaceholder": "Prefix",
+    "voiceCreatePrefixHint": "Line-code prefix: 1–3 letters (e.g. BR) — required for script creation"
   }
 }

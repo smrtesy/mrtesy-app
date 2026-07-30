@@ -1442,6 +1442,66 @@ router.post("/studio/consultations/:id/execute", async (req: Request, res: Respo
   res.status(newRunIds.length ? 201 : 502).json({ results, executed: newRunIds.length });
 });
 
+/**
+ * Stage G0 (docs/studio-build-plan.md) — voice creation FROM the studio.
+ *
+ * POST /studio/projects/:id/voice-projects { name, code_prefix? } — creates a
+ * smrtVoice project already linked (studio_project_id) to this studio
+ * project, so voice work starts from the voice tab without ever visiting the
+ * smrtVoice app. The full pipeline (scripts → lines → takes, the approval
+ * flow, voice-engine) continues in the existing screens — absorbed, not
+ * rebuilt. Free: creating a project runs nothing paid.
+ */
+const VOICE_PREFIX_RE = /^[A-Z]{1,3}$/; // mirrors smrtvoice/routes.ts PREFIX_RE
+router.post("/studio/projects/:id/voice-projects", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const prefix = (req.body?.code_prefix ?? "").toString().trim().toUpperCase() || null;
+  if (prefix && !VOICE_PREFIX_RE.test(prefix)) {
+    return res.status(400).json({ error: "Invalid code prefix — use 1-3 letters (e.g. BR)" });
+  }
+
+  const { data: project, error: pErr } = await db.from("studio_projects")
+    .select("id").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  // The voice screens the tab links into are still guarded by the smrtvoice
+  // entitlement (until stage G flips it to smrtstudio) — creating a project
+  // an org cannot open would be a dead link, so check first.
+  const { data: voiceApp } = await db.from("apps").select("id").eq("slug", "smrtvoice").maybeSingle();
+  const { data: voiceEntitled, error: entErr } = await db.from("app_memberships")
+    .select("org_id").eq("org_id", orgId).eq("app_id", voiceApp?.id ?? "").maybeSingle();
+  if (entErr) return res.status(500).json({ error: entErr.message });
+  if (!voiceEntitled) {
+    return res.status(409).json({ error: "smrtvoice is not enabled for this org yet" });
+  }
+
+  const { data, error } = await db.from("smrtvoice_projects").insert({
+    org_id: orgId,
+    created_by: req.user!.id,
+    name,
+    description: typeof req.body?.description === "string" ? req.body.description : null,
+    code_prefix: prefix,
+    language: "he",
+    status: "draft",
+    studio_project_id: project.id,
+  }).select("id, name").single();
+  if (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: prefix
+          ? `A project with prefix "${prefix}" already exists`
+          : "A conflicting voice project already exists",
+      });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  await emitEvent(orgId, "smrtvoice", "project.created", "project", data.id, { name: data.name });
+  res.status(201).json({ voice_project: data });
+});
+
 /** PATCH /studio/projects/:id — rename / describe / archive. */
 router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
   const orgId = req.org!.id;

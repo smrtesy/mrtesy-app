@@ -14,6 +14,7 @@ import { Plus } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
@@ -536,6 +537,97 @@ function ConsultationCard({ c, onChanged }: { c: Consultation; onChanged: () => 
   );
 }
 
+/**
+ * Stage G0 — start voice work FROM the studio: a quiet + button that expands
+ * into a name input and creates a smrtVoice project already linked to this
+ * studio project. The full voice pipeline continues in the existing screens.
+ */
+function VoiceCreateToggle({ projectId, onCreated }: { projectId: string; onCreated: () => void }) {
+  const t = useTranslations("studioProjects");
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  // Required in practice: script creation hard-rejects a project without a
+  // code prefix (voice routes) — omitting it here would mint dead-end
+  // projects that only the old smrtVoice form could have configured.
+  const [prefix, setPrefix] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const inFlight = useRef(false);
+
+  const prefixOk = /^[A-Za-z]{1,3}$/.test(prefix.trim());
+
+  const create = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || !prefixOk || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api(`/api/studio/projects/${projectId}/voice-projects`, {
+        method: "POST",
+        body: { name: trimmed, code_prefix: prefix.trim().toUpperCase() },
+      });
+      setName("");
+      setPrefix("");
+      setOpen(false);
+      onCreated();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-3">
+      {open ? (
+        <div className="flex items-center gap-2">
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void create();
+              if (e.key === "Escape") { setOpen(false); setName(""); }
+            }}
+            placeholder={t("voiceCreatePlaceholder")}
+            className="h-8 w-56"
+          />
+          <Input
+            value={prefix}
+            onChange={(e) => setPrefix(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void create();
+              if (e.key === "Escape") { setOpen(false); setName(""); setPrefix(""); }
+            }}
+            placeholder={t("voiceCreatePrefixPlaceholder")}
+            title={t("voiceCreatePrefixHint")}
+            maxLength={3}
+            className="h-8 w-20"
+          />
+          <Button size="sm" onClick={() => void create()} disabled={busy || !name.trim() || !prefixOk}>
+            {t("create")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => { setOpen(false); setName(""); setPrefix(""); }}
+          >
+            {t("cancel")}
+          </Button>
+        </div>
+      ) : (
+        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => setOpen(true)}>
+          <Plus className="h-3.5 w-3.5" />
+          {t("voiceCreate")}
+        </Button>
+      )}
+      {err && <p className="mt-1 text-xs text-red-600 break-words">{err}</p>}
+    </div>
+  );
+}
+
 function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
   runs: Run[]; empty: string; vlmEnabled: boolean; onChanged: () => void;
 }) {
@@ -635,6 +727,7 @@ export function StudioProject({ projectId }: { projectId: string }) {
         </TabsList>
 
         <TabsContent value="voice">
+          <VoiceCreateToggle projectId={projectId} onCreated={() => void load()} />
           {voice_projects.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">{t("voiceEmpty")}</p>
           ) : (
