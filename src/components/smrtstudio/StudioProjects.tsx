@@ -54,7 +54,7 @@ export function StudioProjects() {
     try {
       await api("/api/studio/projects", {
         method: "POST",
-        body: JSON.stringify({ name_he: name }),
+        body: { name_he: name },
       });
       setNewName("");
       setCreating(false);
