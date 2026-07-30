@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import type { ModelsResponse, StudioModel } from "./types";
 import { StudioModelDetail } from "./StudioModelDetail";
 
@@ -91,6 +92,9 @@ function Chip({
 
 export function StudioModels() {
   const t = useTranslations("smrtStudio");
+  // Reserve the pane's top-inline-end corner for the floating grip so the
+  // search/index controls clear it; no-op as a routed page.
+  const inPane = useOptionalPaneNav() != null;
 
   const [tab, setTab] = useState<Tab>("audio_video");
   const [category, setCategory] = useState<string | null>(null);
@@ -275,7 +279,7 @@ export function StudioModels() {
 
   return (
     <div className="grid gap-4">
-      <header className="flex flex-wrap items-start justify-between gap-3">
+      <header className={cn("flex flex-wrap items-start justify-between gap-3", inPane && "pe-9")}>
         <div>
           <h1 className="text-xl font-semibold">{t("modelsTitle")}</h1>
           <p className="text-xs text-muted-foreground">{t("modelsSubtitle")}</p>

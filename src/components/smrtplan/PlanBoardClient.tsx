@@ -695,8 +695,8 @@ export function PlanBoardClient({ locale }: { locale: string }) {
 
   return (
     <div className="space-y-4">
-      {/* header */}
-      <div className="flex flex-wrap items-end justify-between gap-2">
+      {/* header — reserve the top-inline-end corner for the pane grip (no-op as a page) */}
+      <div className={cn("flex flex-wrap items-end justify-between gap-2", paneNav && "pe-9")}>
         <div>
           <h1 className="text-xl font-bold">{t("title")}</h1>
           <p className="text-[12.5px] text-muted-foreground">{t("lead")}</p>
