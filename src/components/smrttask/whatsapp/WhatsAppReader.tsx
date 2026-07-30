@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Search, X } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { useOptionalPaneNav } from "@/lib/panes/nav";
 import { ThreadList, type Thread } from "./ThreadList";
 import { ThreadView, type Message, type ChatTask } from "./ThreadView";
 
@@ -55,6 +56,11 @@ export function WhatsAppReader({
 }: WhatsAppReaderProps) {
   const { locale } = useParams();
   const t = useTranslations("whatsappPage");
+  // Inside a workspace pane the floating grip sits in the top-inline-end corner.
+  // Single-column (narrow) the list fills the width, so its search row runs under
+  // the grip — reserve room there. Two-column (@2xl) the list is not on the end
+  // edge, so drop the reservation. No-op outside a pane (docked panel / page).
+  const inPane = useOptionalPaneNav() != null;
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(true);
@@ -397,6 +403,7 @@ export function WhatsAppReader({
 
       <div className={`flex-1 min-h-0 ${gridClass}`}>
         <div className={`flex flex-col min-h-0 min-w-0 gap-2 ${listVisibility}`}>
+          <div className={`shrink-0${inPane ? " pe-10 @2xl:pe-0" : ""}`}>
           {searchOpen ? (
             <div className="relative shrink-0">
               <Search className="pointer-events-none absolute top-1/2 -translate-y-1/2 start-2.5 h-4 w-4 text-muted-foreground" />
@@ -435,6 +442,7 @@ export function WhatsAppReader({
               </button>
             </div>
           )}
+          </div>
           <div className="min-h-0 flex-1">
             <ThreadList
               threads={displayThreads}
