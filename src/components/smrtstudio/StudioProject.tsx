@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Plus } from "lucide-react";
+import { Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
+import { AudioLineList } from "@/components/smrtvoice/AudioLineList";
 
 type Project = {
   id: string;
@@ -542,6 +543,181 @@ function ConsultationCard({ c, onChanged }: { c: Consultation; onChanged: () => 
  * into a name input and creates a smrtVoice project already linked to this
  * studio project. The full voice pipeline continues in the existing screens.
  */
+type Voice = { uuid: string; name?: string; display_name?: string | null };
+
+/**
+ * Stage 1 (docs/studio-quick-line-plan.md) — the fast path to a single voice
+ * line, right in the main voice tab: pick/create a project, pick a voice from
+ * your list, pick a model (default), type text, Run. No Google Doc, no visible
+ * "script". Posts to /voice/quick-line and shows the produced take with the
+ * standard AudioLineList tools (play / star / download / regenerate).
+ */
+function QuickVoiceLine({
+  studioProjectId,
+  voiceProjects,
+  onCreated,
+}: {
+  studioProjectId: string;
+  voiceProjects: VoiceProject[];
+  onCreated: () => void;
+}) {
+  const t = useTranslations("studioProjects");
+  const [voices, setVoices] = useState<Voice[] | null>(null);
+  const [voicesErr, setVoicesErr] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string>(voiceProjects[0]?.id ?? "__new__");
+  const [newName, setNewName] = useState("");
+  const [newPrefix, setNewPrefix] = useState("");
+  const [voiceId, setVoiceId] = useState("");
+  const [model, setModel] = useState("");
+  const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [resultScriptId, setResultScriptId] = useState<string | null>(null);
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api<{ voices: Voice[] }>("/api/voice/resemble/voices");
+        if (cancelled) return;
+        setVoices(data.voices ?? []);
+        setVoiceId((prev) => prev || data.voices?.[0]?.uuid || "");
+      } catch (e) {
+        if (!cancelled) setVoicesErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const creatingNew = projectId === "__new__";
+  // Prefix is optional here (the backend derives one when absent); validate
+  // only its shape when the user did type something.
+  const prefixOk = newPrefix.trim() === "" || /^[A-Za-z]{1,3}$/.test(newPrefix.trim());
+  const canRun =
+    !!voiceId &&
+    !!text.trim() &&
+    (creatingNew ? !!newName.trim() && prefixOk : !!projectId) &&
+    !submitting;
+
+  const run = async () => {
+    if (inFlight.current || !canRun) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setErr(null);
+    setResultScriptId(null);
+    try {
+      let targetProjectId = projectId;
+      if (creatingNew) {
+        const created = await api<{ voice_project: { id: string } }>(
+          `/api/studio/projects/${studioProjectId}/voice-projects`,
+          { method: "POST", body: { name: newName.trim(), code_prefix: newPrefix.trim() || undefined } },
+        );
+        targetProjectId = created.voice_project.id;
+      }
+      const voice = voices?.find((v) => v.uuid === voiceId);
+      const voiceLabel = voice?.display_name || voice?.name || "";
+      const res = await api<{ script_id: string }>("/api/voice/quick-line", {
+        method: "POST",
+        body: { project_id: targetProjectId, voice_id: voiceId, voice_label: voiceLabel, model, text: text.trim() },
+      });
+      setResultScriptId(res.script_id);
+      setText("");
+      onCreated();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+      inFlight.current = false;
+    }
+  };
+
+  return (
+    <div className="rounded-lg border p-3 space-y-2">
+      <div className="flex items-center gap-1.5 text-sm font-medium">
+        <Zap className="h-4 w-4" /> {t("quickLineTitle")}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className="rounded-md border bg-background px-2 py-1 text-sm"
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          aria-label={t("quickLineProject")}
+        >
+          {voiceProjects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+          <option value="__new__">{t("quickLineNewProject")}</option>
+        </select>
+        {creatingNew && (
+          <>
+            <Input
+              className="h-8 w-40 text-sm"
+              placeholder={t("quickLineNewProjectName")}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <Input
+              className="h-8 w-24 text-sm"
+              placeholder={t("quickLinePrefix")}
+              value={newPrefix}
+              onChange={(e) => setNewPrefix(e.target.value)}
+            />
+          </>
+        )}
+        <select
+          className="rounded-md border bg-background px-2 py-1 text-sm"
+          value={voiceId}
+          onChange={(e) => setVoiceId(e.target.value)}
+          aria-label={t("quickLineVoice")}
+          disabled={!voices}
+        >
+          {!voices && <option value="">…</option>}
+          {(voices ?? []).map((v) => (
+            <option key={v.uuid} value={v.uuid}>
+              {v.display_name || v.name || v.uuid}
+            </option>
+          ))}
+        </select>
+        <select
+          className="rounded-md border bg-background px-2 py-1 text-sm"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          aria-label={t("quickLineModel")}
+        >
+          <option value="">{t("quickLineModelDefault")}</option>
+          <option value="resemble-ultra">resemble-ultra</option>
+          <option value="chatterbox">chatterbox</option>
+          <option value="chatterbox-turbo">chatterbox-turbo</option>
+        </select>
+      </div>
+      <textarea
+        className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+        rows={2}
+        placeholder={t("quickLineTextPlaceholder")}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      {voicesErr && <p className="text-xs text-destructive">{voicesErr}</p>}
+      {err && <p className="text-xs text-destructive">{err}</p>}
+      <div className="flex justify-end">
+        <Button size="sm" onClick={() => void run()} disabled={!canRun}>
+          {submitting ? t("quickLineRunning") : t("quickLineRun")}
+        </Button>
+      </div>
+      {resultScriptId && (
+        <div className="pt-2">
+          <AudioLineList scriptId={resultScriptId} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VoiceCreateToggle({ projectId, onCreated }: { projectId: string; onCreated: () => void }) {
   const t = useTranslations("studioProjects");
   const [open, setOpen] = useState(false);
@@ -727,7 +903,13 @@ export function StudioProject({ projectId }: { projectId: string }) {
         </TabsList>
 
         <TabsContent value="voice">
-          <VoiceCreateToggle projectId={projectId} onCreated={() => void load()} />
+          <QuickVoiceLine
+            studioProjectId={projectId}
+            voiceProjects={voice_projects}
+            onCreated={() => void load()}
+          />
+          <div className="mt-3">
+            <VoiceCreateToggle projectId={projectId} onCreated={() => void load()} />
           {voice_projects.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">{t("voiceEmpty")}</p>
           ) : (
@@ -747,6 +929,7 @@ export function StudioProject({ projectId }: { projectId: string }) {
               ))}
             </ul>
           )}
+          </div>
         </TabsContent>
 
         <TabsContent value="image">

@@ -51,7 +51,10 @@ function toItem(r: MatchRow): ResultItem {
 }
 
 // ── GET /search ──────────────────────────────────────────────────────────────
+const EMPTY_SEARCH = { query: "", answer: null, groups: { settings: [], content: [], claude: [] } };
+
 router.get("/search", requireAuth, requireOrg, async (req: Request, res: Response) => {
+ try {
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   if (!q) {
     return res.json({ query: "", answer: null, groups: { settings: [], content: [], claude: [] } });
@@ -98,6 +101,12 @@ router.get("/search", requireAuth, requireOrg, async (req: Request, res: Respons
 
   const payload = await groupAndAnswer(q, (data ?? []) as MatchRow[], await isSuperAdmin(req.user!), true);
   return res.json(payload);
+ } catch (e) {
+  // Never let the search crash into a 500 the frontend renders as "no results" —
+  // degrade to an empty result set instead.
+  console.error("[search] handler error:", (e as Error).message);
+  return res.status(200).json(EMPTY_SEARCH);
+ }
 });
 
 /** Group rows into the three display buckets, drop admin-only destinations for
@@ -119,12 +128,19 @@ async function groupAndAnswer(
   const content = contentRows.map(toItem);
   const claude = visible.filter((r) => r.source_type === "claude_thread").map(toItem);
 
+  // The answer layer (runOneShot) spawns a subscription process and can take many
+  // seconds — it must NEVER block or break the search response. Bound it hard and
+  // swallow any failure: results always come back fast; the answer is a bonus that
+  // appears only when it's quick.
   let answer: string | null = null;
   if (withAnswer && contentRows.length > 0) {
     const sources: AnswerSource[] = contentRows
       .slice(0, 5)
       .map((r, i) => ({ n: i + 1, title: r.title, snippet: r.snippet }));
-    answer = await answerFromSources(query, sources);
+    answer = await Promise.race([
+      answerFromSources(query, sources).catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+    ]);
   }
 
   return { query, answer, groups: { settings, content, claude } };
