@@ -4585,6 +4585,11 @@
     "createRunDisabled": "Run",
     "createRunDisabledWhy": "Running opens in stage C — once the cost-approval gate is built.",
     "createBasisShortlist": "Catalog rank + recipe (no locked test winner yet)",
-    "createModelLockedWhy": "Choosing another model opens in stage C, together with running"
+    "createModelLockedWhy": "Choosing another model opens in stage C, together with running",
+    "createRunGate": "Clicking shows a cost estimate first — nothing runs without your approval.",
+    "createEstimateCost": "Estimated cost: {usd}. Approve and run?",
+    "createEstimateUnknown": "Cannot be estimated up front (token-priced) — the charge is recorded from real billing. Approve and run?",
+    "createConfirmRun": "Approve & run",
+    "createSubmitted": "Submitted! Run code: {code} — the output appears in the grid when done."
   }
 }

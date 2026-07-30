@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
-import { api } from "@/lib/api/client";
+import { api, ApiError } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,12 +53,26 @@ type Recommendation = {
 /** prompt/seed render as dedicated controls; everything else is schema-driven. */
 const DEDICATED = new Set(["prompt", "seed"]);
 
-export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; onClose: () => void }) {
+type Estimate = { usd: number | null; basis: string };
+
+export function StudioCreateForm({
+  kind, projectId, onClose, onSubmitted,
+}: {
+  kind: "image" | "video";
+  projectId: string;
+  onClose: () => void;
+  onSubmitted?: () => void;
+}) {
   const t = useTranslations("studioProjects");
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
+  // The cost gate (rule 2 in the screen): first click fetches the estimate
+  // and shows it; only the second, explicit confirmation actually submits.
+  const [estimate, setEstimate] = useState<Estimate | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submittedCode, setSubmittedCode] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,6 +99,67 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
   const setValue = useCallback((name: string, v: string) => {
     setValues((prev) => ({ ...prev, [name]: v }));
   }, []);
+
+  // The submit payload: field values typed per the live schema (fal validates
+  // types — a "5" where an integer is due is a 422). Empty values are omitted
+  // so fal's own defaults apply, exactly like the harness.
+  const buildPayload = useCallback(() => {
+    const args: Record<string, unknown> = {};
+    for (const f of fields) {
+      const raw = values[f.name] ?? f.default ?? "";
+      if (raw === "") continue;
+      if (f.type.includes("integer") || f.type.includes("number")) {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) args[f.name] = n;
+      } else if (f.type.includes("boolean")) {
+        args[f.name] = raw === "true";
+      } else {
+        args[f.name] = raw;
+      }
+    }
+    return {
+      studio_project_id: projectId,
+      endpoint_id: rec!.recommended!.endpoint_id,
+      prompt: prompt.trim(),
+      args,
+    };
+  }, [fields, values, projectId, prompt, rec]);
+
+  // First click: POST without cost_approved — the server answers 402 with the
+  // estimate, which IS the cost dialog. Nothing is spent on this call.
+  const requestEstimate = useCallback(async () => {
+    setError(null);
+    try {
+      await api("/api/studio/runs", { method: "POST", body: buildPayload() });
+      // A 2xx here would mean the server ran without approval — treat as a bug.
+      setError("server accepted a run without cost approval — not submitting further");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        const est = (e.body as { estimate?: Estimate } | undefined)?.estimate;
+        setEstimate(est ?? { usd: null, basis: "unknown" });
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [buildPayload]);
+
+  const confirmRun = useCallback(async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { run } = await api<{ run: { code: string } }>("/api/studio/runs", {
+        method: "POST",
+        body: { ...buildPayload(), cost_approved: true },
+      });
+      setSubmittedCode(run.code);
+      setEstimate(null);
+      onSubmitted?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [buildPayload, onSubmitted]);
 
   const renderField = (f: SchemaField) => {
     const value = values[f.name] ?? f.default ?? "";
@@ -201,12 +276,36 @@ export function StudioCreateForm({ kind, onClose }: { kind: "image" | "video"; o
             </details>
           )}
 
-          <div className="flex items-center gap-2 pt-1">
-            <Button size="sm" disabled title={t("createRunDisabledWhy")}>
-              {t("createRunDisabled")}
-            </Button>
-            <span className="text-xs text-muted-foreground">{t("createRunDisabledWhy")}</span>
-          </div>
+          {submittedCode ? (
+            <p className="text-xs text-emerald-600 pt-1">
+              {t("createSubmitted", { code: submittedCode })}
+            </p>
+          ) : estimate ? (
+            /* Rule 2 embodied: the number is on screen and only the explicit
+               second click spends it. */
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2 space-y-2 text-xs">
+              <p className="font-medium">
+                {estimate.usd != null
+                  ? t("createEstimateCost", { usd: `$${estimate.usd.toFixed(3)}` })
+                  : t("createEstimateUnknown")}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void confirmRun()} disabled={submitting}>
+                  {t("createConfirmRun")}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEstimate(null)} disabled={submitting}>
+                  {t("cancel")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 pt-1">
+              <Button size="sm" onClick={() => void requestEstimate()} disabled={submitting || !prompt.trim()}>
+                {t("createRunDisabled")}
+              </Button>
+              <span className="text-xs text-muted-foreground">{t("createRunGate")}</span>
+            </div>
+          )}
         </>
       ))}
     </div>

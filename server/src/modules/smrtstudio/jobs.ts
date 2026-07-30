@@ -18,8 +18,32 @@ import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { db } from "../../db";
 import { sweepToCompletion, SweepError } from "./sweep";
+import { pollSubmittedRuns, settleRun } from "./runner";
 
 const router = Router();
+
+/**
+ * POST /api/studio/jobs/fal-webhook?run=<id>&token=<t> — fal's completion
+ * callback. Registered BEFORE the shared-secret guard on purpose: fal cannot
+ * send x-cron-secret. Auth is the per-run token minted at submit and stored
+ * in the run's meta — a guess must match both a run UUID and its token. The
+ * webhook body is untrusted and IGNORED: we only take the wake-up, then read
+ * status+result from fal's API directly (settleRun), so a forged call can at
+ * worst trigger a read of the real state.
+ */
+router.post("/api/studio/jobs/fal-webhook", async (req: Request, res: Response) => {
+  const runId = String(req.query.run ?? "");
+  const token = String(req.query.token ?? "");
+  if (!runId || !token) return res.status(400).json({ error: "missing run/token" });
+  const { data: run } = await db.from("experiment_runs")
+    .select("id, meta").eq("id", runId).maybeSingle();
+  const expected = (run?.meta as Record<string, unknown> | null)?.webhook_token;
+  if (!run || !expected || expected !== token) {
+    return res.status(404).json({ error: "unknown run" });
+  }
+  await settleRun(runId);
+  res.json({ ok: true });
+});
 
 function secretOk(req: Request): boolean {
   // SMRTBOT_INTERNAL_SECRET is in the chain because it is what Railway
@@ -101,6 +125,20 @@ router.post("/api/studio/jobs/sweep", async (req: Request, res: Response) => {
   }
 
   res.json({ ok: results.every((r) => r.ok), orgs: orgIds.length, results });
+});
+
+/**
+ * POST /api/studio/jobs/poll-runs — the webhook-loss safety net (cron, every
+ * few minutes): sweep runs stuck in `submitted` and settle any that fal has
+ * finished. Idempotent with the webhook; free (status reads only).
+ */
+router.post("/api/studio/jobs/poll-runs", async (_req: Request, res: Response) => {
+  try {
+    const swept = await pollSubmittedRuns();
+    res.json({ ok: true, swept });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 export default router;

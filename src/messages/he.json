@@ -4584,6 +4584,11 @@
     "createRunDisabled": "הרץ",
     "createRunDisabledWhy": "ההרצה נפתחת בשלב C — אחרי ששער אישור-העלות נבנה.",
     "createBasisShortlist": "דירוג הקטלוג + מתכון (אין עדיין מנצח נעול מהבדיקות)",
-    "createModelLockedWhy": "בחירת מודל אחר נפתחת בשלב C, יחד עם ההרצה"
+    "createModelLockedWhy": "בחירת מודל אחר נפתחת בשלב C, יחד עם ההרצה",
+    "createRunGate": "לחיצה מציגה קודם הערכת-עלות — שום דבר לא רץ בלי אישור שלך.",
+    "createEstimateCost": "עלות משוערת: {usd}. לאשר ולהריץ?",
+    "createEstimateUnknown": "לא ניתן לאמוד מראש (תמחור לפי טוקנים) — החיוב יירשם מהחשבון בפועל. לאשר ולהריץ?",
+    "createConfirmRun": "אשר והרץ",
+    "createSubmitted": "נשלח! קוד הרצה: {code} — התוצר יופיע בגריד כשיסתיים."
   }
 }
