@@ -4604,6 +4604,13 @@
     "createEstimateCost": "עלות משוערת: {usd}. לאשר ולהריץ?",
     "createEstimateUnknown": "לא ניתן לאמוד מראש (תמחור לפי טוקנים) — החיוב יירשם מהחשבון בפועל. לאשר ולהריץ?",
     "createConfirmRun": "אשר והרץ",
-    "createSubmitted": "נשלח! קוד הרצה: {code} — התוצר יופיע בגריד כשיסתיים."
+    "createSubmitted": "נשלח! קוד הרצה: {code} — התוצר יופיע בגריד כשיסתיים.",
+    "billingChipTitle": "יתרת הקרדיט ב-fal — לחיצה לפירוט",
+    "billingNotConfigured": "יתרה לא זמינה — FAL_ADMIN_KEY לא מוגדר בשרת",
+    "billingBalance": "יתרה",
+    "billingMonth": "הוצאות fal החודש",
+    "billingTotal": "סה\"כ fal מאז ומעולם",
+    "billingTopUp": "טעינת קרדיט (fal → Billing)",
+    "projectCost": "עלות בפועל: {fal} וידאו/תמונה (fal) · {voice} קול"
   }
 }

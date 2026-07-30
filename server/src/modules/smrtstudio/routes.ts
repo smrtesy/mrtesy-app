@@ -14,7 +14,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { requireAuth, requireOrg, requireApp, isSuperAdmin } from "../../middleware";
+import { requireAuth, requireOrg, requireApp, requireRole, isSuperAdmin } from "../../middleware";
 import { fetchModelSchema } from "./indexer";
 import { runSweep, sweepToCompletion, SweepError } from "./sweep";
 import { MODEL_RECIPES } from "./recipes";
@@ -822,6 +822,85 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
   }
   res.status(201).json({ run: { id: run.id, code, run_status: "submitted", estimate: est } });
 });
+
+/**
+ * Stage D (docs/studio-build-plan.md) — the real-money surface.
+ *
+ * GET /studio/billing — fal credit balance (live, via FAL_ADMIN_KEY) + spend
+ * roll-ups from the ledger. Money is manager information (rule 10; review
+ * finding 9): gated requireRole(owner|admin) on top of the app chain — a
+ * plain member gets 403, and the chip in the UI simply doesn't render.
+ * Degrades loudly: no FAL_ADMIN_KEY → balance null + balance_error
+ * "not_configured", never a silent zero.
+ */
+router.get("/studio/billing",
+  requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const orgId = req.org!.id;
+
+    let balance: { current_balance: number; currency: string } | null = null;
+    let balanceError: string | null = null;
+    const adminKey = process.env.FAL_ADMIN_KEY || "";
+    if (!adminKey) {
+      balanceError = "not_configured";
+    } else {
+      try {
+        const r = await fetch("https://api.fal.ai/v1/account/billing?expand=credits", {
+          headers: { Authorization: `Key ${adminKey}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as { credits?: { current_balance: number; currency: string } };
+        balance = j?.credits ?? null;
+        if (!balance) balanceError = "no_credits_field";
+      } catch (e) {
+        balanceError = e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    // "This month" is the user's month — America/New_York (the repo's TZ
+    // rule), not UTC: on the evening of the 31st in NY a UTC boundary would
+    // already show ~$0. NY midnight on the 1st is 04:00 or 05:00 UTC (DST);
+    // probe which offset puts NY at hour 0.
+    const nyNow = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit",
+    }).formatToParts(new Date());
+    const nyYear = Number(nyNow.find((p) => p.type === "year")?.value);
+    const nyMonth = Number(nyNow.find((p) => p.type === "month")?.value);
+    let monthStart = new Date(Date.UTC(nyYear, nyMonth - 1, 1, 4));
+    const hourInNy = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", hour12: false,
+    }).format(monthStart);
+    if (hourInNy !== "00") monthStart = new Date(Date.UTC(nyYear, nyMonth - 1, 1, 5));
+    const runs = await pageAll<Row>((from, to) =>
+      db.from("experiment_runs").select("studio_project_id, cost_usd, created_at")
+        .eq("org_id", orgId).order("id").range(from, to));
+    if (runs.error) return res.status(500).json({ error: runs.error.message });
+
+    let totalUsd = 0;
+    let monthUsd = 0;
+    const perProject = new Map<string, number>();
+    for (const r of runs.rows) {
+      const c = r.cost_usd == null ? 0 : Number(r.cost_usd);
+      if (!Number.isFinite(c)) continue;
+      totalUsd += c;
+      if (typeof r.created_at === "string" && r.created_at >= monthStart.toISOString()) monthUsd += c;
+      if (r.studio_project_id) {
+        const k = r.studio_project_id as string;
+        perProject.set(k, (perProject.get(k) ?? 0) + c);
+      }
+    }
+    res.json({
+      balance,
+      balance_error: balanceError,
+      fal_total_usd: Math.round(totalUsd * 1000) / 1000,
+      fal_month_usd: Math.round(monthUsd * 1000) / 1000,
+      per_project_fal_usd: Object.fromEntries(
+        [...perProject].map(([k, v]) => [k, Math.round(v * 1000) / 1000]),
+      ),
+      top_up_url: "https://fal.ai/dashboard/billing",
+    });
+  });
 
 /** PATCH /studio/projects/:id — rename / describe / archive. */
 router.patch("/studio/projects/:id", async (req: Request, res: Response) => {

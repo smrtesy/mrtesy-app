@@ -157,10 +157,21 @@ export function StudioProject({ projectId }: { projectId: string }) {
 
   const { project, voice_projects, image_runs, video_runs } = detail;
   const name = locale === "en" && project.name_en ? project.name_en : project.name_he;
+  // Real recorded money, split by engine — fal (image+video runs) vs the
+  // voice engine (Resemble) — because they bill on different accounts.
+  const falUsd = [...image_runs, ...video_runs]
+    .reduce((sum, r) => sum + (r.cost_usd == null ? 0 : Number(r.cost_usd) || 0), 0);
+  const voiceUsd = voice_projects
+    .reduce((sum, v) => sum + (Number(v.total_cost_usd) || 0), 0);
 
   return (
     <div className="mx-auto w-full max-w-5xl p-4 space-y-4">
-      <h1 className="text-lg font-semibold">{name}</h1>
+      <div className="flex items-baseline gap-3">
+        <h1 className="text-lg font-semibold">{name}</h1>
+        <span className="text-xs text-muted-foreground">
+          {t("projectCost", { fal: `$${falUsd.toFixed(2)}`, voice: `$${voiceUsd.toFixed(2)}` })}
+        </span>
+      </div>
 
       <Tabs defaultValue="voice">
         <TabsList>
