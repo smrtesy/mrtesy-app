@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Plus, Zap } from "lucide-react";
+import { ChevronDown, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
 import { AudioLineList } from "@/components/smrtvoice/AudioLineList";
+import { CreateScriptForm } from "@/components/smrtvoice/CreateScriptForm";
 
 type Project = {
   id: string;
@@ -35,6 +36,19 @@ type VoiceProject = {
   total_lines: number;
   completed_lines: number;
   total_cost_usd: number | string;
+};
+
+// One script inside a voice project (folder). Same shape ProjectOverview uses
+// (src/components/smrtvoice/ProjectOverview.tsx) so the unified takes view can
+// list scripts and open each one's AudioLineList inline.
+type ScriptRow = {
+  id: string;
+  seq: number;
+  code: string;
+  name: string | null;
+  status: string;
+  total_lines: number;
+  completed_lines: number;
 };
 
 type Run = {
@@ -845,6 +859,124 @@ function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
   );
 }
 
+/** One linked voice project (folder), collapsible. Expanded, it shows the
+ *  unified takes view — the folder's scripts, each opening its AudioLineList
+ *  inline — plus a Doc→parse entry (CreateScriptForm) and deep links to the
+ *  full voice screens for casting/generation. Compact-UI rule: only the latest
+ *  project is open by default; the rest collapse to a single header row. */
+function VoiceProjectGroup({
+  project, defaultOpen, locale, onChanged,
+}: {
+  project: VoiceProject;
+  defaultOpen: boolean;
+  locale: string;
+  onChanged: () => void;
+}) {
+  const t = useTranslations("studioProjects");
+  const [open, setOpen] = useState(defaultOpen);
+  const [codePrefix, setCodePrefix] = useState<string | null>(null);
+  const [scripts, setScripts] = useState<ScriptRow[] | null>(null);
+  const [scriptsErr, setScriptsErr] = useState<string | null>(null);
+  const [openScriptId, setOpenScriptId] = useState<string | null>(null);
+
+  const loadScripts = useCallback(async () => {
+    setScriptsErr(null);
+    try {
+      // Fetch the folder (for its code_prefix → nextCode) and its scripts in
+      // parallel, exactly like ProjectOverview does.
+      const [{ project: folder }, { scripts: rows }] = await Promise.all([
+        api<{ project: { code_prefix: string | null } }>(`/api/voice/projects/${project.id}`),
+        api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${project.id}/scripts`),
+      ]);
+      setCodePrefix(folder.code_prefix ?? "");
+      setScripts(rows ?? []);
+    } catch (e) {
+      setScriptsErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [project.id]);
+
+  // Load once, the first time this group is opened.
+  useEffect(() => {
+    if (open && scripts === null && scriptsErr === null) void loadScripts();
+  }, [open, scripts, scriptsErr, loadScripts]);
+
+  const nextSeq = (scripts ?? []).reduce((max, s) => Math.max(max, s.seq), 0) + 1;
+  const nextCode = `${codePrefix ?? ""}${nextSeq}`;
+
+  return (
+    <li className="rounded-lg border">
+      <div className="flex items-center justify-between gap-3 p-3">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-start"
+          aria-expanded={open}
+        >
+          <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`} />
+          <span className="truncate font-medium">{project.name}</span>
+        </button>
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            {project.completed_lines}/{project.total_lines} · ${Number(project.total_cost_usd).toFixed(2)} · {project.status}
+          </span>
+          <PaneLink href={`/${locale}/voice/projects/${project.id}`} className="underline hover:text-foreground">
+            {t("voiceOpenFull")}
+          </PaneLink>
+        </span>
+      </div>
+
+      {open && (
+        <div className="space-y-2 border-t p-3">
+          {/* Only after the folder + scripts load do we know the real
+              code_prefix → nextCode; gating avoids briefly showing "1"
+              instead of e.g. "EP1" in the create dialog. */}
+          {scripts !== null && (
+            <CreateScriptForm projectId={project.id} nextCode={nextCode} onCreated={() => { setScripts(null); setScriptsErr(null); onChanged(); }} />
+          )}
+
+          {scriptsErr && <p className="text-xs text-destructive">{scriptsErr}</p>}
+          {scripts === null && !scriptsErr && <p className="text-xs text-muted-foreground">…</p>}
+          {scripts !== null && scripts.length === 0 && (
+            <p className="py-2 text-sm text-muted-foreground">{t("voiceScriptsEmpty")}</p>
+          )}
+
+          {(scripts ?? []).map((s) => {
+            const label = s.name === "__quick__" ? t("quickScriptLabel") : (s.name || s.code);
+            const isOpen = openScriptId === s.id;
+            return (
+              <div key={s.id} className="rounded-md border">
+                <div className="flex items-center justify-between gap-3 p-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpenScriptId(isOpen ? null : s.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-start text-sm"
+                    aria-expanded={isOpen}
+                  >
+                    <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`} />
+                    <span className="font-mono text-xs">{s.code}</span>
+                    <span className="truncate">{label}</span>
+                  </button>
+                  <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                    <span>{s.completed_lines}/{s.total_lines} · {s.status}</span>
+                    <PaneLink href={`/${locale}/voice/scripts/${s.id}`} className="underline hover:text-foreground">
+                      {t("voiceScriptOpenFull")}
+                    </PaneLink>
+                  </span>
+                </div>
+                {isOpen && (
+                  <div className="border-t p-2">
+                    <AudioLineList scriptId={s.id} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </li>
+  );
+}
+
 export function StudioProject({ projectId }: { projectId: string }) {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
@@ -913,19 +1045,15 @@ export function StudioProject({ projectId }: { projectId: string }) {
           {voice_projects.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">{t("voiceEmpty")}</p>
           ) : (
-            <ul className="divide-y rounded-lg border">
-              {voice_projects.map((v) => (
-                <li key={v.id}>
-                  <PaneLink
-                    href={`/${locale}/voice/projects/${v.id}`}
-                    className="flex items-center justify-between gap-3 p-3 hover:bg-accent/50 transition-colors"
-                  >
-                    <span className="truncate font-medium">{v.name}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {v.completed_lines}/{v.total_lines} · ${Number(v.total_cost_usd).toFixed(2)} · {v.status}
-                    </span>
-                  </PaneLink>
-                </li>
+            <ul className="space-y-2">
+              {voice_projects.map((v, i) => (
+                <VoiceProjectGroup
+                  key={v.id}
+                  project={v}
+                  defaultOpen={i === 0}
+                  locale={locale}
+                  onChanged={() => void load()}
+                />
               ))}
             </ul>
           )}
