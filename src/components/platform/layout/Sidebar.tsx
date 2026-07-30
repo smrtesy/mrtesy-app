@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   Bot,
@@ -145,6 +145,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtVoice = enabledApps.includes("smrtvoice");
   const t = useTranslations("nav");
   const pathname = usePathname();
+  const router = useRouter();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
   const [manualTaskOpen, setManualTaskOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -528,7 +529,10 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 href={`${basePath}/claude`}
                 onClick={(e) => {
                   e.preventDefault();
-                  openTab(`${basePath}/claude`, t("claude"));
+                  // ?new=<timestamp> → ClaudeChat resets to a blank chat. Fresh
+                  // value per click, because openTab dedupes the tab by path and
+                  // only swaps its href — a repeated value would be ignored.
+                  openTab(`${basePath}/claude?new=${Date.now()}`, t("claude"));
                 }}
                 className={cn(
                   buttonVariants({ variant: "default" }),
@@ -617,6 +621,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             // tap would appear to do nothing.
             <Link
               href={`${basePath}/claude`}
+              // Timestamp minted at TAP time (not render — an SSR'd Date.now()
+              // href would hydration-mismatch): every tap lands on a new chat,
+              // via the ?new handler in ClaudeChat.
+              onClick={(e) => {
+                e.preventDefault();
+                router.push(`${basePath}/claude?new=${Date.now()}`);
+              }}
               data-task-fab
               aria-label={t("claude")}
               className={cn(

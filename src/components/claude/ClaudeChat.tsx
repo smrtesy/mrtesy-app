@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { useScreenSearchParams } from "@/lib/panes/nav";
+import { useScreenPathname, useScreenRouter, useScreenSearchParams } from "@/lib/panes/nav";
 import {
   ChevronDown,
   ChevronRight,
@@ -216,6 +216,32 @@ export function ClaudeChat() {
   // Continue-where-you-left-off guard, declared here because the seed effect below
   // must be able to claim it BEFORE the auto-open effect fires.
   const autoOpenedRef = useRef(false);
+
+  // The Claude button opens a NEW chat: it navigates to /claude?new=<timestamp>,
+  // and this effect resets to the blank composer. Keyed on the VALUE so every
+  // click is fresh (openTab dedupes the tab by path and only updates its href —
+  // a static param would fire once and never again), and deliberately NOT
+  // touching deepLinkedRef, so a later ?thread=<id> deep-link (corrections'
+  // "continue with Claude") still opens its conversation.
+  const newParamRef = useRef<string | null>(null);
+  const screenRouter = useScreenRouter();
+  const screenPathname = useScreenPathname();
+  useEffect(() => {
+    const fresh = screenSearch.get("new");
+    if (!fresh || fresh === newParamRef.current) return;
+    newParamRef.current = fresh;
+    autoOpenedRef.current = true; // suppress open-latest on arrival
+    setActiveId(null);
+    activeIdRef.current = null;
+    setTurns([]);
+    // Consume the param OUT of the URL: it is a one-shot command, and left in
+    // place it persists (workspace localStorage / mobile history), replaying
+    // "blank chat" on every reload and burying continue-where-you-left-off.
+    const params = new URLSearchParams(screenSearch.toString());
+    params.delete("new");
+    const q = params.toString();
+    screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
+  }, [screenSearch, screenRouter, screenPathname]);
 
   /** The inspect-mode seed: the user marked an element somewhere in the app and
    *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
