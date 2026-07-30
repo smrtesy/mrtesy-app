@@ -106,7 +106,7 @@ export function SystemStatusStrip() {
 
   return (
     <div
-      className="flex items-center gap-3 px-1 pt-0.5 text-[10px] text-muted-foreground"
+      className="flex items-center justify-center gap-3 px-1 pt-0.5 text-[10px] text-muted-foreground"
       aria-label={t("deploy.label")}
     >
       <Dot label="F" full={t("deploy.frontend")} s={data.vercel} />
