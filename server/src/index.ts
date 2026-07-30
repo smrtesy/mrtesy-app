@@ -22,7 +22,8 @@ import { db } from "./db";
 import quickActionRouter from "./routes/quick-action";
 import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
-import platformRouter from "./modules/platform";
+import platformRouter, { searchCronRouter } from "./modules/platform";
+import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
 import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
@@ -186,6 +187,7 @@ app.use(dailyReportJobsRouter);
 // smrtInfo batch extraction — x-cron-secret guarded (the data-population runner
 // calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", smrtinfoCronRouter);
+app.use("/api", searchCronRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
@@ -277,6 +279,12 @@ function ensureChromium(): void {
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
   ensureChromium();
+  // Seed the global-search navigation destinations so settings/pages search
+  // works immediately after a deploy. Best-effort, non-blocking; skips when
+  // already seeded (see ensureDestinationsIndexed).
+  void ensureDestinationsIndexed().catch((e) =>
+    console.error("[startup] ensureDestinationsIndexed failed:", e),
+  );
   // Resume any unofficial WhatsApp (Baileys) connections that were already
   // paired. Best-effort — a failure here must never crash boot. Assumes a
   // single replica (two sockets on one number get logged out by WhatsApp).

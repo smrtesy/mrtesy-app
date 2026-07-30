@@ -57,13 +57,20 @@ type Detail = {
 
 /** Quiet entry point (house compact-UI rule): a small + button; the full
  *  creation form expands only on click and collapses back to nothing. */
-function CreateToggle({ kind }: { kind: "image" | "video" }) {
+function CreateToggle({
+  kind, projectId, onSubmitted,
+}: { kind: "image" | "video"; projectId: string; onSubmitted: () => void }) {
   const t = useTranslations("studioProjects");
   const [open, setOpen] = useState(false);
   return (
     <div className="mb-3">
       {open ? (
-        <StudioCreateForm kind={kind} onClose={() => setOpen(false)} />
+        <StudioCreateForm
+          kind={kind}
+          projectId={projectId}
+          onClose={() => setOpen(false)}
+          onSubmitted={onSubmitted}
+        />
       ) : (
         <Button
           size="sm"
@@ -185,12 +192,12 @@ export function StudioProject({ projectId }: { projectId: string }) {
         </TabsContent>
 
         <TabsContent value="image">
-          <CreateToggle kind="image" />
+          <CreateToggle kind="image" projectId={projectId} onSubmitted={() => void load()} />
           <RunGrid runs={image_runs} empty={t("imageEmpty")} />
         </TabsContent>
 
         <TabsContent value="video">
-          <CreateToggle kind="video" />
+          <CreateToggle kind="video" projectId={projectId} onSubmitted={() => void load()} />
           <RunGrid runs={video_runs} empty={t("videoEmpty")} />
         </TabsContent>
       </Tabs>

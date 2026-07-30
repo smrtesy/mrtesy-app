@@ -182,6 +182,19 @@
     "emptyTitle": "No open tabs",
     "emptyHint": "Pick a screen from the menu to open a tab"
   },
+  "searchPage": {
+    "title": "Search everything",
+    "placeholder": "What are you looking for? e.g. Shifra's medical insurance",
+    "searching": "Searching…",
+    "answerLabel": "Answer",
+    "answerHint": "Generated from the sources below — click to verify.",
+    "groupSettings": "Settings & pages",
+    "groupContent": "Suggestions, tasks & info",
+    "groupClaude": "Claude conversations",
+    "empty": "No results found.",
+    "emptyHint": "Try different wording, or make sure the index is built.",
+    "external": "Open source"
+  },
   "nav": {
     "account": "Account",
     "dailyReport": "Daily report",
@@ -203,6 +216,8 @@
     "sectionViews": "Views",
     "newTask": "New Task",
     "update": "Update",
+    "search": "Search",
+    "searchPlaceholder": "Search everything…",
     "transcriptionExperiment": "Transcription Experiment",
     "inbox": "Inbox",
     "inboxIncoming": "Incoming",
@@ -4594,6 +4609,11 @@
     "createRunDisabled": "Run",
     "createRunDisabledWhy": "Running opens in stage C — once the cost-approval gate is built.",
     "createBasisShortlist": "Catalog rank + recipe (no locked test winner yet)",
-    "createModelLockedWhy": "Choosing another model opens in stage C, together with running"
+    "createModelLockedWhy": "Choosing another model opens in stage C, together with running",
+    "createRunGate": "Clicking shows a cost estimate first — nothing runs without your approval.",
+    "createEstimateCost": "Estimated cost: {usd}. Approve and run?",
+    "createEstimateUnknown": "Cannot be estimated up front (token-priced) — the charge is recorded from real billing. Approve and run?",
+    "createConfirmRun": "Approve & run",
+    "createSubmitted": "Submitted! Run code: {code} — the output appears in the grid when done."
   }
 }
