@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
-import { useScreenPathname, useScreenRouter, useScreenSearchParams } from "@/lib/panes/nav";
+import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
   ChevronDown,
   ChevronRight,
@@ -160,6 +160,10 @@ export function ClaudeChat() {
   const [loading, setLoading] = useState(true);
   const [listOpen, setListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Inside a tabs-workspace pane the floating grip (TabsWorkspace PaneControls)
+  // sits in the top-inline-end corner; reserve room so the end-most header
+  // button (settings) clears it. No reserve on the standalone /claude route.
+  const inPane = useOptionalPaneNav() != null;
   const [renaming, setRenaming] = useState<string | null>(null);
   /** The free-text task router ("עדכון"). It lost its sidebar button to the chat,
    *  so it lives here — inside the collapsed panel, not as new permanent chrome. */
@@ -688,7 +692,7 @@ export function ClaudeChat() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Header: the title, and two quiet buttons. Everything configurable is
             behind the second one. */}
-        <div className="flex items-center gap-1 border-b p-2">
+        <div className={cn("flex items-center gap-1 border-b p-2", inPane && "pe-10")}>
           <Button
             size="sm"
             variant="ghost"
