@@ -19,7 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
 import { AudioLineList } from "@/components/smrtvoice/AudioLineList";
 import { CreateScriptForm } from "@/components/smrtvoice/CreateScriptForm";
-import { ScriptCasting } from "@/components/smrtvoice/ScriptCasting";
+import { ScriptOverview } from "@/components/smrtvoice/ScriptOverview";
 
 type Project = {
   id: string;
@@ -807,20 +807,12 @@ function VoiceContainer({ container, onChanged }: {
               </span>
             </div>
             {isOpen && (
-              <div className="border-t p-2 space-y-4">
-                {/* Casting inline, right where the script opens — no need to
-                    leave for the full screen just to assign voices. Only
-                    meaningful once the script is parsed (draft has no speakers). */}
-                {s.status !== "draft" && (
-                  <div className="space-y-2">
-                    <h4 className="text-xs font-semibold text-muted-foreground">{t("voiceCastingHeading")}</h4>
-                    <ScriptCasting scriptId={s.id} />
-                  </div>
-                )}
-                <div className="space-y-2">
-                  <h4 className="text-xs font-semibold text-muted-foreground">{t("voiceTakesHeading")}</h4>
-                  <AudioLineList scriptId={s.id} />
-                </div>
+              <div className="border-t p-3">
+                {/* The full production surface for the script, inline: model +
+                    LLM-emotion selects (auto = the per-model system default),
+                    parse, generate/stop, casting, and the takes — the same
+                    ScriptOverview the standalone screen renders, header hidden. */}
+                <ScriptOverview scriptId={s.id} embedded />
               </div>
             )}
           </div>
