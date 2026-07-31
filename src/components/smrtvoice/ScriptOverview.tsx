@@ -277,6 +277,10 @@ export function ScriptOverview({ scriptId, embedded = false }: { scriptId: strin
             <option value="resemble-ultra">resemble-ultra</option>
             <option value="chatterbox">chatterbox</option>
             <option value="chatterbox-turbo">chatterbox-turbo</option>
+            {/* MiniMax (fal) — selecting one switches the casting picker below to
+                MiniMax voices (see providerForModel / ScriptCasting). */}
+            <option value="minimax-2.8-hd">minimax-2.8-hd</option>
+            <option value="minimax-2.8-turbo">minimax-2.8-turbo</option>
           </select>
           {/* Per-script emotion toggle. Auto = off for Chatterbox, on for ultra. */}
           <select
@@ -381,7 +385,7 @@ export function ScriptOverview({ scriptId, embedded = false }: { scriptId: strin
 
       {/* Casting — only meaningful once parsed */}
       {parsed ? (
-        <ScriptCasting scriptId={scriptId} />
+        <ScriptCasting scriptId={scriptId} selectedModel={script.resemble_model} />
       ) : (
         <p className="text-sm text-muted-foreground">{t("parseFirst")}</p>
       )}

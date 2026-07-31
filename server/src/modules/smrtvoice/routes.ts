@@ -109,6 +109,13 @@ const DEFAULT_RESEMBLE_MODEL = "resemble-ultra";
 // (fal) adapter.
 const MINIMAX_DEFAULT_MODEL = "minimax-2.8-hd";
 
+// Provider of a model id, by the same prefix rule the engine routes on
+// (voice-engine api/voices.py: "minimax-*" → the MiniMax fal adapter). Kept as
+// a one-liner so the model→provider rule is greppable and identical everywhere.
+function isMiniMaxModel(model?: string | null): boolean {
+  return !!model && model.toLowerCase().startsWith("minimax");
+}
+
 /**
  * Build the speaker_map sent to the engine from a script's casting. A speaker
  * cast to several characters (its primary character_id plus extra_character_ids)
@@ -177,10 +184,27 @@ async function buildSpeakerMap(
     .select("default_resemble_model")
     .eq("org_id", orgId)
     .maybeSingle();
-  // Precedence: per-script override → org default → engine default. The
-  // per-character model was removed (characters inherit), so the script-level
-  // choice is the effective model for the whole script.
-  const defaultModel = scriptModel ?? orgSettings?.default_resemble_model ?? DEFAULT_RESEMBLE_MODEL;
+  // Provider is a property of the VOICE, not the script, so the effective model
+  // is resolved per provider — a script-level model only governs the provider it
+  // belongs to, and never poisons the other:
+  //   • resembleModel — for Resemble voices. A minimax-* script override does
+  //     NOT apply to Resemble (it would route a Resemble voice id to fal), so it
+  //     is ignored here and we fall back to the org/engine Resemble default.
+  //   • miniMaxModel — for MiniMax voices. Honors a minimax-* script override
+  //     (lets the user pick 2.8-hd vs 2.8-turbo), else the MiniMax default.
+  // Precedence within each provider: per-script override → org default → engine
+  // default. (The per-character model was removed; characters inherit.)
+  const scriptModelIsMiniMax = isMiniMaxModel(scriptModel);
+  const orgDefaultModel = orgSettings?.default_resemble_model;
+  // resembleModel is guaranteed to be a Resemble model: a minimax-* value from
+  // either the script override or a legacy org-default row is rejected here and
+  // falls through to the engine's Resemble default, so a Resemble voice is never
+  // routed to the MiniMax adapter.
+  const resembleModel =
+    (scriptModel && !scriptModelIsMiniMax ? scriptModel : null) ??
+    (orgDefaultModel && !isMiniMaxModel(orgDefaultModel) ? orgDefaultModel : null) ??
+    DEFAULT_RESEMBLE_MODEL;
+  const miniMaxModel = scriptModelIsMiniMax ? scriptModel! : MINIMAX_DEFAULT_MODEL;
 
   const toVoice = (id: string): SpeakerVoice | null => {
     const ch = charMap.get(id);
@@ -192,10 +216,10 @@ async function buildSpeakerMap(
       // must NOT win, or it would both defeat the per-script override and
       // desync the emotion decision (which is computed from the same effective
       // model). The per-character model is vestigial; the script/org choice
-      // governs. ONE exception: a MiniMax-provider voice can only render on
-      // MiniMax (its id is a MiniMax custom_voice_id, meaningless to
-      // Resemble), so the provider forces its model per voice.
-      model: ch.voice_provider === "minimax" ? MINIMAX_DEFAULT_MODEL : defaultModel,
+      // governs. A MiniMax-provider voice can only render on MiniMax (its id is
+      // a MiniMax custom_voice_id, meaningless to Resemble), so it takes the
+      // MiniMax model; every other voice takes the Resemble model.
+      model: ch.voice_provider === "minimax" ? miniMaxModel : resembleModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -210,7 +234,9 @@ async function buildSpeakerMap(
     const primary: SpeakerVoice | null = c.character_id
       ? toVoice(c.character_id)
       : c.resemble_voice_id
-        ? { resemble_voice_id: c.resemble_voice_id, model: defaultModel, language: fallbackLang }
+        ? // A directly-cast voice id (no character row) is a Resemble stock/
+          // library voice — those are always Resemble, so it takes resembleModel.
+          { resemble_voice_id: c.resemble_voice_id, model: resembleModel, language: fallbackLang }
         : null;
     if (!primary) continue;
     const extras = ((c.extra_character_ids ?? []) as string[])
@@ -1208,7 +1234,21 @@ const SCRIPT_UPDATABLE = new Set([
 // The models the per-script override may select. null clears the override
 // (inherit the org default). Anything else is rejected so a typo can't silently
 // route a script to a non-existent model.
-const SCRIPT_MODEL_CHOICES = new Set(["resemble-ultra", "chatterbox", "chatterbox-turbo"]);
+// Resemble-family models only. This is the valid set for the ORG default
+// (`default_resemble_model`), which governs Resemble voices — a MiniMax model
+// must never land here or every Resemble voice in the org would be routed to
+// the MiniMax adapter with a Resemble voice id.
+const RESEMBLE_MODEL_CHOICES = new Set(["resemble-ultra", "chatterbox", "chatterbox-turbo"]);
+// The models the per-SCRIPT override may select. Adds the MiniMax (fal) models:
+// selecting one switches the script to the MiniMax provider and the casting
+// picker then offers MiniMax voices. See isMiniMaxModel / the per-provider model
+// split in buildSpeakerMap. (Resemble voices in such a script still get a
+// Resemble model — the MiniMax choice only governs MiniMax voices.)
+const SCRIPT_MODEL_CHOICES = new Set([
+  ...RESEMBLE_MODEL_CHOICES,
+  "minimax-2.8-hd",
+  "minimax-2.8-turbo",
+]);
 
 // Resolve whether emotion processing runs for a script. An explicit per-script
 // choice wins; otherwise auto by model — Chatterbox defaults OFF (no SSML; the
@@ -3216,10 +3256,10 @@ router.patch(
     if (
       "default_resemble_model" in updates &&
       updates.default_resemble_model !== null &&
-      !SCRIPT_MODEL_CHOICES.has(updates.default_resemble_model as string)
+      !RESEMBLE_MODEL_CHOICES.has(updates.default_resemble_model as string)
     ) {
       return res.status(400).json({
-        error: "default_resemble_model must be null or one of: " + [...SCRIPT_MODEL_CHOICES].join(", "),
+        error: "default_resemble_model must be null or one of: " + [...RESEMBLE_MODEL_CHOICES].join(", "),
       });
     }
 

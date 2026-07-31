@@ -140,6 +140,7 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
       <VoiceCloneUploader
         characterId={characterId}
         hasExistingVoice={!!character.resemble_voice_id}
+        voiceProvider={character.voice_provider}
         onCloned={refresh}
       />
     </div>

@@ -15,6 +15,10 @@ import { DriveFolderPicker } from "./DriveFolderPicker";
 interface Props {
   characterId: string;
   hasExistingVoice: boolean;
+  // The character's voice provider. MiniMax clones return ready immediately
+  // (no Ultra training phase), so the progress panel drops the "training" step
+  // for them — see the step arrays in the progress indicator below.
+  voiceProvider?: "resemble" | "minimax" | null;
   onCloned?: (voiceId: string) => void;
 }
 
@@ -41,7 +45,7 @@ interface DriveFile {
   size?: string;
 }
 
-export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: Props) {
+export function VoiceCloneUploader({ characterId, hasExistingVoice, voiceProvider, onCloned }: Props) {
   const t = useTranslations("smrtVoice.cloneUploader");
   const [mode, setMode] = useState<Mode>("upload");
   const [files, setFiles] = useState<File[]>([]);
@@ -335,15 +339,27 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, onCloned }: 
         {/* Clone progress indicator */}
         {phase !== "idle" && (
           <div className="rounded-md border p-3 space-y-2">
-            {(flow === "upload"
-              ? (["uploading", "processing", "training", "ready"] as Phase[])
-              : (["processing", "training", "ready"] as Phase[])
-            ).map((step) => {
+            {(() => {
+              // MiniMax clones come back ready immediately — there is no Ultra
+              // training phase to poll, so drop the "training" step for them.
+              const isMiniMax = voiceProvider === "minimax";
+              const uploadSteps: Phase[] = isMiniMax
+                ? ["uploading", "processing", "ready"]
+                : ["uploading", "processing", "training", "ready"];
+              const driveSteps: Phase[] = isMiniMax
+                ? ["processing", "ready"]
+                : ["processing", "training", "ready"];
+              return flow === "upload" ? uploadSteps : driveSteps;
+            })().map((step) => {
               const order: Phase[] = ["idle", "uploading", "processing", "training", "ready"];
               const cur = order.indexOf(phase);
               const idx = order.indexOf(step);
-              const done = idx < cur;
-              const active = idx === cur;
+              // "ready" is the terminal phase: once reached, every step is done
+              // (a check), and nothing spins. Without the `phase === "ready"`
+              // clause the last step had idx === cur (active) forever, so its
+              // spinner never resolved even though the clone was done.
+              const done = idx < cur || phase === "ready";
+              const active = idx === cur && phase !== "ready";
               const label =
                 step === "uploading"
                   ? `${t("stepUpload")}${flow === "upload" && files.length ? ` (${uploaded}/${files.length})` : ""}`
