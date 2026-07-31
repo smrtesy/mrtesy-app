@@ -4,6 +4,7 @@ import { RTLProvider } from "@/components/RTLProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MergeJobShell } from "@/components/MergeJobShell";
 import { PWAInstallPrompt } from "@/components/pwa/PWAInstallPrompt";
+import { SystemMessagesRecorder } from "@/components/platform/layout/SystemMessagesRecorder";
 import { Toaster } from "sonner";
 
 export default async function LocaleLayout({
@@ -28,7 +29,12 @@ export default async function LocaleLayout({
             {children}
           </MergeJobShell>
           <PWAInstallPrompt />
-          <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
+          {/* duration: system messages stay 10s before auto-closing (user standing
+              preference, 2026-07). Applies to every toast.* call — none override it.
+              The undo countdown toast is unaffected (duration: Infinity, own 5s ring). */}
+          <Toaster position={dir === "rtl" ? "top-left" : "top-right"} duration={10_000} />
+          {/* Archives every toast shown into the sidebar bell (SystemMessagesBell). */}
+          <SystemMessagesRecorder />
         </TooltipProvider>
       </RTLProvider>
     </NextIntlClientProvider>

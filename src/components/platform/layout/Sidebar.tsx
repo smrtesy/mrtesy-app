@@ -39,6 +39,7 @@ import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
 import { BrandWordmark } from "@/components/platform/branding/BrandWordmark";
 import { SystemStatusStrip } from "@/components/platform/layout/SystemStatusStrip";
+import { SystemMessagesBell } from "@/components/platform/layout/SystemMessagesBell";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
 import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
@@ -563,8 +564,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
               />
             )}
             {/* General system status (frontend / backend / database) — one quiet row
-                under the Claude button. Admin-only: it reads a super-admin endpoint. */}
-            {isAdmin && <SystemStatusStrip />}
+                under the Claude button. Admin-only: it reads a super-admin endpoint.
+                Next to it: the system-messages bell (everyone — it reads a local,
+                client-side archive; only its send-to-Claude action is admin-gated). */}
+            <div className="flex items-center justify-center gap-2">
+              {isAdmin && <SystemStatusStrip />}
+              <SystemMessagesBell isAdmin={isAdmin} />
+            </div>
           </div>
         )}
       </aside>
