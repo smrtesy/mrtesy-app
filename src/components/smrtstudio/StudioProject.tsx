@@ -31,6 +31,7 @@ type Project = {
 type VoiceProject = {
   id: string;
   name: string;
+  code_prefix: string | null;
   status: string;
   total_lines: number;
   completed_lines: number;
@@ -569,8 +570,8 @@ function QuickVoiceLine({
   voiceProjectId,
   onCreated,
 }: {
-  // The one voice container of the studio project (resolved by VoiceTab). No
-  // user-facing "voice project" pick — the studio project is the only unit.
+  // The voice container this quick line belongs to (one of the studio
+  // project's containers, passed down by VoiceContainer).
   voiceProjectId: string;
   onCreated: () => void;
 }) {
@@ -725,62 +726,43 @@ function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
 }
 
 /**
- * The voice tab of a studio project. There is NO user-facing "voice project":
- * the studio project is the only unit (docs/studio-hierarchy-plan.md). This
- * resolves the studio project's single hidden voice container
- * (GET .../voice-project, created on first use) and shows its content directly —
- * quick line + Doc→parse creation + the scripts, each opening its AudioLineList
+ * One voice container (folder) inside a studio project: its quick-line +
+ * Doc→parse creation forms and its scripts, each opening its AudioLineList
  * inline. Casting/generation for Doc scripts still opens the full voice screen.
  */
-function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onChanged: () => void }) {
+function VoiceContainer({ container, onChanged }: {
+  container: { id: string; name: string; code_prefix: string | null };
+  onChanged: () => void;
+}) {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
-  const [folder, setFolder] = useState<{ id: string; code_prefix: string | null } | null>(null);
-  const [folderErr, setFolderErr] = useState<string | null>(null);
   const [scripts, setScripts] = useState<ScriptRow[] | null>(null);
   const [scriptsErr, setScriptsErr] = useState<string | null>(null);
   const [openScriptId, setOpenScriptId] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { voice_project } = await api<{ voice_project: { id: string; code_prefix: string | null } }>(
-          `/api/studio/projects/${studioProjectId}/voice-project`, { method: "POST" });
-        if (!cancelled) setFolder(voice_project);
-      } catch (e) {
-        if (!cancelled) setFolderErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [studioProjectId]);
-
-  const loadScripts = useCallback(async (folderId: string) => {
+  const loadScripts = useCallback(async () => {
     setScriptsErr(null);
     try {
-      const { scripts: rows } = await api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${folderId}/scripts`);
+      const { scripts: rows } = await api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${container.id}/scripts`);
       setScripts(rows ?? []);
     } catch (e) {
       setScriptsErr(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [container.id]);
 
-  useEffect(() => { if (folder) void loadScripts(folder.id); }, [folder, loadScripts]);
-
-  if (folderErr) return <p className="text-sm text-destructive">{folderErr}</p>;
-  if (!folder) return <p className="text-sm text-muted-foreground py-4">…</p>;
+  useEffect(() => { void loadScripts(); }, [loadScripts]);
 
   const nextSeq = (scripts ?? []).reduce((max, s) => Math.max(max, s.seq), 0) + 1;
-  const nextCode = `${folder.code_prefix ?? ""}${nextSeq}`;
-  const refresh = () => { void loadScripts(folder.id); onChanged(); };
+  const nextCode = `${container.code_prefix ?? ""}${nextSeq}`;
+  const refresh = () => { void loadScripts(); onChanged(); };
 
   return (
     <div className="space-y-3">
-      <QuickVoiceLine voiceProjectId={folder.id} onCreated={refresh} />
+      <QuickVoiceLine voiceProjectId={container.id} onCreated={refresh} />
 
       {/* Doc→parse. Gated on loaded scripts so nextCode reflects the real prefix. */}
       {scripts !== null && (
-        <CreateScriptForm projectId={folder.id} nextCode={nextCode} onCreated={refresh} />
+        <CreateScriptForm projectId={container.id} nextCode={nextCode} onCreated={refresh} />
       )}
 
       {scriptsErr && <p className="text-xs text-destructive">{scriptsErr}</p>}
@@ -820,6 +802,66 @@ function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onC
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * The voice tab of a studio project. A studio project may hold MORE THAN ONE
+ * voice container (legacy projects grouped their work into separate folders —
+ * e.g. Hebrew vs English). Show ALL of the project's containers, each with its
+ * scripts, so nothing is hidden. When a project has no container yet, ensure
+ * the single hidden default (POST .../voice-project) and reload. Container
+ * headers appear only when there are 2+ — a fresh single-container project
+ * still reads as "the project is the only unit" (docs/studio-hierarchy-plan.md).
+ */
+function VoiceTab({ containers, studioProjectId, onChanged }: {
+  containers: VoiceProject[];
+  studioProjectId: string;
+  onChanged: () => void;
+}) {
+  const [ensureErr, setEnsureErr] = useState<string | null>(null);
+  // Fire the ensure-POST at most once per mount. Without this, `onChanged`'s
+  // changing identity (an inline arrow in the parent) re-runs the effect while
+  // the first POST is still in flight, and since there is no unique index on
+  // (org_id, studio_project_id) two POSTs race into two hidden containers
+  // (StrictMode reproduces this on mount). The ref makes it idempotent.
+  const ensured = useRef(false);
+
+  // Only ensure a default container when the project truly has none yet.
+  useEffect(() => {
+    if (containers.length > 0 || ensured.current) return;
+    ensured.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await api(`/api/studio/projects/${studioProjectId}/voice-project`, { method: "POST" });
+        if (!cancelled) onChanged();
+      } catch (e) {
+        if (!cancelled) { ensured.current = false; setEnsureErr(e instanceof Error ? e.message : String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [containers.length, studioProjectId, onChanged]);
+
+  if (ensureErr) return <p className="text-sm text-destructive">{ensureErr}</p>;
+  if (containers.length === 0) return <p className="text-sm text-muted-foreground py-4">…</p>;
+
+  const showHeaders = containers.length > 1;
+
+  return (
+    <div className="space-y-5">
+      {containers.map((c) => (
+        <div key={c.id} className={showHeaders ? "space-y-2" : ""}>
+          {showHeaders && (
+            <h3 className="text-sm font-semibold text-muted-foreground">{c.name}</h3>
+          )}
+          <VoiceContainer
+            container={{ id: c.id, name: c.name, code_prefix: c.code_prefix }}
+            onChanged={onChanged}
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -890,7 +932,11 @@ export function StudioProject({ projectId, embedded = false }: { projectId: stri
         </TabsList>
 
         <TabsContent value="voice">
-          <VoiceTab studioProjectId={projectId} onChanged={() => void load()} />
+          <VoiceTab
+            containers={voice_projects}
+            studioProjectId={projectId}
+            onChanged={() => void load()}
+          />
         </TabsContent>
 
         <TabsContent value="image">
