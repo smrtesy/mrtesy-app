@@ -341,6 +341,13 @@ still has no tokens it simply doesn't run — harmless — and the next hour ret
 
 ## Push target — main by default
 
+**Shared across all three repos** (`mrtesy-app`, `video-lab`, `voice-engine`):
+this push & merge policy is kept in sync — a change to it in one repo is
+mirrored in the other two in the same effort, so all three stay structurally
+identical. Each repo adapts only the platform-specific parts: the build/test
+command and the deploy-verify method (Vercel `/api/deploy-info` here; Railway
+`/health` in voice-engine; none in video-lab, which has no production deploy).
+
 The user has standing authorization to push fixes directly to `main` once the
 pre-push protocol (below) is clean. Workflow on a feature branch is:
 

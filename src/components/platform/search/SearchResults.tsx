@@ -34,12 +34,12 @@ function ResultRow({ item, locale }: { item: ResultItem; locale: string }) {
   const isExternal = /^https?:\/\//i.test(item.url);
 
   const body = (
-    <>
-      <div className="font-medium truncate">{item.title}</div>
+    <div className="min-w-0 flex-1">
+      <div className="text-sm font-medium truncate">{item.title}</div>
       {item.snippet && (
-        <div className="text-sm text-muted-foreground line-clamp-2">{item.snippet}</div>
+        <div className="text-xs text-muted-foreground line-clamp-2">{item.snippet}</div>
       )}
-    </>
+    </div>
   );
 
   const cls =
@@ -64,17 +64,35 @@ function ResultRow({ item, locale }: { item: ResultItem; locale: string }) {
   );
 }
 
+// Cap each group so a broad query (e.g. a common word like "סודות", which
+// semantically matches many messages) doesn't flood the screen. Expand on click.
+const GROUP_CAP = 8;
+
 function Group({ titleKey, items, locale }: { titleKey: string; items: ResultItem[]; locale: string }) {
   const t = useTranslations("searchPage");
+  const [expanded, setExpanded] = useState(false);
   if (items.length === 0) return null;
+  const shown = expanded ? items : items.slice(0, GROUP_CAP);
+  const hidden = items.length - shown.length;
   return (
     <section className="space-y-2">
-      <h2 className="text-sm font-semibold text-muted-foreground">{t(titleKey)}</h2>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t(titleKey)} <span className="font-normal">({items.length})</span>
+      </h2>
       <div className="space-y-1.5">
-        {items.map((item, i) => (
+        {shown.map((item, i) => (
           <ResultRow key={`${item.source_type}-${item.url}-${i}`} item={item} locale={locale} />
         ))}
       </div>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-xs text-primary hover:underline"
+        >
+          {t("showMore", { count: hidden })}
+        </button>
+      )}
     </section>
   );
 }
@@ -112,10 +130,16 @@ export default function SearchResults() {
     };
   }, [q]);
 
-  const total =
-    (data?.groups.settings.length ?? 0) +
-    (data?.groups.content.length ?? 0) +
-    (data?.groups.claude.length ?? 0);
+  // Fully null-safe: a malformed/error response (no `groups`) must render as
+  // empty, never crash the page.
+  const settingsItems = data?.groups?.settings ?? [];
+  const contentItems = data?.groups?.content ?? [];
+  const claudeItems = data?.groups?.claude ?? [];
+  const taskItems = contentItems.filter(
+    (r) => r.source_type === "task" || r.source_type === "suggestion",
+  );
+  const infoItems = contentItems.filter((r) => r.source_type === "info");
+  const total = settingsItems.length + contentItems.length + claudeItems.length;
 
   return (
     <div className="mx-auto w-full max-w-3xl p-4 space-y-5">
@@ -145,9 +169,14 @@ export default function SearchResults() {
             </div>
           ) : (
             <div className="space-y-5">
-              <Group titleKey="groupContent" items={data.groups.content} locale={locale} />
-              <Group titleKey="groupSettings" items={data.groups.settings} locale={locale} />
-              <Group titleKey="groupClaude" items={data.groups.claude} locale={locale} />
+              {/* Order + split per the product spec: pages first, then tasks/
+                  suggestions, then info sources, then Claude conversations. The
+                  backend returns task+suggestion+info in one `content` group;
+                  we split it here by source_type. */}
+              <Group titleKey="groupSettings" items={settingsItems} locale={locale} />
+              <Group titleKey="groupTasks" items={taskItems} locale={locale} />
+              <Group titleKey="groupInfo" items={infoItems} locale={locale} />
+              <Group titleKey="groupClaude" items={claudeItems} locale={locale} />
             </div>
           )}
         </>

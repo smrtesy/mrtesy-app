@@ -17,8 +17,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslations, useLocale } from "next-intl";
 import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
+  CircleUser,
   Crosshair,
   Loader2,
   MessageSquarePlus,
@@ -33,6 +35,14 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/common/Markdown";
@@ -97,8 +107,21 @@ interface Thread {
   repo: string | null;
   git_branch: string | null;
   playbook_id: string | null;
+  /** Which Claude subscription account this thread runs on. Null = the primary
+   *  account (the default); "automation" = the second account. */
+  claude_account: string | null;
   last_message_at: string;
 }
+
+/** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
+interface Account {
+  id: string;
+  /** Operator-set label, or null to fall back to the per-id default label. */
+  label: string | null;
+  configured: boolean;
+}
+
+const DEFAULT_ACCOUNT = "primary";
 
 interface TurnEvent {
   seq: number;
@@ -192,6 +215,9 @@ export function ClaudeChat() {
   const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
   const [grouped, setGrouped] = useState(false);
   const [regrouping, setRegrouping] = useState(false);
+  /** The Claude accounts the console can run on — feeds the header switcher. Loaded
+   *  once; empty until then, which hides the switcher rather than showing a guess. */
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** Mirrors activeId for the async guard in loadThread. Synced in an effect, not
@@ -341,6 +367,20 @@ export function ClaudeChat() {
   useEffect(() => {
     void loadThreads();
   }, [loadThreads]);
+
+  // The account list is org-wide config, not per-thread — load it once. A failure
+  // leaves `accounts` empty, which hides the switcher; the run still uses the
+  // thread's stored account server-side, so nothing breaks.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { accounts: list } = await api<{ accounts: Account[] }>("/api/claude/accounts");
+        setAccounts(list ?? []);
+      } catch {
+        // Non-fatal: no switcher, default account still runs.
+      }
+    })();
+  }, []);
 
   // Continue where you left off: open the most recent conversation automatically on
   // arrival, so the screen is a running chat rather than a blank one every time.
@@ -751,6 +791,22 @@ export function ClaudeChat() {
             </span>
           )}
 
+          {/* Which Claude account this conversation runs on, and how to switch it.
+              Shown only once the account list loaded, so it never guesses. Writing
+              persists to the thread; before a thread exists it is held in `pending`
+              and applied on the first message (same path as model/effort). */}
+          {accounts.length > 0 && (
+            <AccountSwitcher
+              accounts={accounts}
+              value={thread?.claude_account ?? (pending.claude_account as string | undefined) ?? DEFAULT_ACCOUNT}
+              disabled={!!runningTurn}
+              onChange={(id) => {
+                if (activeId) void patchThread({ claude_account: id });
+                else setPending((p) => ({ ...p, claude_account: id }));
+              }}
+            />
+          )}
+
           {/* Mark a place in the app: arms the global inspect mode (ClaudeInspector,
               mounted in the app layout). Click a component in a neighboring pane /
               any screen, and the captured context lands here as a draft message. */}
@@ -1136,6 +1192,89 @@ function renderTurns(
   return out;
 }
 
+/**
+ * The header account switcher — shows which Claude subscription account the open
+ * conversation runs on, and lets the user move it to the other account.
+ *
+ * Why it exists: two accounts are configured (primary + a second), and when one hits
+ * its rolling usage limit the conversation should be movable to the one that still
+ * has budget — without leaving the console. Compact by default (CLAUDE.md): a small
+ * labelled icon button that opens a menu only on click. An account with no token
+ * configured is listed but greyed out, so the user can see it exists yet cannot
+ * route a thread to a credential that would silently fall back to the primary.
+ */
+function AccountSwitcher({
+  accounts,
+  value,
+  disabled,
+  onChange,
+}: {
+  accounts: Account[];
+  value: string;
+  disabled: boolean;
+  onChange: (id: string) => void;
+}) {
+  const t = useTranslations("claudeChat");
+  // Explicit id→key map (not a template key) so next-intl's typed keys still check.
+  const defaultLabel = (id: string) =>
+    id === "automation" ? t("account.automation") : t("account.primary");
+  const labelFor = (a: Account) => a.label?.trim() || defaultLabel(a.id);
+
+  const current = accounts.find((a) => a.id === value);
+  const currentLabel = current ? labelFor(current) : defaultLabel(value);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={disabled}
+          className="h-8 max-w-[9rem] shrink-0 gap-1 px-2 text-[11px] text-muted-foreground"
+          aria-label={t("account.aria", { name: currentLabel })}
+          title={t("account.aria", { name: currentLabel })}
+        >
+          <CircleUser className="size-4 shrink-0" />
+          <span className="truncate" dir="auto">
+            {currentLabel}
+          </span>
+          <ChevronDown className="size-3 shrink-0 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[12rem]">
+        <DropdownMenuLabel>{t("account.menuTitle")}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {accounts.map((a) => {
+          const selected = a.id === value;
+          // The current account is always shown selectable (it may be an
+          // unconfigured value stored earlier); other accounts need a token.
+          const selectable = a.configured || selected;
+          return (
+            <DropdownMenuItem
+              key={a.id}
+              disabled={!selectable}
+              onSelect={() => {
+                if (!selected && selectable) onChange(a.id);
+              }}
+              className="gap-2"
+            >
+              <Check className={cn("size-3.5 shrink-0", selected ? "opacity-100" : "opacity-0")} />
+              <span className="min-w-0 flex-1 truncate" dir="auto">
+                {labelFor(a)}
+              </span>
+              {!a.configured && (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {t("account.notConnected")}
+                </span>
+              )}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** One exchange: what you said, then what came back. */
 function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id: string) => void }) {
   const t = useTranslations("claudeChat");
@@ -1158,6 +1297,18 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
   const live = turn.status === "queued" || turn.status === "running";
   const waiting = turn.status === "waiting";
   const turnTokens = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0);
+
+  // A failed turn often records the SAME text twice — the runner stores the engine's
+  // last message as both result_summary (rendered as the answer bubble) and error
+  // (rendered as the red line). A usage-limit hit — "You've hit your weekly limit ·
+  // resets 4am (UTC)" — is the case in point, and it showed up once in grey and once
+  // in red. Suppress the grey duplicate whenever the error line already contains the
+  // whole answer text, so it is stated once, in red. Lossless: the error line is
+  // always shown on failure and here holds the answer verbatim. A failed turn whose
+  // answer carries MORE than the error (a real partial answer) keeps both.
+  const errText = (turn.error ?? "").trim();
+  const answerDupesError = turn.status === "failed" && !!answer && errText.startsWith(answer);
+  const showAnswer = !!answer && !answerDupesError;
   // Two kinds of files on one turn: what the user SENT (chips on their message)
   // and what the run PRODUCED — browser screenshots posted back mid-run, shown
   // as inline images with the reply. `source` is absent on rows created before
@@ -1232,7 +1383,7 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
             </div>
           )}
 
-          {answer && (
+          {showAnswer && (
             <div className="group/msg flex items-start gap-1">
               {/* Rich rendering, chat density: headings, lists, tables and code
                   the same way the .md docs render, tightened to a bubble. */}
