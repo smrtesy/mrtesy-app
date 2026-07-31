@@ -1494,6 +1494,63 @@ router.post("/studio/projects/:id/voice-projects", async (req: Request, res: Res
   res.status(201).json({ voice_project: data });
 });
 
+/**
+ * POST /studio/projects/:id/voice-project — ensure & return the ONE voice
+ * container for this studio project. The product model (docs/studio-hierarchy-plan.md)
+ * has no user-facing "voice project": the studio project is the only unit, and
+ * voice takes need a smrtvoice_projects row purely because the schema requires
+ * one (script_id NOT NULL → script → project). So we ensure a single hidden
+ * container per studio project and never surface it as a "project".
+ *
+ * POST (not GET) because it may write — an ensure is a mutation, and this keeps
+ * prefetch/StrictMode from silently minting containers on a read.
+ *
+ * Idempotent + race-safe WITHOUT a DB constraint: if none exists we insert, then
+ * ALWAYS re-select the OLDEST row. Two concurrent callers therefore converge on
+ * the same container; a rare race leaves at most one unused empty orphan (never
+ * written to, since every caller resolves to the oldest), so takes/cost sums are
+ * unaffected. (A partial unique index on (org_id, studio_project_id) is the
+ * eventual hardening — deferred to avoid failing on any pre-existing duplicates.)
+ */
+router.post("/studio/projects/:id/voice-project", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+
+  const { data: project, error: pErr } = await db.from("studio_projects")
+    .select("id, name_he").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  const selectOldest = () => db.from("smrtvoice_projects")
+    .select("id, name, code_prefix")
+    .eq("org_id", orgId).eq("studio_project_id", project.id)
+    .order("created_at", { ascending: true }).limit(1).maybeSingle();
+
+  // Reuse the oldest container if the project already has one (including any
+  // created by the earlier "create voice project" flow, now removed).
+  const { data: existing, error: exErr } = await selectOldest();
+  if (exErr) return res.status(500).json({ error: exErr.message });
+  if (existing) return res.json({ voice_project: existing });
+
+  // None yet → create the hidden default. code_prefix stays null to avoid the
+  // unique-prefix collision; script codes fall back to plain sequence numbers.
+  const { error: cErr } = await db.from("smrtvoice_projects").insert({
+    org_id: orgId,
+    created_by: req.user!.id,
+    name: project.name_he || "voice",
+    code_prefix: null,
+    language: "he",
+    status: "draft",
+    studio_project_id: project.id,
+  });
+  if (cErr) return res.status(500).json({ error: cErr.message });
+
+  // Converge: re-select the oldest so a concurrent create resolves identically.
+  const { data: resolved, error: rErr } = await selectOldest();
+  if (rErr) return res.status(500).json({ error: rErr.message });
+  if (!resolved) return res.status(500).json({ error: "failed to resolve voice container" });
+  res.json({ voice_project: resolved });
+});
+
 /** PATCH /studio/projects/:id — rename / describe / archive. */
 router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
