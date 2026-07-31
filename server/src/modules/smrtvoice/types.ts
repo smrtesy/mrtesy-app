@@ -408,6 +408,9 @@ export interface CreateCharacterRequest {
   description?: string;
   language?: "he" | "en";
   voice_type?: "rapid" | "pro";
+  // Which provider will hold the cloned voice. resemble (default) = $2/mo per
+  // voice while it exists; minimax = one-time $1.50 clone via fal, no monthly fee.
+  voice_provider?: "resemble" | "minimax";
   age_group?: "child" | "teen" | "adult" | "elderly";
   age_years?: number;
   gender?: "male" | "female" | "neutral";

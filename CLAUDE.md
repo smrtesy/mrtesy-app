@@ -160,6 +160,21 @@ Why this rule exists: a large batch-extraction run and repeated backend LLM
 summaries were triggered without the user approving the spend. Standing
 instruction (2026-07): no money-spending action without explicit cost sign-off.
 
+**Two refinements (user decision, 2026-07-31):**
+
+1. **In-app actions approve themselves.** Spend the USER triggers in the
+   product UI, where the price is visible at the point of action (e.g. the
+   voice-provider picker showing "$1.50 one-time" / "$2/month"), needs NO
+   chat-level approval — the click is the approval. The corollary is a build
+   requirement: any UI action that spends money must show its price at the
+   decision point. Chat approval is only for spend *Claude* initiates.
+2. **Micro-test envelope (≤$3).** Small technical validation runs Claude
+   initiates (a voice-clone test, a model probe, a few TTS lines) are
+   pre-approved up to **$3 cumulative per test**, with the actual spend
+   reported in the summary. Above the cap — explicit approval as before.
+   (Generalizes the video-lab `/expert` micro-experiments envelope of
+   2026-07-30; kept in sync across the three repos.)
+
 ## smrtTask task-ingest mode (trigger-gated)
 
 If the user's first message in the session begins with the phrase

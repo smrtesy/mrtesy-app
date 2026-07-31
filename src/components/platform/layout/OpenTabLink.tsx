@@ -47,6 +47,7 @@ export function OpenTabLink({
   label,
   className,
   title,
+  beside,
   "aria-label": ariaLabel,
   children,
 }: {
@@ -56,6 +57,13 @@ export function OpenTabLink({
   label: string;
   className?: string;
   title?: string;
+  /**
+   * Open the target BESIDE the current pane instead of focusing it: the pane
+   * this link lives in stays expanded rather than being parked as a rail
+   * (openTab's `{ focus: false }`). For screens that remain useful after the
+   * click — the site map, a list you keep picking from.
+   */
+  beside?: boolean;
   "aria-label"?: string;
   children: React.ReactNode;
 }) {
@@ -72,13 +80,13 @@ export function OpenTabLink({
         // Component pane — same tree, open the sibling tab directly.
         if (paneNav && tabs) {
           e.preventDefault();
-          tabs.openTab(href, label);
+          tabs.openTab(href, label, beside ? { focus: false } : undefined);
           return;
         }
         // Legacy iframe pane — bridge to the top window.
         if (isEmbeddedPane()) {
           e.preventDefault();
-          requestOpenTab(href, label);
+          requestOpenTab(href, label, beside);
         }
       }}
     >

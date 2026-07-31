@@ -48,6 +48,8 @@ route group `src/app/[locale]/(app)/(<slug>)/…`, components
 `/suggestions`, `/settings`, `/account`, `/admin`, `/search` (global content
 search — components `src/components/platform/search/`, server
 `server/src/modules/platform/search/`, detail in `docs/global-search-plan.md`),
+`/map` (site map — every openable screen, one click = one new pane; catalog in
+`src/lib/site-map.ts`, UI in `src/components/platform/map/`),
 and **`/claude`** — the in-app Claude console (components
 `src/components/claude/`, server `server/src/modules/claude/`, detail in
 `.claude/rules/claude-console.md`). Server side:
@@ -88,6 +90,9 @@ apps, search) and `server/src/modules/admin/`.
   auto-attaches `Authorization` + `X-Org-Id`; raw `fetch("/api/…")` is a bug).
 - `lib/panes/` — the tabs-workspace pane system (`registry.tsx`, `nav.tsx`).
   Hard rules for any screen work: `.claude/rules/panes.md`.
+- `contexts/AppAccessContext.tsx` — the signed-in user's access facts
+  (`enabledApps` / `isAdmin` / `taskAccess`), resolved once in `(app)/layout.tsx`
+  and read by client screens (incl. panes) so they filter like the sidebar.
 - `lib/supabase/` — clients incl. `admin.ts` (`createAdminSupabaseClient()`).
 - `lib/apps/registry.ts` — app registry; `lib/ai-usage`, `lib/smrtplan`,
   `lib/smrttask`, `lib/email`, `lib/media`, `hebcal.ts`, `workdays.ts`.
@@ -140,6 +145,7 @@ authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations
 | Translations | `src/messages/{he,en}.json` |
 | Table definition | `supabase/migrations/` (grep the table name) |
 | Admin panel | `src/components/admin/`, `/admin/apps/<slug>` |
+| Site map of every screen | `src/lib/site-map.ts` (catalog) + `src/components/platform/map/` |
 | Claude console | `server/src/modules/claude/` + `src/components/claude/` |
 | Session Stop-hook → smrtTask proposal | `.claude/hooks/` + `server/src/modules/smrttask/routes/claude-session.ts` |
 
