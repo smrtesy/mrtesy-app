@@ -24,7 +24,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, cancelRun, runOneShot } from "./runner";
+import { executeRun, cancelRun, runOneShot, BG_MODEL_FAST } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
@@ -1058,7 +1058,12 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
       transcript,
     ].join("\n");
 
-    const raw = await runOneShot(prompt, { timeoutMs: 60_000 });
+    // Trivial/mechanical (a ≤6-word title) → fast model. Never a judgment.
+    const raw = await runOneShot(prompt, {
+      timeoutMs: 60_000,
+      model: BG_MODEL_FAST,
+      label: "thread-title",
+    });
     if (!raw) return;
     // First line only, quotes stripped: a model that adds a sentence of
     // explanation must not turn that into the thread's name.
@@ -1390,7 +1395,12 @@ router.post("/claude/threads/:id/board/summarize", async (req: Request, res: Res
 
   let summary = "";
   try {
-    const raw = await runOneShot(prompt, { timeoutMs: 90_000 });
+    // Trivial/mechanical (a 2-5 line status summary) → fast model. Never a judgment.
+    const raw = await runOneShot(prompt, {
+      timeoutMs: 90_000,
+      model: BG_MODEL_FAST,
+      label: "board-summary",
+    });
     summary = (raw ?? "").trim();
   } catch (e) {
     return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
