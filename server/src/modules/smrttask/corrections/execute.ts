@@ -2,15 +2,16 @@
  * Execution bridge (plan slice 4) — turn an APPROVED code/ui correction into a
  * real fix.
  *
- * When the user approves a correction classified `code` or `ui`, this opens a
- * Claude thread (server/src/modules/claude) whose first turn instructs the
- * engine to FIRST present, in plain Hebrew, the problem as it understands it and
- * the fix it proposes, then STOP for the user's approval. Only after the user
- * approves that plan does it implement the fix, run the repo's pre-push protocol,
- * and — if that passes clean — merge to `main` with --no-ff and push directly,
- * per the repo's push & merge rules (CLAUDE.md). The human gate is the up-front
- * approval of the plan, not a review of the finished PR (a PR is only the
- * fallback when the session lacks push access to `main`).
+ * When the user taps "אישור לתיקון" on a correction (classified `code`/`ui`)
+ * whose auto-diagnosis is ready, this opens a Claude thread (server/.../claude)
+ * whose turn implements the ALREADY-APPROVED diagnosis (corrections/diagnose.ts),
+ * runs the repo's pre-push protocol, and — if it passes clean — merges to `main`
+ * with --no-ff and pushes directly, per the repo's push & merge rules (CLAUDE.md).
+ * There is no in-run approval step: the human gate is the button (the user
+ * approved the diagnosis the run is handed), so nothing reaches production without
+ * a click — but once clicked it runs straight through. A PR is only the fallback
+ * when the session lacks push access to `main`. The other button, "המשך דיון",
+ * opens an interactive thread that does NOT auto-push (see routes claude-thread).
  *
  * COST: the thread runs on the subscription token (runner.ts strips the API
  * key), like every other Claude run here — no paid API.
@@ -44,6 +45,11 @@ interface FixContext {
   task_title?: string | null;
   msg_subject?: string | null;
   msg_sender?: string | null;
+  // The approved diagnosis (from the auto-diagnosis run, corrections/diagnose.ts).
+  // Injected so the fix run implements the plan the user already approved instead
+  // of re-investigating from scratch. Null when no diagnosis is available.
+  diagnosis_problem_he?: string | null;
+  diagnosis_fix_he?: string | null;
 }
 
 function buildFixMessage(cls: "code" | "ui", ctx: FixContext): string {
@@ -63,14 +69,22 @@ function buildFixMessage(cls: "code" | "ui", ctx: FixContext): string {
     "## הקשר",
     `משימה: ${ctx.serial ?? "—"} — ${ctx.task_title ?? "—"}`,
     ctx.msg_subject ? `הודעת מקור: ${ctx.msg_sender ?? "—"} · ${ctx.msg_subject}` : "",
+    // The user approved THIS diagnosis by tapping "אישור לתיקון" — implement it,
+    // don't re-diagnose. The approval already happened at the button.
+    ctx.diagnosis_problem_he || ctx.diagnosis_fix_he
+      ? `\n## האבחון שאושר (יישם אותו — אל תחקור מחדש מאפס)\n` +
+        (ctx.diagnosis_problem_he ? `הבעיה: ${ctx.diagnosis_problem_he}\n` : "") +
+        (ctx.diagnosis_fix_he ? `הפתרון שאושר: ${ctx.diagnosis_fix_he}` : "")
+      : "",
     "",
     "## מה לעשות — בדיוק",
-    "1. אתר את מקור הבעיה בקוד והבן את התיקון המינימלי הנדרש. **בשלב הזה אל תשנה עדיין כלום.**",
-    "2. **קודם הצג למשתמש** (בעברית פשוטה): את **הבעיה כפי שאתה מבין אותה**, ואת **הפתרון שאתה מציע** — מה תשנה, באיזה קובץ, ולמה. תאר התנהגות, לא diff.",
-    "3. **עצור וחכה לאישור המפורש של המשתמש.** אל תיגע בקוד ואל תדחוף כלום לפני שאישר. אם התיקון מסוכן/רחב מדי או שאינך מבין מה לתקן — אמור זאת כאן, ואל תמשיך.",
-    `4. **רק אחרי שהמשתמש אישר** — עבוד על ענף (למשל ${branchHint}), ישם את התיקון המינימלי, והרץ את פרוטוקול קדם-הדחיפה של הריפו לפי CLAUDE.md (build + greps + סקירה עצמית) עד שהוא עובר נקי.`,
-    "5. **רק אם ה-pre-push עבר נקי** — מזג את הענף ל-main עם `--no-ff` ודחוף ל-main ישירות לפי כללי הדחיפה ומיזוג ב-CLAUDE.md, ואז דחוף גם את הענף. אם ה-build/הסקירה נכשלו — עצור, אל תדחוף כלום, ודווח מה נכשל. אם אין הרשאת דחיפה ל-main — fallback: דחוף את הענף ופתח PR.",
-    "6. אחרי הדחיפה ל-main אמת שהפרודקשן התקדם (`/api/deploy-info`), ודווח בעברית פשוטה מה עלה לאוויר.",
+    "המשתמש כבר אישר את התיקון (לחץ \"אישור לתיקון\"). אין צורך לעצור לאישור נוסף — ישם, בדוק, ודחוף.",
+    "1. ישם את התיקון המינימלי לפי האבחון שאושר. אל תשנה יותר מהנדרש.",
+    "2. הרץ את פרוטוקול קדם-הדחיפה של הריפו לפי CLAUDE.md (build + greps + סקירה עצמית) עד שהוא עובר נקי.",
+    `3. **רק אם ה-pre-push עבר נקי** — עבוד על ענף (למשל ${branchHint}), מזג ל-main עם \`--no-ff\` ודחוף ל-main ישירות לפי כללי הדחיפה ומיזוג ב-CLAUDE.md, ואז דחוף גם את הענף. אם ה-build/הסקירה נכשלו — עצור, אל תדחוף כלום, ודווח בדיוק מה נכשל.`,
+    "4. אם אין לך הרשאת דחיפה ל-main — fallback: דחוף את הענף ופתח PR, ודווח את שמו המדויק.",
+    "5. אחרי הדחיפה ל-main אמת שהפרודקשן התקדם (`/api/deploy-info`), ודווח בעברית פשוטה מה עלה לאוויר — התנהגות, לא diff.",
+    "6. אם תוך כדי התיקון מתברר שהוא מסוכן/רחב הרבה מעבר לאבחון — עצור, אל תדחוף כלום, והסבר מה השתנה בהערכה.",
   ]
     .filter(Boolean)
     .join("\n");
