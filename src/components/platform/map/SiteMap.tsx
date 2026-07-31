@@ -15,10 +15,13 @@
  * smrtTask worker can't use are hidden here exactly as they are there.
  *
  * The map deliberately lists MORE than the sidebar does: screens the sidebar
- * reaches indirectly (the guides behind an app name, /log, /calendar,
- * /daily-report, /day-tools, /settings/org, /account, the admin sub-pages) are
- * first-class rows here. That is the point of a map — a complete index — and
- * every one of them is still behind its own route gate.
+ * reaches only indirectly (the five app guides behind an app name, /log,
+ * /daily-report, /day-tools, /whatsapp/autoreply, /account, /search, the admin
+ * sub-pages) are first-class rows here. That is the point of a map — a complete
+ * index — and every one of them is still behind its own route gate.
+ *
+ * What is NOT here, by rule: a route that only redirects somewhere already on
+ * the map, and a screen a bare href can't actually reach (see site-map.ts).
  */
 
 import { useMemo, useState } from "react";
@@ -29,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { useAppAccess } from "@/contexts/AppAccessContext";
+import { useActiveOrg } from "@/lib/api/use-active-org";
 import { APPS } from "@/lib/apps/registry";
 import { SITE_MAP, type SiteMapEntry, type SiteMapSection } from "@/lib/site-map";
 
@@ -45,6 +49,11 @@ export function SiteMap() {
   const t = useTranslations();
   const tMap = useTranslations("siteMap");
   const { enabledApps, isAdmin, taskAccess } = useAppAccess();
+  // The org role isn't in AppAccess (the layout never surfaces it), and one row
+  // needs it: /settings/org renders its body only for an owner/admin. Read it
+  // from the same hook the target screen gates on, so the two can't disagree.
+  const { active } = useActiveOrg();
+  const canManageOrg = active?.role === "owner" || active?.role === "admin";
 
   // Compact-UI rule: the filter is collapsed to an icon and only expands when
   // asked for (same pattern as the WhatsApp chat search).
@@ -63,6 +72,7 @@ export function SiteMap() {
 
       const rows = section.entries
         .filter((e) => !e.adminOnly || isAdmin)
+        .filter((e) => !e.orgManagerOnly || canManageOrg)
         // Project-only ("lite") smrtTask worker: the sidebar collapses smrtTask
         // to the task list alone, so the map must not offer the rest either.
         .filter((e) => !(section.appSlug === "smrttask" && taskAccess === "lite" && !e.liteOk))
@@ -82,7 +92,7 @@ export function SiteMap() {
       if (rows.length > 0) resolved.push({ section, rows });
     }
     return resolved;
-  }, [enabledApps, isAdmin, taskAccess, query, t]);
+  }, [enabledApps, isAdmin, taskAccess, canManageOrg, query, t]);
 
   const total = sections.reduce((n, s) => n + s.rows.length, 0);
 
@@ -184,6 +194,7 @@ function SectionCard({
               href={`/${locale}${entry.path}`}
               label={label}
               title={entry.path}
+              beside
               className={cn(
                 "group flex items-start gap-2 rounded-lg px-2 py-1.5",
                 "transition-colors hover:bg-accent hover:text-accent-foreground",

@@ -39,8 +39,10 @@ export function AppAccessProvider({
 
 /**
  * Read the access facts. Outside the (app) layout — a login/onboarding screen,
- * a unit test — there is no provider, and the fallback shows nothing rather
- * than over-promising screens the caller may not be able to open.
+ * a unit test — there is no provider and FALLBACK applies: no apps and no admin
+ * rights, so an app-gated or admin-gated surface renders nothing. It is not a
+ * blanket "show nothing": anything gated on neither still renders, which is
+ * correct (those screens need only an authenticated session).
  */
 export function useAppAccess(): AppAccess {
   return useContext(AppAccessContext) ?? FALLBACK;

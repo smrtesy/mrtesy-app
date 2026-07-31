@@ -55,12 +55,17 @@ export function isEmbeddedPane(): boolean {
  * message to the top window lets its TabsWorkspaceProvider (the single owner of
  * the tab set) call openTab instead. Same-origin panes only; we target the
  * top's exact origin. Returns false if the post couldn't be sent.
+ *
+ * `beside: true` forwards openTab's `{ focus: false }` — the new pane joins the
+ * split expanded WITHOUT parking the pane the link was clicked from. Callers
+ * that stay useful after the click (the site map, a source list) want that; the
+ * default (focus) keeps the previous behaviour.
  */
-export function requestOpenTab(href: string, label: string): boolean {
+export function requestOpenTab(href: string, label: string, beside = false): boolean {
   if (typeof window === "undefined") return false;
   try {
     const target = window.top ?? window;
-    target.postMessage({ type: "smrtesy:open-tab", href, label }, window.location.origin);
+    target.postMessage({ type: "smrtesy:open-tab", href, label, beside }, window.location.origin);
     return true;
   } catch {
     return false;

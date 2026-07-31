@@ -24,13 +24,11 @@
 
 import {
   Archive,
-  BarChart3,
   Bell,
   BookOpen,
   Bot,
   Boxes,
   Building2,
-  Calendar,
   CalendarRange,
   CheckSquare,
   Clapperboard,
@@ -75,6 +73,12 @@ export interface SiteMapEntry {
   /** Rendered only for a super-admin (the route's own gate). */
   adminOnly?: boolean;
   /**
+   * Rendered only for an org owner/admin. `/settings/org` renders its body
+   * behind `canManageOrg` (SettingsTabs.tsx), so a plain member who follows the
+   * link gets the settings heading and an empty panel.
+   */
+  orgManagerOnly?: boolean;
+  /**
    * Kept for a "lite" (project-only) smrtTask worker. Everything else in the
    * smrtTask section is hidden from them, mirroring the sidebar — see
    * `visibleSmrtTaskItems` in Sidebar.tsx.
@@ -105,7 +109,6 @@ export const SITE_MAP: SiteMapSection[] = [
       { path: "/whatsapp/autoreply", labelKey: "nav.whatsappAutoreply", descKey: "siteMap.desc.whatsappAutoreply", icon: Reply },
       { path: "/sms",       labelKey: "nav.sms",       descKey: "siteMap.desc.sms",       icon: MessageSquare },
       { path: "/projects",  labelKey: "nav.projects",  descKey: "siteMap.desc.projects",  icon: FolderOpen },
-      { path: "/calendar",  labelKey: "nav.calendar",  descKey: "siteMap.desc.calendar",  icon: Calendar },
       { path: "/knowledge", labelKey: "nav.knowledge", descKey: "siteMap.desc.knowledge", icon: BookOpen },
       { path: "/daily-report", labelKey: "nav.dailyReport", descKey: "siteMap.desc.dailyReport", icon: FileText },
       { path: "/day-tools", labelKey: "nav.dayTools",  descKey: "siteMap.desc.dayTools",  icon: Wrench },
@@ -119,9 +122,7 @@ export const SITE_MAP: SiteMapSection[] = [
     appSlug: "smrtplan",
     entries: [
       { path: "/plan",            labelKey: "nav.planBoard",      descKey: "siteMap.desc.planBoard",      icon: CalendarRange },
-      { path: "/plan/my",         labelKey: "nav.planMy",         descKey: "siteMap.desc.planMy",         icon: CheckSquare },
       { path: "/plan/team",       labelKey: "nav.planTeam",       descKey: "siteMap.desc.planTeam",       icon: Users },
-      { path: "/plan/score",      labelKey: "nav.planScore",      descKey: "siteMap.desc.planScore",      icon: BarChart3 },
       { path: "/plan/repository", labelKey: "nav.planRepository", descKey: "siteMap.desc.planRepository", icon: Archive },
       { path: "/plan/guide",      labelKey: "siteMap.page.guideSmrtplan", descKey: "siteMap.desc.guide",   icon: BookOpen },
     ],
@@ -138,7 +139,8 @@ export const SITE_MAP: SiteMapSection[] = [
       { path: "/voice/characters", labelKey: "nav.voiceCharacters",  descKey: "siteMap.desc.voiceCharacters",  icon: Users },
       { path: "/voice/projects/new", labelKey: "siteMap.page.voiceProjectNew", descKey: "siteMap.desc.voiceProjectNew", icon: FilePlus2 },
       { path: "/voice/insights",   labelKey: "siteMap.page.voiceInsights", descKey: "siteMap.desc.voiceInsights", icon: LineChart },
-      { path: "/voice/settings",   labelKey: "nav.voiceSettings",    descKey: "siteMap.desc.voiceSettings",    icon: Sliders },
+      // The real screen: /voice/settings is only a redirect here.
+      { path: "/settings/apps/smrtstudio", labelKey: "nav.voiceSettings", descKey: "siteMap.desc.voiceSettings", icon: Sliders },
       { path: "/voice/guide",      labelKey: "nav.voiceGuide",       descKey: "siteMap.desc.voiceGuide",       icon: Mic },
     ],
   },
@@ -193,7 +195,7 @@ export const SITE_MAP: SiteMapSection[] = [
       { path: "/claude",            labelKey: "nav.claude",                    descKey: "siteMap.desc.claude",           icon: Bot, adminOnly: true },
       { path: "/search",            labelKey: "nav.search",                    descKey: "siteMap.desc.search",           icon: Search },
       { path: "/settings",          labelKey: "nav.settings",                  descKey: "siteMap.desc.settings",         icon: Settings },
-      { path: "/settings/org",      labelKey: "siteMap.page.settingsOrg",      descKey: "siteMap.desc.settingsOrg",      icon: Building2 },
+      { path: "/settings/org",      labelKey: "siteMap.page.settingsOrg",      descKey: "siteMap.desc.settingsOrg",      icon: Building2, orgManagerOnly: true },
       { path: "/settings/platform", labelKey: "siteMap.page.settingsPlatform", descKey: "siteMap.desc.settingsPlatform", icon: Shield, adminOnly: true },
       { path: "/account",           labelKey: "nav.account",                   descKey: "siteMap.desc.account",          icon: UserCircle },
     ],
