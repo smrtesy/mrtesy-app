@@ -240,6 +240,7 @@
     "planTeam": "By worker",
     "planScore": "Score outputs",
     "studio": "Dashboard",
+    "studioProduction": "Production",
     "studioModels": "Model catalog",
     "studioResearch": "Research centre",
     "claude": "Claude"
@@ -4588,6 +4589,8 @@
   },
   "studioProjects": {
     "title": "Projects",
+    "productionTitle": "Production",
+    "selectProject": "Select project",
     "quickLineTitle": "Quick create",
     "quickLineProject": "Project",
     "quickLineNewProject": "＋ New project",

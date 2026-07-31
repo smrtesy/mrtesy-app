@@ -240,6 +240,7 @@
     "planTeam": "לפי עובד",
     "planScore": "ניקוד תוצרים",
     "studio": "דשבורד",
+    "studioProduction": "הפקה",
     "studioModels": "קטלוג מודלים",
     "studioResearch": "מרכז מחקרים",
     "claude": "קלוד"
@@ -4587,6 +4588,8 @@
   },
   "studioProjects": {
     "title": "פרויקטים",
+    "productionTitle": "הפקה",
+    "selectProject": "בחר פרויקט",
     "quickLineTitle": "יצירה מהירה",
     "quickLineProject": "פרויקט",
     "quickLineNewProject": "＋ פרויקט חדש",

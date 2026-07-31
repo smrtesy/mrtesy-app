@@ -1494,6 +1494,48 @@ router.post("/studio/projects/:id/voice-projects", async (req: Request, res: Res
   res.status(201).json({ voice_project: data });
 });
 
+/**
+ * GET /studio/projects/:id/voice-project — the ONE voice container for this
+ * studio project, created on first use. The product model (docs/studio-hierarchy-plan.md)
+ * has no user-facing "voice project": the studio project is the only unit, and
+ * voice takes need a smrtvoice_projects row purely because the schema requires
+ * one (script_id NOT NULL → script → project). So we ensure a single default
+ * container per studio project and never surface it as a "project". Idempotent:
+ * returns the oldest existing container, or creates one if none exists.
+ */
+router.get("/studio/projects/:id/voice-project", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+
+  const { data: project, error: pErr } = await db.from("studio_projects")
+    .select("id, name_he").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  // Reuse the oldest container if the project already has one (including any
+  // created by the earlier "create voice project" flow, now removed).
+  const { data: existing, error: exErr } = await db.from("smrtvoice_projects")
+    .select("id, name, code_prefix")
+    .eq("org_id", orgId).eq("studio_project_id", project.id)
+    .order("created_at", { ascending: true }).limit(1).maybeSingle();
+  if (exErr) return res.status(500).json({ error: exErr.message });
+  if (existing) return res.json({ voice_project: existing });
+
+  // None yet → create the hidden default. code_prefix stays null to avoid the
+  // unique-prefix collision; script codes fall back to plain sequence numbers.
+  const { data: created, error: cErr } = await db.from("smrtvoice_projects").insert({
+    org_id: orgId,
+    created_by: req.user!.id,
+    name: project.name_he || "voice",
+    code_prefix: null,
+    language: "he",
+    status: "draft",
+    studio_project_id: project.id,
+  }).select("id, name, code_prefix").single();
+  if (cErr) return res.status(500).json({ error: cErr.message });
+  await emitEvent(orgId, "smrtvoice", "project.created", "project", created.id, { name: created.name });
+  res.json({ voice_project: created });
+});
+
 /** PATCH /studio/projects/:id — rename / describe / archive. */
 router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
   const orgId = req.org!.id;

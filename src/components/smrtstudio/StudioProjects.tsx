@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * smrtStudio — the unified projects list (stage A of docs/studio-build-plan.md).
+ * smrtStudio — "הפקה" (Production): the single production surface.
  *
- * Every production project in one place, with per-tab counts (voice / image /
- * video). Creation follows the house compact-UI rule: a quiet icon button that
- * expands into an inline name input, nothing permanent on screen.
+ * There is no separate projects-list step any more. The project is the only
+ * organizational unit (docs/studio-hierarchy-plan.md): a compact selector at
+ * the top picks (or creates) a project, and the full creation engine for that
+ * project — voice / image / video tabs + its artifacts — renders inline below
+ * via <StudioProject embedded>. Deep-linkable through ?project=<id>.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -13,11 +15,12 @@ import { useLocale, useTranslations } from "next-intl";
 import { Plus, X } from "lucide-react";
 
 import { api } from "@/lib/api/client";
-import { PaneLink } from "@/lib/panes/nav";
+import { useScreenRouter, useScreenSearchParams } from "@/lib/panes/nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StudioBalanceChip } from "@/components/smrtstudio/StudioBalanceChip";
+import { StudioProject } from "@/components/smrtstudio/StudioProject";
 
 type ProjectRow = {
   id: string;
@@ -31,8 +34,13 @@ type ProjectRow = {
 export function StudioProjects() {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
+  const router = useScreenRouter();
+  const searchParams = useScreenSearchParams();
+  const urlProject = searchParams.get("project");
+
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -48,33 +56,67 @@ export function StudioProjects() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Resolve the selected project once the list arrives: honor ?project= when it
+  // points at a real project, otherwise keep the current pick or fall back to
+  // the first (newest) one.
+  useEffect(() => {
+    if (!projects) return;
+    setSelectedId((prev) => {
+      if (urlProject && projects.some((p) => p.id === urlProject)) return urlProject;
+      if (prev && projects.some((p) => p.id === prev)) return prev;
+      return projects[0]?.id ?? null;
+    });
+  }, [projects, urlProject]);
+
+  const select = useCallback((id: string) => {
+    setSelectedId(id);
+    // Keep the URL shareable without swapping the pane.
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("project", id);
+    router.replace(`/${locale}/studio/projects?${params.toString()}`);
+  }, [router, locale, searchParams]);
+
   const create = useCallback(async () => {
     const name = newName.trim();
     if (!name || saving) return;
     setSaving(true);
     try {
-      await api("/api/studio/projects", {
+      const { project } = await api<{ project: { id: string } }>("/api/studio/projects", {
         method: "POST",
         body: { name_he: name },
       });
       setNewName("");
       setCreating(false);
       await load();
+      if (project?.id) select(project.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-  }, [newName, saving, load]);
+  }, [newName, saving, load, select]);
 
   const displayName = (p: ProjectRow) =>
     locale === "en" && p.name_en ? p.name_en : p.name_he;
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-4 space-y-4">
-      <div className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold flex-1">{t("title")}</h1>
-        <StudioBalanceChip />
+    <div className="mx-auto w-full max-w-5xl p-4 space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h1 className="text-lg font-semibold">{t("productionTitle")}</h1>
+
+        {projects && projects.length > 0 && !creating && (
+          <select
+            className="h-8 rounded-md border bg-background px-2 text-sm"
+            value={selectedId ?? ""}
+            onChange={(e) => select(e.target.value)}
+            aria-label={t("selectProject")}
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{displayName(p)}</option>
+            ))}
+          </select>
+        )}
+
         {creating ? (
           <div className="flex items-center gap-2">
             <Input
@@ -113,36 +155,25 @@ export function StudioProjects() {
             <Plus className="h-4 w-4" />
           </Button>
         )}
+
+        <div className="ms-auto">
+          <StudioBalanceChip />
+        </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {projects === null ? (
         <div className="space-y-2">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-40 w-full" />
         </div>
       ) : projects.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("empty")}</p>
-      ) : (
-        <ul className="grid gap-2 sm:grid-cols-2">
-          {projects.map((p) => (
-            <li key={p.id}>
-              <PaneLink
-                href={`/${locale}/studio/projects/${p.id}`}
-                className="block rounded-lg border p-3 hover:bg-accent/50 transition-colors"
-              >
-                <div className="font-medium truncate">{displayName(p)}</div>
-                <div className="mt-1 flex gap-3 text-xs text-muted-foreground">
-                  <span>{t("tabVoice")} · {p.counts.voice}</span>
-                  <span>{t("tabImage")} · {p.counts.image}</span>
-                  <span>{t("tabVideo")} · {p.counts.video}</span>
-                </div>
-              </PaneLink>
-            </li>
-          ))}
-        </ul>
-      )}
+      ) : selectedId ? (
+        // The production engine for the selected project, rendered inline.
+        <StudioProject key={selectedId} projectId={selectedId} embedded />
+      ) : null}
     </div>
   );
 }
