@@ -23,6 +23,7 @@ import { ExternalLink } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { InboxTabs } from "@/components/platform/inbox/InboxTabs";
+import { SiteMap } from "@/components/platform/map/SiteMap";
 import { CorrectionsExportButton } from "@/components/smrttask/log/CorrectionsExportButton";
 
 import { ClaudeChat } from "@/components/claude/ClaudeChat";
@@ -227,6 +228,9 @@ function ReachPane() {
 const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/tasks", render: () => <TasksPane /> },
   { match: (p) => p === "/inbox", render: (locale) => <InboxPane locale={locale} /> },
+  // Site map. The route page renders <SiteMap /> and nothing else, so the pane
+  // wrapper is the component itself.
+  { match: (p) => p === "/map", render: () => <SiteMap /> },
   { match: (p) => p === "/whatsapp", render: () => <WhatsAppPane />, fullHeight: true },
   { match: (p) => p === "/sms", render: () => <SmsPane />, fullHeight: true },
   { match: (p) => p === "/knowledge", render: () => <KnowledgeCenter /> },

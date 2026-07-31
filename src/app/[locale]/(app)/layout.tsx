@@ -10,6 +10,7 @@ import {
 import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
+import { AppAccessProvider } from "@/contexts/AppAccessContext";
 import { QueryProvider } from "@/components/platform/providers/QueryProvider";
 import { TabsArea } from "@/components/platform/layout/TabsArea";
 import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
@@ -163,6 +164,10 @@ export default async function AppLayout({
           native app. */}
       <PullToRefresh />
       <QueryProvider>
+      {/* Publishes the access facts the sidebar is built from (enabled apps,
+          super-admin, smrtTask level) so client screens — including the ones
+          rendered as component panes below — filter on exactly the same set. */}
+      <AppAccessProvider value={{ enabledApps, isAdmin, taskAccess }}>
       <TabsWorkspaceProvider>
         {/* Desktop Sidebar */}
         <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} taskAccess={taskAccess} />
@@ -193,6 +198,7 @@ export default async function AppLayout({
           <SystemMessagesRecorder />
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
+      </AppAccessProvider>
       </QueryProvider>
     </div>
   );

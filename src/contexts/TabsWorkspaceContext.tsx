@@ -276,9 +276,15 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     if (typeof window === "undefined" || window.top !== window.self) return;
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
-      const data = e.data as { type?: string; href?: string; label?: string } | null;
+      const data = e.data as { type?: string; href?: string; label?: string; beside?: boolean } | null;
       if (!data || data.type !== "smrtesy:open-tab" || typeof data.href !== "string") return;
-      openTab(data.href, typeof data.label === "string" && data.label ? data.label : data.href);
+      openTab(
+        data.href,
+        typeof data.label === "string" && data.label ? data.label : data.href,
+        // `beside` (openTab's focus:false) keeps the pane that sent the message
+        // expanded instead of parking it as a rail.
+        data.beside ? { focus: false } : undefined,
+      );
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);

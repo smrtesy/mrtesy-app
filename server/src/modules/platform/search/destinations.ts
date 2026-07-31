@@ -55,6 +55,7 @@ export const DESTINATIONS: Destination[] = [
   { path: "/suggestions", titleHe: "הצעות", titleEn: "Suggestions", keywords: "הצעות suggestions" },
   { path: "/settings", titleHe: "הגדרות", titleEn: "Settings", keywords: "הגדרות settings preferences config תצורה" },
   { path: "/settings/org", titleHe: "הגדרות ארגון", titleEn: "Org Settings", keywords: "ארגון organization org settings team" },
+  { path: "/map", titleHe: "מפת האתר", titleEn: "Site Map", keywords: "מפה מפת האתר כל הדפים כל המסכים ניווט site map sitemap all pages screens navigation index" },
   { path: "/account", titleHe: "החשבון שלי", titleEn: "My Account", keywords: "חשבון פרופיל account profile me" },
 
   // ── Admin (super-admin only) ───────────────────────────────────────────
