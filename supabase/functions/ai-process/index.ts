@@ -264,6 +264,24 @@ async function upsertThreadMemory(userId: string, key: string, fields: Partial<T
   if (threadMemoryUpsertError) console.error("thread_memory upsert failed:", threadMemoryUpsertError);
 }
 
+// Same "don't repoint while the old task is still open" rule Path 1 already
+// applies when deciding whether to spin off a new task (~line 3301): a
+// followup tracker's own thread-memory registration must never steal the
+// pointer away from an unrelated, still-live task on the same Gmail thread —
+// only a genuinely closed task (or another followup) may be superseded.
+async function registerFollowupThreadMemory(userId: string, key: string, taskId: string, lastMessageId: string) {
+  const existing = await loadThreadMemory(userId, key);
+  if (existing?.related_task_id && existing.related_task_id !== taskId) {
+    const { data: linkedTask } = await supabase
+      .from("tasks").select("task_type, status").eq("id", existing.related_task_id).maybeSingle();
+    const TERMINAL_STATUSES = ["completed", "dismissed", "archived"];
+    if (linkedTask && linkedTask.task_type !== "followup" && !TERMINAL_STATUSES.includes(String(linkedTask.status))) {
+      return;
+    }
+  }
+  await upsertThreadMemory(userId, key, { related_task_id: taskId, last_message_id: lastMessageId });
+}
+
 interface ThreadAnalysis {
   classification: "actionable" | "informational" | "spam";
   reason: string;
@@ -2876,6 +2894,8 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             actor: "system",
           });
           if (reanchorActivityError) console.error("task_activities re-anchor insert failed:", reanchorActivityError);
+          const reanchorTk = threadKey(msg);
+          if (reanchorTk) await registerFollowupThreadMemory(msg.user_id, reanchorTk, threadFu.id, msg.id);
         }
         const { error: followupMsgReanchorError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
         if (followupMsgReanchorError) console.error("source_messages followup re-anchor update failed:", followupMsgReanchorError);
@@ -2903,6 +2923,15 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           actor: "system",
         });
         if (followupCreatedActivityError) console.error("task_activities insert failed:", followupCreatedActivityError);
+        // Register thread memory for this outgoing message's own thread, same as
+        // every other task-creation path (~line 2708). Without this, a reply that
+        // lands on the thread — before OR after the 48h snooze wakes the tracker —
+        // never links back to this task via Path 1 (~line 3251), so the real-time
+        // auto-close (markCompletion → task_type="followup" → status "dismissed",
+        // ~line 1231) never runs; the tracker only had one shot at closing, via the
+        // reminders-check cron at snooze expiry, and never again after that (T1832).
+        const tk = threadKey(msg);
+        if (tk) await registerFollowupThreadMemory(msg.user_id, tk, newTask.id, msg.id);
       }
     }
     const { error: followupMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
