@@ -30,6 +30,7 @@ import {
   Send,
   KeyRound,
   Info,
+  Map as MapIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -118,7 +119,7 @@ const ALL_NAV_HREFS: readonly string[] = [
   ...smrtStudioItems,
 ]
   .map((i): string => i.href)
-  .concat(["/inbox", "/settings", "/transcription-experiment", "/admin"]);
+  .concat(["/inbox", "/settings", "/map", "/transcription-experiment", "/admin"]);
 
 export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
@@ -325,6 +326,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const managementMoreItems: MobileNavItem[] = [
     ...(!hasSmrtTask ? [{ key: "inbox", href: "/inbox", icon: Bell }] : []),
     { key: "settings", href: "/settings", icon: Settings },
+    { key: "siteMap", href: "/map", icon: MapIcon },
     ...(showTaskExtras ? [{ key: "transcriptionExperiment", href: "/transcription-experiment", icon: FlaskConical }] : []),
     ...(isAdmin ? [{ key: "platformAdmin", href: "/admin", icon: Shield }] : []),
   ];
@@ -468,6 +470,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
               basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
           )}
           <NavItem itemKey="settings" href="/settings" icon={Settings}
+            basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+          {/* Site map — every screen the user can open, each click opening it as
+              its own pane. Sits in "ניהול" because it is cross-app chrome, not
+              an app screen. */}
+          <NavItem itemKey="siteMap" href="/map" icon={MapIcon}
             basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
           {showTaskExtras && (
             <NavItem itemKey="transcriptionExperiment" href="/transcription-experiment" icon={FlaskConical}
