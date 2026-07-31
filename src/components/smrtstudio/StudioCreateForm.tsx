@@ -56,6 +56,43 @@ const DEDICATED = new Set(["prompt", "seed"]);
 
 type Estimate = { usd: number | null; basis: string };
 
+type Artifact = {
+  id: string;
+  type: string;
+  output_url: string | null;
+  audio_url: string | null;
+  model: string | null;
+  script_id: string | null;
+  shot_seq: number | null;
+  experiment_run_id: string | null;
+  voice_line_id: string | null;
+  meta: { code?: string; voice_label?: string } | null;
+};
+
+/** Classify a live schema field as a media input the picker can fill, by its
+ *  name/description. fal media inputs are almost always `*_url`/`*_urls`; we
+ *  only treat string fields whose name signals media, so text fields stay text.
+ *  Order matters — audio and video are checked before the broad "image". */
+function mediaKindOf(f: SchemaField): "image" | "video" | "audio" | null {
+  if (f.type.includes("integer") || f.type.includes("number") || f.type.includes("boolean")) return null;
+  const hay = `${f.name} ${f.description ?? ""}`.toLowerCase();
+  if (!/url|image|img|audio|voice|video|frame|reference|photo|portrait/.test(hay)) return null;
+  if (/audio|voice|speech|music|\bsound\b/.test(hay)) return "audio";
+  if (/video/.test(f.name.toLowerCase())) return "video";
+  if (/image|img|frame|reference|photo|portrait|face/.test(hay)) return "image";
+  return null;
+}
+
+/** Which spine artifacts can fill a media field of the given kind. */
+function artifactsForKind(all: Artifact[], kind: "image" | "video" | "audio"): Artifact[] {
+  if (kind === "audio") return all.filter((a) => a.type === "voice" && a.audio_url);
+  if (kind === "video") return all.filter((a) => a.type === "video" && a.output_url);
+  // image: any visual artifact with a URL
+  return all.filter((a) =>
+    a.output_url &&
+    ["image", "storyboard", "character", "character_angle", "background", "prop"].includes(a.type));
+}
+
 export function StudioCreateForm({
   kind, projectId, onClose, onSubmitted,
 }: {
@@ -69,6 +106,16 @@ export function StudioCreateForm({
   const [error, setError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
+  // The project's artifacts (the unified spine) — the pool the model-input
+  // pickers draw from (docs/studio-production-pipeline.md). A schema field that
+  // is a media input (image/video/audio) offers these instead of a bare URL box.
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  // Derivation links recorded when the user picks an existing artifact as input,
+  // so a composed run remembers the voice/image it was built from.
+  const [sources, setSources] = useState<{
+    voice_line_id?: string | null; image_run_id?: string | null;
+    script_id?: string | null; shot_seq?: number | null;
+  }>({});
   // The cost gate (rule 2 in the screen): first click fetches the estimate
   // and shows it; only the second, explicit confirmation actually submits.
   const [estimate, setEstimate] = useState<Estimate | null>(null);
@@ -96,6 +143,20 @@ export function StudioCreateForm({
     })();
     return () => { cancelled = true; };
   }, [kind]);
+
+  // Load the project's artifacts once — the pool for the media pickers.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api<{ artifacts: Artifact[] }>(`/api/studio/projects/${projectId}/artifacts`);
+        if (!cancelled) setArtifacts(data.artifacts ?? []);
+      } catch {
+        /* pickers are additive — a failure just falls back to the URL box */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   const fields = useMemo(
     () => (rec?.recommended?.schema?.fields ?? []).filter((f) => !DEDICATED.has(f.name)),
@@ -130,8 +191,24 @@ export function StudioCreateForm({
       endpoint_id: rec!.recommended!.endpoint_id,
       prompt: prompt.trim(),
       args,
+      sources,
     };
-  }, [fields, values, projectId, prompt, rec]);
+  }, [fields, values, projectId, prompt, rec, sources]);
+
+  // Picking an existing artifact fills the field with its URL AND records the
+  // derivation link (image → source run, voice → source line) so the run
+  // remembers what it was built from. Its shot/script travel with it.
+  const pickArtifact = useCallback((f: SchemaField, a: Artifact, kind: "image" | "video" | "audio") => {
+    setValue(f.name, (kind === "audio" ? a.audio_url : a.output_url) ?? "");
+    setSources((prev) => ({
+      ...prev,
+      script_id: a.script_id ?? prev.script_id ?? null,
+      shot_seq: a.shot_seq ?? prev.shot_seq ?? null,
+      ...(kind === "audio"
+        ? { voice_line_id: a.voice_line_id ?? null }
+        : { image_run_id: a.experiment_run_id ?? null }),
+    }));
+  }, [setValue]);
 
   // First click: POST without cost_approved — the server answers 402 with the
   // estimate, which IS the cost dialog. Nothing is spent on this call.
@@ -174,6 +251,8 @@ export function StudioCreateForm({
 
   const renderField = (f: SchemaField) => {
     const value = values[f.name] ?? f.default ?? "";
+    const media = mediaKindOf(f);
+    const options = media ? artifactsForKind(artifacts, media) : [];
     return (
       <label key={f.name} className="block text-xs space-y-1">
         <span className="font-medium">
@@ -193,13 +272,36 @@ export function StudioCreateForm({
             ))}
           </select>
         ) : (
-          <Input
-            className="h-8"
-            value={value}
-            placeholder={f.type}
-            disabled={locked}
-            onChange={(e) => setValue(f.name, e.target.value)}
-          />
+          <>
+            {/* Media input → pick from the project's artifacts (docs/studio-production-pipeline.md).
+                Picking fills the URL box below and records the derivation link. */}
+            {media && options.length > 0 && (
+              <select
+                className="w-full h-8 rounded-md border bg-background px-2 mb-1"
+                value=""
+                disabled={locked}
+                aria-label={t("createPickFrom")}
+                onChange={(e) => {
+                  const a = options.find((o) => o.id === e.target.value);
+                  if (a) pickArtifact(f, a, media);
+                }}
+              >
+                <option value="">{t("createPickFrom")}</option>
+                {options.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {(a.meta?.code || a.meta?.voice_label || a.model || a.type)} · {a.type}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Input
+              className="h-8"
+              value={value}
+              placeholder={f.type}
+              disabled={locked}
+              onChange={(e) => setValue(f.name, e.target.value)}
+            />
+          </>
         )}
         {f.description && (
           <span className="block text-muted-foreground line-clamp-2" title={f.description}>

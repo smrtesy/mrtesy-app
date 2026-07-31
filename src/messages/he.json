@@ -4637,6 +4637,7 @@
     "videoEmpty": "אין עדיין תוצרי וידאו בפרויקט.",
     "costPending": "עלות בהמתנה",
     "createTitle": "צור תוצר",
+    "createPickFrom": "בחר מתוצרי הפרויקט…",
     "createModel": "מודל",
     "createBasis": "בסיס ההמלצה",
     "createRecipeHint": "מבנה הפרומפט המומלץ (מהמתכון)",
