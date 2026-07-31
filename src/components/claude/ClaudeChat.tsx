@@ -89,7 +89,7 @@ const LIVE = ["queued", "running", "waiting"] as const;
  *  Stop button targets. A 'waiting' turn has no process to stop; it is removed
  *  from the queue instead. */
 const EXECUTING = ["queued", "running"] as const;
-const POLL_MS = 1500;
+const POLL_MS = 900;
 
 /** 12345 → "12.3K" — the compact way the usage figures read in the chrome. */
 function fmtTokens(n: number): string {
@@ -143,6 +143,10 @@ interface Turn {
   resumed_session: string | null;
   /** Set when this turn was moved to a split child — folded away on the parent. */
   moved_to_thread_id: string | null;
+  /** The model this turn ran on — shown as a quiet per-turn label so you can see
+   *  which model produced which answer (the console's "everything visible" rule).
+   *  Null = the engine's default was used (no explicit model on the run). */
+  model: string | null;
   /** Consumption the engine reported for this turn — what the usage line shows. */
   input_tokens: number | null;
   output_tokens: number | null;
@@ -542,6 +546,7 @@ export function ClaudeChat() {
         error: null,
         resumed_session: null,
         moved_to_thread_id: null,
+        model: null,
         input_tokens: null,
         output_tokens: null,
         duration_ms: null,
@@ -1436,6 +1441,9 @@ function TurnView({
   const live = turn.status === "queued" || turn.status === "running";
   const waiting = turn.status === "waiting";
   const turnTokens = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0);
+  // Friendly model name for the quiet per-turn label; fall back to the raw id for a
+  // model not in the picker list (older runs), null when the run pinned no model.
+  const modelName = turn.model ? (MODELS.find((m) => m.id === turn.model)?.name ?? turn.model) : null;
 
   // A failed turn often records the SAME text twice — the runner stores the engine's
   // last message as both result_summary (rendered as the answer bubble) and error
@@ -1604,13 +1612,19 @@ function TurnView({
             <p className="text-xs text-muted-foreground">{t("stopped")}</p>
           )}
 
-          {/* The turn's own consumption, stated quietly once it finished. */}
-          {!live && !waiting && turnTokens > 0 && (
+          {/* The turn's own consumption + which model produced it, stated quietly
+              once it finished. Model shows even when no token figures came back. */}
+          {!live && !waiting && (turnTokens > 0 || modelName) && (
             <p dir="ltr" className="text-[10px] tabular-nums text-muted-foreground/70 text-start">
-              {fmtTokens(turnTokens)} {t("usage.tokens")}
-              {typeof turn.duration_ms === "number" && turn.duration_ms > 0
-                ? ` · ${Math.round(turn.duration_ms / 1000)}s`
-                : ""}
+              {turnTokens > 0 && (
+                <>
+                  {fmtTokens(turnTokens)} {t("usage.tokens")}
+                  {typeof turn.duration_ms === "number" && turn.duration_ms > 0
+                    ? ` · ${Math.round(turn.duration_ms / 1000)}s`
+                    : ""}
+                </>
+              )}
+              {modelName ? `${turnTokens > 0 ? " · " : ""}${modelName}` : ""}
             </p>
           )}
 

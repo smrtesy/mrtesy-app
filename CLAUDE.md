@@ -746,11 +746,29 @@ can't cheaply undo deserves the same four.
 
 ## Migration discipline
 
-When you write SQL DDL (CREATE/ALTER/DROP) or DML that the user wants
-persisted, create a numbered file under `supabase/migrations/` named
-`YYYYMMDDHHMMSS_<slug>.sql` and tell the user to run it via Supabase
-CLI. Do not call `mcp__supabase__apply_migration` on a production
-project without explicit user authorization.
+When you write SQL DDL/DML the user wants persisted, **always** create a
+numbered file under `supabase/migrations/` named `YYYYMMDDHHMMSS_<slug>.sql`
+so the change is tracked in git.
+
+**Whether you apply it follows the same autonomy line as everything else
+here — reversible = do it yourself, irreversible = stop for a human** (this
+is the console autonomy gate, `docs/claude-console/autonomy-safety-gate.md`,
+applied to any session; it is *not* a separate "ask every time" rule):
+
+- **Additive / reversible** — `CREATE TABLE/INDEX`, `ADD COLUMN/CONSTRAINT`,
+  `COMMENT`, a `cron.schedule`, anything that does not drop or rewrite data:
+  **apply it yourself** via `mcp__supabase__apply_migration` on the production
+  project, then verify. Do **not** stop to ask — this is the same standing
+  autonomy as pushing a clean build to `main`. Making a reversible migration
+  wait on a human is exactly the friction this repo exists to remove.
+- **Destructive** — `DROP`, `DELETE`, `UPDATE` that changes data, `TRUNCATE`,
+  `ALTER COLUMN TYPE` / `SET NOT NULL`: **do not apply.** Run a `SELECT` to
+  size the blast radius, then stop and get the user's explicit go first.
+
+(The earlier blanket "do not apply without explicit authorization" was wrong:
+it contradicted the autonomy gate and forced every reversible migration to
+wait on a human. Corrected 2026-07-31, after a `cron.schedule` migration was
+needlessly held for approval.)
 
 ## Planning / design docs — commit and share a GitHub link
 

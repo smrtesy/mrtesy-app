@@ -16,7 +16,7 @@
  */
 
 import { db } from "../../db";
-import { runOneShot, AUTOMATION_ACCOUNT } from "./runner";
+import { runOneShot, AUTOMATION_ACCOUNT, BG_MODEL_STRONG } from "./runner";
 
 /** A single topic the split analysis found inside a wandering thread. */
 export interface SplitTopic {
@@ -132,7 +132,14 @@ export async function runSplitAnalysis(
     transcriptOf(turns),
   ].join("\n");
 
-  const reply = await runOneShot(prompt, { timeoutMs: 120_000, account: AUTOMATION_ACCOUNT });
+  // Decision/analysis (which turns to split into which chats) → strong model,
+  // never downgraded. On the automation account so it never eats the interactive window.
+  const reply = await runOneShot(prompt, {
+    timeoutMs: 120_000,
+    account: AUTOMATION_ACCOUNT,
+    model: BG_MODEL_STRONG,
+    label: "split-analysis",
+  });
   const parsed = parseJsonReply(reply) as { topics?: unknown; confidence?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.topics)) {
     await advanceGate();
@@ -337,7 +344,14 @@ export async function runGroupAnalysis(orgId: string, userId: string | null): Pr
     list,
   ].join("\n");
 
-  const reply = await runOneShot(prompt, { timeoutMs: 120_000, account: AUTOMATION_ACCOUNT });
+  // Decision/analysis (grouping threads under super-topics) → strong model, never
+  // downgraded. On the automation account so it never eats the interactive window.
+  const reply = await runOneShot(prompt, {
+    timeoutMs: 120_000,
+    account: AUTOMATION_ACCOUNT,
+    model: BG_MODEL_STRONG,
+    label: "group-analysis",
+  });
   const parsed = parseJsonReply(reply) as { topics?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.topics)) return { assigned: 0, topics: 0 };
 
@@ -457,7 +471,14 @@ export async function runDecomposeAnalysis(
     transcriptOf(turns),
   ].join("\n");
 
-  const reply = await runOneShot(prompt, { timeoutMs: 120_000, account: AUTOMATION_ACCOUNT });
+  // Decision/analysis (breaking a plan into briefed child chats) → strong model,
+  // never downgraded. On the automation account so it never eats the interactive window.
+  const reply = await runOneShot(prompt, {
+    timeoutMs: 120_000,
+    account: AUTOMATION_ACCOUNT,
+    model: BG_MODEL_STRONG,
+    label: "decompose-analysis",
+  });
   const parsed = parseJsonReply(reply) as { parts?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.parts)) return null;
 

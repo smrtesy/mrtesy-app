@@ -28,7 +28,11 @@ export default async function LocaleLayout({
             {children}
           </MergeJobShell>
           <PWAInstallPrompt />
-          <Toaster position={dir === "rtl" ? "top-left" : "top-right"} />
+          {/* duration: system messages stay 10s before auto-closing (user standing
+              preference, 2026-07). A few call sites pass their own duration and
+              keep it (InstallAppButton 8s; smrtplan consult toasts already 10s).
+              The undo countdown toast is unaffected (duration: Infinity, own 5s ring). */}
+          <Toaster position={dir === "rtl" ? "top-left" : "top-right"} duration={10_000} />
         </TooltipProvider>
       </RTLProvider>
     </NextIntlClientProvider>

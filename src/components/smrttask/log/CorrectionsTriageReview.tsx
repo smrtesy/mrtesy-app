@@ -48,13 +48,32 @@ interface TriageBlock {
   decided_at?: string | null;
 }
 
+/** The auto-diagnosis a read-only Claude run wrote for a code/ui correction
+ *  (server: corrections/diagnose.ts). Drives the card's problem+fix preview. */
+interface DiagnosisBlock {
+  status?: "pending" | "running" | "done" | "failed" | null;
+  problem_he?: string | null;
+  fix_he?: string | null;
+  risk?: "low" | "med" | "high" | null;
+  started_at?: string | null;
+}
+
 interface Correction {
   id: string;
   created_at: string;
   note: string;
   scope: string;
-  context?: { prompt_class?: PromptClass; triage?: TriageBlock } | null;
+  context?: {
+    prompt_class?: PromptClass;
+    triage?: TriageBlock;
+    diagnosis?: DiagnosisBlock;
+  } | null;
 }
+
+/** A diagnosis that has been "running" past this long is treated as failed on the
+ *  card, so a run that died without posting back never leaves it spinning. Mirrors
+ *  DIAGNOSIS_TIMEOUT_MS in server/.../corrections/diagnose.ts. */
+const DIAGNOSIS_STALE_MS = 10 * 60 * 1000;
 
 /**
  * Review the triage verdicts waiting on a decision.
@@ -159,7 +178,7 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
           `/api/corrections/${c.id}/claude-thread`,
           { method: "POST", body: {} },
         );
-        toast.success(t("triageFixStarted"));
+        toast.success(t("triageDiscussStarted"));
         // In-app tab in the tabs-workspace (not a browser window), deep-linked
         // onto the new conversation (ClaudeChat reads ?thread=).
         openTab(
@@ -203,6 +222,15 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
               const cls = c.context?.prompt_class ?? "unclear";
               const tri = c.context?.triage ?? {};
               const isRule = cls === "prompt";
+              const isFixable = cls === "code" || cls === "ui";
+              const diag = c.context?.diagnosis;
+              // A run that died without posting reads as "failed" on the card, so
+              // it never spins forever (server sweep persists the same verdict).
+              const diagStale =
+                diag?.status === "running" &&
+                !!diag.started_at &&
+                Date.now() - Date.parse(diag.started_at) > DIAGNOSIS_STALE_MS;
+              const diagStatus = diag ? (diagStale ? "failed" : diag.status) : null;
               return (
                 <div key={c.id} className="rounded-lg border p-3 space-y-2">
                   <div className="flex items-start justify-between gap-2">
@@ -221,6 +249,35 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                   )}
                   {cls === "needs_question" && tri.question_he && (
                     <p className="text-xs font-medium" dir="auto">❓ {tri.question_he}</p>
+                  )}
+                  {isFixable && diagStatus && (
+                    <div className="rounded-md bg-muted/50 p-2 space-y-1">
+                      {diagStatus === "running" && (
+                        <p className="text-xs text-muted-foreground" dir="auto">
+                          {t("triageDiagRunning")}
+                        </p>
+                      )}
+                      {diagStatus === "failed" && (
+                        <p className="text-xs text-amber-600 dark:text-amber-500" dir="auto">
+                          {t("triageDiagFailed")}
+                        </p>
+                      )}
+                      {diagStatus === "done" && (
+                        <>
+                          {diag?.problem_he && (
+                            <p className="text-xs" dir="auto">
+                              <span className="font-medium">{t("triageDiagProblem")}</span>{" "}
+                              {diag.problem_he}
+                            </p>
+                          )}
+                          {diag?.fix_he && (
+                            <p className="text-xs" dir="auto">
+                              <span className="font-medium">{t("triageDiagFix")}</span> {diag.fix_he}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
                   )}
                   {isRule && (
                     <div className="space-y-1">
@@ -244,7 +301,7 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                     </div>
                   )}
                   <div className="flex items-center justify-end gap-2 flex-wrap">
-                    {(cls === "code" || cls === "ui") && (
+                    {isFixable && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -252,7 +309,7 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                         onClick={() => continueWithClaude(c)}
                       >
                         <Bot className="me-1 h-3.5 w-3.5" />
-                        {t("triageContinueClaude")}
+                        {t("triageDiscuss")}
                       </Button>
                     )}
                     <Button
@@ -266,7 +323,11 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
                     </Button>
                     <Button size="sm" disabled={busyId === c.id} onClick={() => decide(c, "approve")}>
                       <Check className="me-1 h-3.5 w-3.5" />
-                      {isRule ? t("triageApproveRule") : t("triageApproveClass")}
+                      {isRule
+                        ? t("triageApproveRule")
+                        : isFixable
+                          ? t("triageApproveFix")
+                          : t("triageApproveClass")}
                     </Button>
                   </div>
                 </div>
