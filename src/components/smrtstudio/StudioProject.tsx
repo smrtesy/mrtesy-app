@@ -9,10 +9,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronDown, ChevronRight, ExternalLink, Plus, Zap } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
+import { Breadcrumbs, type Crumb } from "@/components/ui/breadcrumbs";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -731,15 +732,18 @@ function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
  * Doc→parse creation forms and its scripts, each opening its AudioLineList
  * inline. Casting/generation for Doc scripts still opens the full voice screen.
  */
-function VoiceContainer({ container, onChanged }: {
+function VoiceContainer({ container, openScript, setOpenScript, onChanged }: {
   container: { id: string; name: string; code_prefix: string | null };
+  // Which script is open across the whole voice tab (lifted so the top-level
+  // breadcrumb can name it and collapse it). Only one open at a time.
+  openScript: { scriptId: string; code: string } | null;
+  setOpenScript: (s: { scriptId: string; code: string } | null) => void;
   onChanged: () => void;
 }) {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
   const [scripts, setScripts] = useState<ScriptRow[] | null>(null);
   const [scriptsErr, setScriptsErr] = useState<string | null>(null);
-  const [openScriptId, setOpenScriptId] = useState<string | null>(null);
 
   const loadScripts = useCallback(async () => {
     setScriptsErr(null);
@@ -785,13 +789,13 @@ function VoiceContainer({ container, onChanged }: {
 
       {(scripts ?? []).map((s) => {
         const label = s.name === "__quick__" ? t("quickScriptLabel") : (s.name || s.code);
-        const isOpen = openScriptId === s.id;
+        const isOpen = openScript?.scriptId === s.id;
         return (
           <div key={s.id} className="rounded-md border">
             <div className="flex items-center justify-between gap-3 p-2">
               <button
                 type="button"
-                onClick={() => setOpenScriptId(isOpen ? null : s.id)}
+                onClick={() => setOpenScript(isOpen ? null : { scriptId: s.id, code: s.code })}
                 className="flex min-w-0 flex-1 items-center gap-2 text-start text-sm"
                 aria-expanded={isOpen}
               >
@@ -808,20 +812,6 @@ function VoiceContainer({ container, onChanged }: {
             </div>
             {isOpen && (
               <div className="border-t p-3">
-                {/* Breadcrumb: where you are (container › script), and one
-                    click back to the script list — the hierarchy anchor the
-                    embedded surface otherwise lacks when deep in a script. */}
-                <div className="mb-3 flex items-center gap-1 text-xs text-muted-foreground">
-                  <button
-                    type="button"
-                    onClick={() => setOpenScriptId(null)}
-                    className="hover:text-foreground hover:underline"
-                  >
-                    {container.name}
-                  </button>
-                  <ChevronRight className="h-3 w-3" />
-                  <span className="font-mono text-foreground">{s.code}</span>
-                </div>
                 {/* The full production surface for the script, inline: model +
                     LLM-emotion selects (auto = the per-model system default),
                     parse, generate/stop, casting, and the takes — the same
@@ -845,9 +835,11 @@ function VoiceContainer({ container, onChanged }: {
  * headers appear only when there are 2+ — a fresh single-container project
  * still reads as "the project is the only unit" (docs/studio-hierarchy-plan.md).
  */
-function VoiceTab({ containers, studioProjectId, onChanged }: {
+function VoiceTab({ containers, studioProjectId, openScript, setOpenScript, onChanged }: {
   containers: VoiceProject[];
   studioProjectId: string;
+  openScript: { scriptId: string; code: string } | null;
+  setOpenScript: (s: { scriptId: string; code: string } | null) => void;
   onChanged: () => void;
 }) {
   const t = useTranslations("studioProjects");
@@ -908,6 +900,8 @@ function VoiceTab({ containers, studioProjectId, onChanged }: {
           )}
           <VoiceContainer
             container={{ id: c.id, name: c.name, code_prefix: c.code_prefix }}
+            openScript={openScript}
+            setOpenScript={setOpenScript}
             onChanged={onChanged}
           />
         </div>
@@ -921,6 +915,11 @@ export function StudioProject({ projectId, embedded = false }: { projectId: stri
   const locale = useLocale();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which voice script is open — lifted here so the top breadcrumb names it and
+  // can collapse it. Cleared when the project changes (a stale script code from
+  // the previous project must not linger in the breadcrumb).
+  const [openScript, setOpenScript] = useState<{ scriptId: string; code: string } | null>(null);
+  useEffect(() => { setOpenScript(null); }, [projectId]);
 
   const load = useCallback(async () => {
     try {
@@ -960,8 +959,19 @@ export function StudioProject({ projectId, embedded = false }: { projectId: stri
   // container itself is hidden — the number of voice lines is what's meaningful.
   const voiceTakes = voice_projects.reduce((sum, v) => sum + (Number(v.total_lines) || 0), 0);
 
+  const crumbs: Crumb[] = [
+    { label: t("productionTitle"), href: `/${locale}/studio/projects` },
+    { label: name, onClick: openScript ? () => setOpenScript(null) : undefined },
+    ...(openScript ? [{ label: openScript.code }] : []),
+  ];
+
   return (
     <div className={embedded ? "space-y-4" : "mx-auto w-full max-w-5xl p-4 space-y-4"}>
+      {/* Standing house rule: the hierarchy breadcrumb sits at the top-left of
+          every hierarchical screen (src/components/ui/breadcrumbs.tsx). Here:
+          Production › project › open script. */}
+      <Breadcrumbs items={crumbs} />
+
       {/* When embedded in the production surface, the project selector already
           names the project + shows the balance, so the standalone header is
           suppressed to avoid a duplicate title. */}
@@ -985,6 +995,8 @@ export function StudioProject({ projectId, embedded = false }: { projectId: stri
           <VoiceTab
             containers={voice_projects}
             studioProjectId={projectId}
+            openScript={openScript}
+            setOpenScript={setOpenScript}
             onChanged={() => void load()}
           />
         </TabsContent>
