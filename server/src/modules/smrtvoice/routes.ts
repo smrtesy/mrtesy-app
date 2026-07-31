@@ -558,6 +558,18 @@ router.post(
         clean: req.body?.clean !== false,
       });
 
+      // Only a real voice id means a voice was actually created. Never mark the
+      // character "ready" on an empty id — a provider/transport hiccup that
+      // returned success-without-id would otherwise write a ghost voice
+      // (voice_status "ready", resemble_voice_id null) that silently produces
+      // no audio at generation time. Surface the failure so the user re-clones.
+      if (!result.voice_id) {
+        const msg =
+          "Voice clone returned no voice id — no voice was created. Please try cloning again.";
+        await notifyError(req.org!.id, "smrtvoice", { title: "Voice clone produced no voice", body: msg });
+        return res.status(502).json({ error: msg });
+      }
+
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
         .update({
@@ -853,6 +865,16 @@ router.post(
         provider: character.voice_provider === "minimax" ? "minimax" : "resemble",
         clean: req.body?.clean !== false,
       });
+
+      // A real voice id is proof a voice was created. Bail before writing
+      // anything if it's empty, so a success-without-id can't leave a ghost
+      // "ready" character with no voice (which then generates no audio).
+      if (!result.voice_id) {
+        const msg =
+          "Voice clone returned no voice id — no voice was created. Please try cloning again.";
+        await notifyError(req.org!.id, "smrtvoice", { title: "Voice clone produced no voice", body: msg });
+        return res.status(502).json({ error: msg, skipped });
+      }
 
       for (const path of stagedPaths) {
         const { error: sErr } = await db.from("smrtvoice_voice_samples").insert({
