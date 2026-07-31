@@ -4456,6 +4456,13 @@
     "delete": "Delete",
     "confirmDelete": "Delete this chat and all of its turns?",
     "settings": "Conversation settings",
+    "account": {
+      "aria": "Claude account: {name} — click to switch",
+      "menuTitle": "Claude account",
+      "primary": "Primary account",
+      "automation": "Second account",
+      "notConnected": "not connected"
+    },
     "empty": "Write a message to begin",
     "thinking": "Thinking…",
     "toolCount": "{count} tool calls",

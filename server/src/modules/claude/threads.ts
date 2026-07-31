@@ -54,7 +54,11 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, archived_at, last_message_at, created_at";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at";
+
+/** The account ids the runner knows how to route (loadAccountToken). An empty
+ *  string / null means "use the default", stored as NULL. */
+const ACCOUNTS = new Set(["primary", "automation"]);
 
 function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -223,6 +227,8 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   if (gitBranch && !isValidBranch(gitBranch)) return res.status(400).json({ error: "invalid branch" });
   const playbookId = str(body.playbook_id, 64) || null;
   if (playbookId && !UUID_RE.test(playbookId)) return res.status(400).json({ error: "invalid playbook_id" });
+  const account = str(body.claude_account, 32);
+  if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
 
   // Auto-connect the repo: when the caller didn't pick one, default to the org's
   // primary repo so the workspace has real code from turn one — the backend clones
@@ -245,6 +251,7 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
       repo: finalRepo || null,
       git_branch: gitBranch || null,
       playbook_id: playbookId,
+      claude_account: account || null,
     })
     .select(THREAD_COLS)
     .single();
@@ -452,6 +459,12 @@ router.patch("/claude/threads/:id", async (req: Request, res: Response) => {
     if (p && !UUID_RE.test(p)) return res.status(400).json({ error: "invalid playbook_id" });
     patch.playbook_id = p;
   }
+  if (body.claude_account !== undefined) {
+    const account = str(body.claude_account, 32);
+    if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
+    // Empty → NULL, which loadAccountToken reads as the primary account.
+    patch.claude_account = account || null;
+  }
 
   const { data, error } = await db
     .from("claude_threads")
@@ -615,7 +628,7 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
 
   const { data: thread, error: tErr } = await db
     .from("claude_threads")
-    .select("id, session_id, model, effort, repo, git_branch, playbook_id, title, title_source, workspace_thread_id")
+    .select("id, session_id, model, effort, repo, git_branch, playbook_id, claude_account, title, title_source, workspace_thread_id")
     .eq("id", req.params.id)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -702,6 +715,9 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
       effort: thread.effort,
       repo: thread.repo,
       git_branch: thread.git_branch,
+      // The account this conversation runs on — the header switcher writes it onto
+      // the thread; here it rides onto each turn so the runner picks the right token.
+      claude_account: thread.claude_account,
       status: hasLive ? "waiting" : "queued",
     })
     .select("id, turn_index, status, user_prompt, created_at")
@@ -1234,7 +1250,7 @@ router.post("/claude/threads/:id/children", async (req: Request, res: Response) 
   const orgId = req.org!.id;
   const { data: parent, error: pErr } = await db
     .from("claude_threads")
-    .select("id, title, model, effort, repo, git_branch, playbook_id")
+    .select("id, title, model, effort, repo, git_branch, playbook_id, claude_account")
     .eq("id", req.params.id)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -1259,6 +1275,7 @@ router.post("/claude/threads/:id/children", async (req: Request, res: Response) 
       repo: parent.repo,
       git_branch: parent.git_branch,
       playbook_id: parent.playbook_id,
+      claude_account: parent.claude_account,
       parent_thread_id: parent.id,
       seed_context: briefing,
     })
