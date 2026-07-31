@@ -43,6 +43,7 @@ import {
   transcribeAudio,
 } from "@/lib/media/gemini";
 import { runAutoReplies, type IncomingForReply } from "./autoreply";
+import { whatsappApiBase, whatsappBearer, whatsappViaProxy } from "@/lib/whatsapp-endpoint";
 
 // We don't need the edge runtime; Node is fine here and lets us use
 // `node:crypto`, `Buffer`, and the full Supabase client without polyfills.
@@ -1376,8 +1377,10 @@ async function downloadMetaMedia(
   token: string,
 ): Promise<MetaMediaBlob> {
   const apiVersion = await getMetaApiVersion(db);
-  const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const base = whatsappApiBase();
+  const bearer = whatsappBearer(token);
+  const metaRes = await fetch(`${base}/${apiVersion}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${bearer}` },
     signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
   });
   if (!metaRes.ok) {
@@ -1386,12 +1389,23 @@ async function downloadMetaMedia(
     );
   }
   const meta = (await metaRes.json()) as { url?: string; mime_type?: string };
-  if (!meta.url) throw new Error("Meta media response missing url");
 
-  const fileRes = await fetch(meta.url, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
-  });
+  // Direct-to-Meta returns a one-time lookaside CDN url we must follow; via the
+  // DualHook proxy that url is not reachable with the dh_live_ key, so pull the
+  // bytes from DualHook's dedicated /content route instead.
+  let fileRes: Awaited<ReturnType<typeof fetch>>;
+  if (whatsappViaProxy()) {
+    fileRes = await fetch(`${base}/${apiVersion}/${mediaId}/content`, {
+      headers: { Authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
+    });
+  } else {
+    if (!meta.url) throw new Error("Meta media response missing url");
+    fileRes = await fetch(meta.url, {
+      headers: { Authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
+    });
+  }
   if (!fileRes.ok) throw new Error(`Meta media download ${fileRes.status}`);
   const buf = Buffer.from(await fileRes.arrayBuffer());
 

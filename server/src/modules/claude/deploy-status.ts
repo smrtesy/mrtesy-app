@@ -31,7 +31,9 @@ const SECRET_LOCATION = "/admin/apps/smrttask/secrets";
  *  asking "is it ready yet" — bounded so a slow provider fails fast and readably. */
 const FETCH_TIMEOUT_MS = 10_000;
 
-type ProviderState = "building" | "ready" | "error" | "unknown";
+// warn = amber "a problem is approaching" — distinct from `building`. Used by the DB
+// dot when the project is up but the hourly db_health_watchdog reported pressure.
+type ProviderState = "building" | "ready" | "warn" | "error" | "unknown";
 
 export interface DeployStatus {
   provider: "vercel" | "railway" | "supabase";
@@ -44,6 +46,12 @@ export interface DeployStatus {
   url?: string | null;
   inspectorUrl?: string | null;
   createdAt?: string | null;
+  /** For the DB dot: the latest db_health_watchdog warning text + when it fired. */
+  warning?: string | null;
+  warnedAt?: string | null;
+  /** For the DB dot: a live one-liner from the metrics endpoint (e.g. "זיכרון 34% · דיסק 21%"),
+   *  shown even when healthy so hovering proves the live read is working. */
+  note?: string | null;
   /** When not configured (or misconfigured): which secret to set and where. */
   hint?: string;
   /** A provider/network error, surfaced rather than swallowed. */
@@ -375,19 +383,145 @@ function supabaseRef(): string | null {
  *     one trivial indexed read. Success → healthy; an error (project paused, network,
  *     auth) → error. Needs no extra secret, so the DB dot is always meaningful.
  */
+/** Window we look back for a db_health warning. The watchdog re-writes hourly while a
+ *  problem persists, so a window comfortably longer than the 60-min cron means a live
+ *  problem always shows amber, and a resolved one clears within ~this long. */
+const DB_WARN_WINDOW_MS = 90 * 60 * 1000;
+
+// ── live resource metrics (Supabase Prometheus endpoint) ─────────────────────────
+//
+// GET https://<ref>.supabase.co/customer/v1/privileged/metrics — Basic auth, username
+// "service_role", password = the service key the backend already holds. Returns
+// Prometheus text (node-exporter among ~200 series). We read memory% and disk% from
+// the STANDARD node-exporter names (stable across every deployment), so no metric name
+// is guessed. Everything degrades to null on any failure — a wrong key / unreachable
+// endpoint / absent metric simply means "no live overlay", never a broken dot.
+
+/** Amber when memory or disk crosses this — "a problem is approaching". */
+const MEM_WARN_PCT = 90;
+const DISK_WARN_PCT = 90;
+/** Cache the (relatively expensive) metrics scrape so many admin polls don't each hit
+ *  Supabase — one fetch per minute is plenty for a 30s-poll dot. */
+const METRICS_TTL_MS = 60_000;
+let metricsCache: { at: number; parsed: { memPct: number | null; diskPct: number | null } } | null = null;
+
+/** Last numeric value of a single (optionally-labelled) Prometheus gauge line. */
+function promGauge(text: string, name: string): number | null {
+  const m = new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([0-9eE+.\\-]+)`, "m").exec(text);
+  return m ? Number(m[1]) : null;
+}
+
+/** All samples of a labelled Prometheus series as {labels, value}. */
+function promSeries(text: string, name: string): Array<{ labels: Record<string, string>; value: number }> {
+  const out: Array<{ labels: Record<string, string>; value: number }> = [];
+  const re = new RegExp(`^${name}\\{([^}]*)\\}\\s+([0-9eE+.\\-]+)`, "gm");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const labels: Record<string, string> = {};
+    for (const pair of m[1].matchAll(/(\w+)="([^"]*)"/g)) labels[pair[1]] = pair[2];
+    out.push({ labels, value: Number(m[2]) });
+  }
+  return out;
+}
+
+function parseMetrics(text: string): { memPct: number | null; diskPct: number | null } {
+  // Memory: used = 1 - available/total.
+  const memTotal = promGauge(text, "node_memory_MemTotal_bytes");
+  const memAvail = promGauge(text, "node_memory_MemAvailable_bytes");
+  const memPct =
+    memTotal && memTotal > 0 && memAvail != null ? round1(100 * (1 - memAvail / memTotal)) : null;
+
+  // Disk: the busiest REAL filesystem (skip tmpfs/overlay/etc), used = 1 - avail/size.
+  const avail = promSeries(text, "node_filesystem_avail_bytes");
+  const size = promSeries(text, "node_filesystem_size_bytes");
+  const sizeByMount = new Map<string, number>();
+  for (const s of size) if (isRealFs(s.labels)) sizeByMount.set(s.labels.mountpoint, s.value);
+  let diskPct: number | null = null;
+  for (const a of avail) {
+    if (!isRealFs(a.labels)) continue;
+    const sz = sizeByMount.get(a.labels.mountpoint);
+    if (!sz || sz <= 0) continue;
+    const used = round1(100 * (1 - a.value / sz));
+    if (diskPct == null || used > diskPct) diskPct = used;
+  }
+  return { memPct, diskPct };
+}
+
+function isRealFs(labels: Record<string, string>): boolean {
+  const fs = labels.fstype ?? "";
+  return !["tmpfs", "overlay", "squashfs", "ramfs", "devtmpfs", "iso9660"].includes(fs);
+}
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+async function liveMetrics(): Promise<{ memPct: number | null; diskPct: number | null } | null> {
+  if (metricsCache && Date.now() - metricsCache.at < METRICS_TTL_MS) return metricsCache.parsed;
+  const ref = supabaseRef();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!ref || !key) return null;
+  try {
+    const auth = Buffer.from(`service_role:${key}`).toString("base64");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let text = "";
+    try {
+      const res = await fetch(`https://${ref}.supabase.co/customer/v1/privileged/metrics`, {
+        headers: { Authorization: `Basic ${auth}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      text = await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
+    const parsed = parseMetrics(text);
+    metricsCache = { at: Date.now(), parsed };
+    return parsed;
+  } catch {
+    return null; // unreachable / auth / parse — no overlay, never a broken dot.
+  }
+}
+
+/**
+ * The latest early-warning from the hourly `db_health_watchdog()` (migration
+ * 20260730203000): a `log_entries` row with `category='db_health'` inside the window.
+ * The watchdog writes ONLY on pressure (connections/stuck-query/cache-hit/dead-tuples),
+ * so its presence IS the "a problem is approaching" signal. Absence → nothing to warn.
+ */
+async function recentDbHealthWarning(): Promise<{ message: string; at: string } | null> {
+  try {
+    const since = new Date(Date.now() - DB_WARN_WINDOW_MS).toISOString();
+    const { data, error } = await db
+      .from("log_entries")
+      .select("error_message, created_at")
+      .eq("category", "db_health")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return null;
+    const row = data[0] as { error_message: string | null; created_at: string };
+    return { message: row.error_message ?? "אזהרת בריאות DB", at: row.created_at };
+  } catch {
+    return null;
+  }
+}
+
 export async function supabaseStatus(): Promise<DeployStatus> {
   const ref = supabaseRef();
   const token = await secret("SUPABASE_ACCESS_TOKEN");
 
+  // ── base state: is the project up? ──
+  let base: DeployStatus | null = null;
+
   // Level 1 — Management API (real project lifecycle state).
   if (token && ref) {
     try {
-      const { ok, status, body } = await fetchJson(`https://api.supabase.com/v1/projects/${ref}`, {
+      const { ok, body } = await fetchJson(`https://api.supabase.com/v1/projects/${ref}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (ok) {
         const raw = String((body as { status?: unknown })?.status ?? "");
-        return { provider: "supabase", configured: true, state: supabaseState(raw), rawState: raw };
+        base = { provider: "supabase", configured: true, state: supabaseState(raw), rawState: raw };
       }
       // A 401/403 means the token is wrong — fall through to the ping rather than
       // reporting the project down when it's really an auth problem with the token.
@@ -397,15 +531,63 @@ export async function supabaseStatus(): Promise<DeployStatus> {
   }
 
   // Level 2 — reachability ping (always available, no token).
-  try {
-    const { error } = await db.from("apps").select("id").limit(1);
-    if (error) {
-      return { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: error.message };
+  if (!base) {
+    try {
+      const { error } = await db.from("apps").select("id").limit(1);
+      base = error
+        ? { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: error.message }
+        : { provider: "supabase", configured: true, state: "ready", rawState: "reachable" };
+    } catch (e) {
+      base = { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: e instanceof Error ? e.message : String(e) };
     }
-    return { provider: "supabase", configured: true, state: "ready", rawState: "reachable" };
-  } catch (e) {
-    return { provider: "supabase", configured: true, state: "error", rawState: "unreachable", error: e instanceof Error ? e.message : String(e) };
   }
+
+  // ── early-warning overlay ──
+  // A hard down/unhealthy state already dominates — leave it red. Only when the project
+  // is otherwise up do we surface the watchdog's "approaching problem" as amber, so the
+  // dot escalates green → amber (pressure) → red (down).
+  if (base.state === "ready") {
+    const [metrics, warn] = await Promise.all([liveMetrics(), recentDbHealthWarning()]);
+
+    // Live metric summary — shown in the tooltip even when healthy, so hovering the DB
+    // dot proves the live read is working (and lets you watch memory/disk trend).
+    const note =
+      (metrics &&
+        [
+          metrics.memPct != null ? `זיכרון ${metrics.memPct}%` : null,
+          metrics.diskPct != null ? `דיסק ${metrics.diskPct}%` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")) ||
+      null;
+
+    // Amber triggers: a real-time metric over threshold (≤30s to show), OR the hourly
+    // in-DB watchdog. Either one is "a problem is approaching".
+    const metricIssues: string[] = [];
+    if (metrics?.memPct != null && metrics.memPct >= MEM_WARN_PCT)
+      metricIssues.push(`זיכרון ${metrics.memPct}%`);
+    if (metrics?.diskPct != null && metrics.diskPct >= DISK_WARN_PCT)
+      metricIssues.push(`דיסק ${metrics.diskPct}%`);
+
+    if (metricIssues.length > 0 || warn) {
+      const warning = [
+        metricIssues.length ? `לחץ משאבים: ${metricIssues.join(", ")}` : null,
+        warn?.message ?? null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return {
+        ...base,
+        state: "warn",
+        rawState: "pressure",
+        warning,
+        warnedAt: warn?.at ?? new Date().toISOString(),
+        note,
+      };
+    }
+    return { ...base, note };
+  }
+  return base;
 }
 
 /** All three surfaces at once — frontend (Vercel), backend (Railway), database

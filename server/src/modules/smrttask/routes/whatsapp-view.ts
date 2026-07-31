@@ -23,6 +23,7 @@ import { requireFullTask } from "../lib/access";
 import { simpleCall } from "../../../anthropic";
 import { transcribeAudio } from "../../../gemini";
 import { metaErrorSummary } from "../../../lib/meta-errors";
+import { whatsappApiBase, whatsappBearer } from "../../../lib/whatsapp-endpoint";
 
 const router = Router();
 const gate = [requireAuth, requireOrg, requireApp("smrttask"), requireFullTask];
@@ -843,13 +844,13 @@ router.post("/whatsapp/messages/send", ...gate, async (req: Request, res: Respon
     payload.context = { message_id: reply_to_wamid };
   }
 
-  const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
+  const url = `${whatsappApiBase()}/${META_API_VERSION}/${conn.phone_number_id}/messages`;
   let sendRes: Awaited<ReturnType<typeof fetch>>;
   try {
     sendRes = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${whatsappBearer(accessToken)}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
@@ -1006,8 +1007,8 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
     form.append("type", mime);
     form.append("file", new Blob([buf], { type: mime }), safeName);
     const uploadRes = await fetch(
-      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/media`,
-      { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body: form },
+      `${whatsappApiBase()}/${META_API_VERSION}/${conn.phone_number_id}/media`,
+      { method: "POST", headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}` }, body: form },
     );
     const uploadJson = (await uploadRes.json().catch(() => ({}))) as {
       id?: string;
@@ -1034,10 +1035,10 @@ router.post("/whatsapp/messages/send-image", ...gate, async (req: Request, res: 
   let sendRes: Awaited<ReturnType<typeof fetch>>;
   try {
     sendRes = await fetch(
-      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+      `${whatsappApiBase()}/${META_API_VERSION}/${conn.phone_number_id}/messages`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}`, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       },
     );
@@ -1214,8 +1215,8 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
     form.append("type", OGG_MIME);
     form.append("file", new Blob([oggBuf], { type: OGG_MIME }), "voice.ogg");
     const uploadRes = await fetch(
-      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/media`,
-      { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body: form },
+      `${whatsappApiBase()}/${META_API_VERSION}/${conn.phone_number_id}/media`,
+      { method: "POST", headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}` }, body: form },
     );
     const uploadJson = (await uploadRes.json().catch(() => ({}))) as {
       id?: string;
@@ -1249,10 +1250,10 @@ router.post("/whatsapp/messages/send-audio", ...gate, async (req: Request, res: 
   let sendRes: Awaited<ReturnType<typeof fetch>>;
   try {
     sendRes = await fetch(
-      `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`,
+      `${whatsappApiBase()}/${META_API_VERSION}/${conn.phone_number_id}/messages`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}`, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       },
     );
@@ -1414,12 +1415,12 @@ router.post("/whatsapp/messages/react", ...gate, async (req: Request, res: Respo
     },
   };
 
-  const url = `https://graph.facebook.com/${META_API_VERSION}/${conn.phone_number_id}/messages`;
+  const url = `${whatsappApiBase()}/${META_API_VERSION}/${conn.phone_number_id}/messages`;
   let sendRes: Awaited<ReturnType<typeof fetch>>;
   try {
     sendRes = await fetch(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
   } catch (e) {
