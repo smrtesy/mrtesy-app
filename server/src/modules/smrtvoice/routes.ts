@@ -3050,10 +3050,16 @@ router.get("/voice/resemble/voices", async (req: Request, res: Response) => {
     // Self-heal: null any character voice link whose Resemble voice no longer
     // exists (e.g. deleted directly on the Resemble dashboard). Keeps the
     // Characters screen honest without a manual unlink.
+    // CRITICAL: only RESEMBLE-provider characters may be reconciled against the
+    // Resemble account list. A MiniMax voice id is a fal custom_voice_id that is
+    // never in `liveIds`, so without this filter every casting-screen load
+    // (which hits this endpoint) would wrongly null every MiniMax character's
+    // voice — leaving a "ready" character with no voice that generates silence.
     const { data: linked } = await db
       .from("smrtvoice_characters")
       .select("id, resemble_voice_id")
       .eq("org_id", req.org!.id)
+      .eq("voice_provider", "resemble")
       .not("resemble_voice_id", "is", null);
     const dangling = (linked ?? [])
       .filter((c: { resemble_voice_id: string }) => !liveIds.has(c.resemble_voice_id))
