@@ -640,9 +640,9 @@ router.get("/studio/projects/:id", async (req: Request, res: Response) => {
     db.from("studio_projects").select("*")
       .eq("org_id", orgId).eq("id", id).maybeSingle(),
     db.from("smrtvoice_projects")
-      .select("id, name, status, total_lines, completed_lines, total_cost_usd, updated_at")
+      .select("id, name, code_prefix, status, total_lines, completed_lines, total_cost_usd, created_at, updated_at")
       .eq("org_id", orgId).eq("studio_project_id", id)
-      .order("updated_at", { ascending: false }),
+      .order("created_at", { ascending: true }),
     pageAll<Row>((from, to) =>
       db.from("experiment_runs")
         .select("id, code, model, method, stage, prompt, seed, cost_usd, output_url, run_status, error, qc_status, qc_score, qc_reason, qc_scores, qc_cost_usd, overridden, meta, created_at")

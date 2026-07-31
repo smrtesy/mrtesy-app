@@ -4483,6 +4483,11 @@
     "copied": "Copied",
     "modelLabel": "Model",
     "effortLabel": "Effort",
+    "defaults": {
+      "heading": "Defaults for new chats",
+      "model": "Default model",
+      "effort": "Default effort"
+    },
     "split": {
       "button": "Split the conversation",
       "none": "No topics to split — this conversation is about one thing",
@@ -4625,6 +4630,11 @@
     "voiceOpenFull": "Open full project",
     "voiceScriptsEmpty": "No scripts in this project yet.",
     "voiceScriptOpenFull": "Full edit / casting",
+    "voiceOpenFullProject": "Open full production screen (script + casting)",
+    "voiceToolsSettings": "Voice settings",
+    "voiceToolsLibrary": "Voice library",
+    "voiceToolsCharacters": "Characters",
+    "voiceToolsInsights": "Insights",
     "quickScriptLabel": "Quick creations",
     "imageEmpty": "No image outputs in this project yet.",
     "videoEmpty": "No video outputs in this project yet.",

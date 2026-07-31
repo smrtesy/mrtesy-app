@@ -4482,6 +4482,11 @@
     "copied": "הועתק",
     "modelLabel": "מודל",
     "effortLabel": "רמת מאמץ",
+    "defaults": {
+      "heading": "ברירות מחדל לצ'אט חדש",
+      "model": "מודל ברירת מחדל",
+      "effort": "רמת מאמץ ברירת מחדל"
+    },
     "split": {
       "button": "פצל את השיחה",
       "none": "לא נמצאו נושאים לפצל — השיחה עוסקת בנושא אחד",
@@ -4624,6 +4629,11 @@
     "voiceOpenFull": "פתח פרויקט מלא",
     "voiceScriptsEmpty": "אין עדיין תסריטים בפרויקט הזה.",
     "voiceScriptOpenFull": "עריכה מלאה / ליהוק",
+    "voiceOpenFullProject": "פתח מסך הפקה מלא (חיבור סקריפט וליהוק)",
+    "voiceToolsSettings": "הגדרות קול",
+    "voiceToolsLibrary": "ספריית קולות",
+    "voiceToolsCharacters": "דמויות",
+    "voiceToolsInsights": "תובנות",
     "quickScriptLabel": "יצירות מהירות",
     "imageEmpty": "אין עדיין תוצרי תמונה בפרויקט.",
     "videoEmpty": "אין עדיין תוצרי וידאו בפרויקט.",

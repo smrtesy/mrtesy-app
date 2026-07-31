@@ -9,16 +9,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronDown, Plus, Zap } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
+import { Breadcrumbs, type Crumb } from "@/components/ui/breadcrumbs";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
 import { AudioLineList } from "@/components/smrtvoice/AudioLineList";
 import { CreateScriptForm } from "@/components/smrtvoice/CreateScriptForm";
+import { ScriptOverview } from "@/components/smrtvoice/ScriptOverview";
 
 type Project = {
   id: string;
@@ -31,6 +33,7 @@ type Project = {
 type VoiceProject = {
   id: string;
   name: string;
+  code_prefix: string | null;
   status: string;
   total_lines: number;
   completed_lines: number;
@@ -569,8 +572,8 @@ function QuickVoiceLine({
   voiceProjectId,
   onCreated,
 }: {
-  // The one voice container of the studio project (resolved by VoiceTab). No
-  // user-facing "voice project" pick — the studio project is the only unit.
+  // The voice container this quick line belongs to (one of the studio
+  // project's containers, passed down by VoiceContainer).
   voiceProjectId: string;
   onCreated: () => void;
 }) {
@@ -725,62 +728,57 @@ function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
 }
 
 /**
- * The voice tab of a studio project. There is NO user-facing "voice project":
- * the studio project is the only unit (docs/studio-hierarchy-plan.md). This
- * resolves the studio project's single hidden voice container
- * (GET .../voice-project, created on first use) and shows its content directly —
- * quick line + Doc→parse creation + the scripts, each opening its AudioLineList
+ * One voice container (folder) inside a studio project: its quick-line +
+ * Doc→parse creation forms and its scripts, each opening its AudioLineList
  * inline. Casting/generation for Doc scripts still opens the full voice screen.
  */
-function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onChanged: () => void }) {
+function VoiceContainer({ container, openScript, setOpenScript, onChanged }: {
+  container: { id: string; name: string; code_prefix: string | null };
+  // Which script is open across the whole voice tab (lifted so the top-level
+  // breadcrumb can name it and collapse it). Only one open at a time.
+  openScript: { scriptId: string; code: string } | null;
+  setOpenScript: (s: { scriptId: string; code: string } | null) => void;
+  onChanged: () => void;
+}) {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
-  const [folder, setFolder] = useState<{ id: string; code_prefix: string | null } | null>(null);
-  const [folderErr, setFolderErr] = useState<string | null>(null);
   const [scripts, setScripts] = useState<ScriptRow[] | null>(null);
   const [scriptsErr, setScriptsErr] = useState<string | null>(null);
-  const [openScriptId, setOpenScriptId] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { voice_project } = await api<{ voice_project: { id: string; code_prefix: string | null } }>(
-          `/api/studio/projects/${studioProjectId}/voice-project`, { method: "POST" });
-        if (!cancelled) setFolder(voice_project);
-      } catch (e) {
-        if (!cancelled) setFolderErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [studioProjectId]);
-
-  const loadScripts = useCallback(async (folderId: string) => {
+  const loadScripts = useCallback(async () => {
     setScriptsErr(null);
     try {
-      const { scripts: rows } = await api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${folderId}/scripts`);
+      const { scripts: rows } = await api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${container.id}/scripts`);
       setScripts(rows ?? []);
     } catch (e) {
       setScriptsErr(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [container.id]);
 
-  useEffect(() => { if (folder) void loadScripts(folder.id); }, [folder, loadScripts]);
-
-  if (folderErr) return <p className="text-sm text-destructive">{folderErr}</p>;
-  if (!folder) return <p className="text-sm text-muted-foreground py-4">…</p>;
+  useEffect(() => { void loadScripts(); }, [loadScripts]);
 
   const nextSeq = (scripts ?? []).reduce((max, s) => Math.max(max, s.seq), 0) + 1;
-  const nextCode = `${folder.code_prefix ?? ""}${nextSeq}`;
-  const refresh = () => { void loadScripts(folder.id); onChanged(); };
+  const nextCode = `${container.code_prefix ?? ""}${nextSeq}`;
+  const refresh = () => { void loadScripts(); onChanged(); };
 
   return (
     <div className="space-y-3">
-      <QuickVoiceLine voiceProjectId={folder.id} onCreated={refresh} />
+      {/* Full production hub for this project — connect a script (Doc→parse),
+          voice casting, generation. The embedded tab is the fast path; the
+          full screen holds the complete production workflow. */}
+      <PaneLink
+        href={`/${locale}/voice/projects/${container.id}`}
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+      >
+        <ExternalLink className="h-3.5 w-3.5" />
+        {t("voiceOpenFullProject")}
+      </PaneLink>
+
+      <QuickVoiceLine voiceProjectId={container.id} onCreated={refresh} />
 
       {/* Doc→parse. Gated on loaded scripts so nextCode reflects the real prefix. */}
       {scripts !== null && (
-        <CreateScriptForm projectId={folder.id} nextCode={nextCode} onCreated={refresh} />
+        <CreateScriptForm projectId={container.id} nextCode={nextCode} onCreated={refresh} />
       )}
 
       {scriptsErr && <p className="text-xs text-destructive">{scriptsErr}</p>}
@@ -791,13 +789,13 @@ function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onC
 
       {(scripts ?? []).map((s) => {
         const label = s.name === "__quick__" ? t("quickScriptLabel") : (s.name || s.code);
-        const isOpen = openScriptId === s.id;
+        const isOpen = openScript?.scriptId === s.id;
         return (
           <div key={s.id} className="rounded-md border">
             <div className="flex items-center justify-between gap-3 p-2">
               <button
                 type="button"
-                onClick={() => setOpenScriptId(isOpen ? null : s.id)}
+                onClick={() => setOpenScript(isOpen ? null : { scriptId: s.id, code: s.code })}
                 className="flex min-w-0 flex-1 items-center gap-2 text-start text-sm"
                 aria-expanded={isOpen}
               >
@@ -813,8 +811,12 @@ function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onC
               </span>
             </div>
             {isOpen && (
-              <div className="border-t p-2">
-                <AudioLineList scriptId={s.id} />
+              <div className="border-t p-3">
+                {/* The full production surface for the script, inline: model +
+                    LLM-emotion selects (auto = the per-model system default),
+                    parse, generate/stop, casting, and the takes — the same
+                    ScriptOverview the standalone screen renders, header hidden. */}
+                <ScriptOverview scriptId={s.id} embedded />
               </div>
             )}
           </div>
@@ -824,11 +826,100 @@ function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onC
   );
 }
 
+/**
+ * The voice tab of a studio project. A studio project may hold MORE THAN ONE
+ * voice container (legacy projects grouped their work into separate folders —
+ * e.g. Hebrew vs English). Show ALL of the project's containers, each with its
+ * scripts, so nothing is hidden. When a project has no container yet, ensure
+ * the single hidden default (POST .../voice-project) and reload. Container
+ * headers appear only when there are 2+ — a fresh single-container project
+ * still reads as "the project is the only unit" (docs/studio-hierarchy-plan.md).
+ */
+function VoiceTab({ containers, studioProjectId, openScript, setOpenScript, onChanged }: {
+  containers: VoiceProject[];
+  studioProjectId: string;
+  openScript: { scriptId: string; code: string } | null;
+  setOpenScript: (s: { scriptId: string; code: string } | null) => void;
+  onChanged: () => void;
+}) {
+  const t = useTranslations("studioProjects");
+  const locale = useLocale();
+  const [ensureErr, setEnsureErr] = useState<string | null>(null);
+  // Fire the ensure-POST at most once per mount. Without this, `onChanged`'s
+  // changing identity (an inline arrow in the parent) re-runs the effect while
+  // the first POST is still in flight, and since there is no unique index on
+  // (org_id, studio_project_id) two POSTs race into two hidden containers
+  // (StrictMode reproduces this on mount). The ref makes it idempotent.
+  const ensured = useRef(false);
+
+  // Only ensure a default container when the project truly has none yet.
+  useEffect(() => {
+    if (containers.length > 0 || ensured.current) return;
+    ensured.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await api(`/api/studio/projects/${studioProjectId}/voice-project`, { method: "POST" });
+        if (!cancelled) onChanged();
+      } catch (e) {
+        if (!cancelled) { ensured.current = false; setEnsureErr(e instanceof Error ? e.message : String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [containers.length, studioProjectId, onChanged]);
+
+  if (ensureErr) return <p className="text-sm text-destructive">{ensureErr}</p>;
+  if (containers.length === 0) return <p className="text-sm text-muted-foreground py-4">…</p>;
+
+  const showHeaders = containers.length > 1;
+
+  // Voice-wide tools that used to live in the standalone voice nav (dropped
+  // when the tab was embedded): general settings, the voice library, the
+  // character list, insights. Each screen still lives at its deep URL.
+  const tools: { href: string; label: string }[] = [
+    { href: `/${locale}/settings/apps/smrtstudio`, label: t("voiceToolsSettings") },
+    { href: `/${locale}/voice/library`, label: t("voiceToolsLibrary") },
+    { href: `/${locale}/voice/characters`, label: t("voiceToolsCharacters") },
+    { href: `/${locale}/voice/insights`, label: t("voiceToolsInsights") },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        {tools.map((tool) => (
+          <PaneLink key={tool.href} href={tool.href} className="text-muted-foreground hover:text-foreground hover:underline">
+            {tool.label}
+          </PaneLink>
+        ))}
+      </div>
+
+      {containers.map((c) => (
+        <div key={c.id} className={showHeaders ? "space-y-2" : ""}>
+          {showHeaders && (
+            <h3 className="text-sm font-semibold text-muted-foreground">{c.name}</h3>
+          )}
+          <VoiceContainer
+            container={{ id: c.id, name: c.name, code_prefix: c.code_prefix }}
+            openScript={openScript}
+            setOpenScript={setOpenScript}
+            onChanged={onChanged}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function StudioProject({ projectId, embedded = false }: { projectId: string; embedded?: boolean }) {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which voice script is open — lifted here so the top breadcrumb names it and
+  // can collapse it. Cleared when the project changes (a stale script code from
+  // the previous project must not linger in the breadcrumb).
+  const [openScript, setOpenScript] = useState<{ scriptId: string; code: string } | null>(null);
+  useEffect(() => { setOpenScript(null); }, [projectId]);
 
   const load = useCallback(async () => {
     try {
@@ -868,8 +959,19 @@ export function StudioProject({ projectId, embedded = false }: { projectId: stri
   // container itself is hidden — the number of voice lines is what's meaningful.
   const voiceTakes = voice_projects.reduce((sum, v) => sum + (Number(v.total_lines) || 0), 0);
 
+  const crumbs: Crumb[] = [
+    { label: t("productionTitle"), href: `/${locale}/studio/projects` },
+    { label: name, onClick: openScript ? () => setOpenScript(null) : undefined },
+    ...(openScript ? [{ label: openScript.code }] : []),
+  ];
+
   return (
     <div className={embedded ? "space-y-4" : "mx-auto w-full max-w-5xl p-4 space-y-4"}>
+      {/* Standing house rule: the hierarchy breadcrumb sits at the top-left of
+          every hierarchical screen (src/components/ui/breadcrumbs.tsx). Here:
+          Production › project › open script. */}
+      <Breadcrumbs items={crumbs} />
+
       {/* When embedded in the production surface, the project selector already
           names the project + shows the balance, so the standalone header is
           suppressed to avoid a duplicate title. */}
@@ -890,7 +992,13 @@ export function StudioProject({ projectId, embedded = false }: { projectId: stri
         </TabsList>
 
         <TabsContent value="voice">
-          <VoiceTab studioProjectId={projectId} onChanged={() => void load()} />
+          <VoiceTab
+            containers={voice_projects}
+            studioProjectId={projectId}
+            openScript={openScript}
+            setOpenScript={setOpenScript}
+            onChanged={() => void load()}
+          />
         </TabsContent>
 
         <TabsContent value="image">

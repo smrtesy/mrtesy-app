@@ -27,3 +27,20 @@ When you add or change a screen that can render in a pane:
 Full picture: `docs/router-panes-plan.md`. Reference implementation of the
 compact-UI collapsed-search pattern:
 `src/components/smrttask/whatsapp/WhatsAppReader.tsx`.
+
+## Breadcrumbs — standing rule for every hierarchical screen
+
+Any screen that has a hierarchy (a path of levels the user drills into —
+e.g. Production › project › script) MUST show a breadcrumb at the
+**top-left of the screen** (a top row), **always visible** (not only after
+drilling in), with a chevron between each level and every level except the
+last navigable — a `href` to jump there, or an `onClick` to collapse/return
+in place. This is a user standing preference (2026-07), not per-screen taste.
+
+Use the shared component `src/components/ui/breadcrumbs.tsx`
+(`<Breadcrumbs items={[{label, href?, onClick?}]} />`) — do NOT hand-roll a
+breadcrumb, so the look and behavior stay identical everywhere. It renders
+`dir="ltr"` so the path reads left→right. Reference wiring (lifting the
+drilled-into level up so the top breadcrumb can name and collapse it):
+`src/components/smrtstudio/StudioProject.tsx` (Production › project ›
+open-script).
