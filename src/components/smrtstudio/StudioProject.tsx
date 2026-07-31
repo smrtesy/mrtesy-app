@@ -746,7 +746,7 @@ function VoiceTab({ studioProjectId, onChanged }: { studioProjectId: string; onC
     (async () => {
       try {
         const { voice_project } = await api<{ voice_project: { id: string; code_prefix: string | null } }>(
-          `/api/studio/projects/${studioProjectId}/voice-project`);
+          `/api/studio/projects/${studioProjectId}/voice-project`, { method: "POST" });
         if (!cancelled) setFolder(voice_project);
       } catch (e) {
         if (!cancelled) setFolderErr(e instanceof Error ? e.message : String(e));
