@@ -9,10 +9,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronDown, ExternalLink, Plus, Zap } from "lucide-react";
+import { ChevronDown, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
-import { PaneLink } from "@/lib/panes/nav";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { Breadcrumbs, type Crumb } from "@/components/ui/breadcrumbs";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -741,7 +741,6 @@ function VoiceContainer({ container, openScript, setOpenScript, onChanged }: {
   onChanged: () => void;
 }) {
   const t = useTranslations("studioProjects");
-  const locale = useLocale();
   const [scripts, setScripts] = useState<ScriptRow[] | null>(null);
   const [scriptsErr, setScriptsErr] = useState<string | null>(null);
 
@@ -763,17 +762,6 @@ function VoiceContainer({ container, openScript, setOpenScript, onChanged }: {
 
   return (
     <div className="space-y-3">
-      {/* Full production hub for this project — connect a script (Doc→parse),
-          voice casting, generation. The embedded tab is the fast path; the
-          full screen holds the complete production workflow. */}
-      <PaneLink
-        href={`/${locale}/voice/projects/${container.id}`}
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-      >
-        <ExternalLink className="h-3.5 w-3.5" />
-        {t("voiceOpenFullProject")}
-      </PaneLink>
-
       <QuickVoiceLine voiceProjectId={container.id} onCreated={refresh} />
 
       {/* Doc→parse. Gated on loaded scripts so nextCode reflects the real prefix. */}
@@ -805,9 +793,6 @@ function VoiceContainer({ container, openScript, setOpenScript, onChanged }: {
               </button>
               <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                 <span>{s.completed_lines}/{s.total_lines} · {s.status}</span>
-                <PaneLink href={`/${locale}/voice/scripts/${s.id}`} className="underline hover:text-foreground">
-                  {t("voiceScriptOpenFull")}
-                </PaneLink>
               </span>
             </div>
             {isOpen && (
@@ -887,9 +872,14 @@ function VoiceTab({ containers, studioProjectId, openScript, setOpenScript, onCh
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         {tools.map((tool) => (
-          <PaneLink key={tool.href} href={tool.href} className="text-muted-foreground hover:text-foreground hover:underline">
+          <OpenTabLink
+            key={tool.href}
+            href={tool.href}
+            label={tool.label}
+            className="text-muted-foreground hover:text-foreground hover:underline"
+          >
             {tool.label}
-          </PaneLink>
+          </OpenTabLink>
         ))}
       </div>
 

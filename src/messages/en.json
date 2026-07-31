@@ -4629,8 +4629,6 @@
     "voiceEmpty": "No linked voice project.",
     "voiceOpenFull": "Open full project",
     "voiceScriptsEmpty": "No scripts in this project yet.",
-    "voiceScriptOpenFull": "Full edit / casting",
-    "voiceOpenFullProject": "Open full production screen (script + casting)",
     "voiceToolsSettings": "Voice settings",
     "voiceToolsLibrary": "Voice library",
     "voiceToolsCharacters": "Characters",
