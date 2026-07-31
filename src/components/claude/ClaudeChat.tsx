@@ -1162,10 +1162,25 @@ function renderTurns(
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
   let i = 0;
+  // Tracks whether an earlier COMPLETED turn of this thread has been seen. The
+  // context-restored banner is gated on it: the runner rebuilds context only from
+  // prior done turns (transcript.ts), so with no earlier done turn there is nothing
+  // to restore and the banner must stay silent rather than over-claim. Moved turns
+  // don't count — their run left this thread, so the rebuild (queried by thread_id)
+  // won't include them either.
+  let seenPriorDone = false;
   while (i < turns.length) {
     const turn = turns[i];
     if (!turn.moved_to_thread_id) {
-      out.push(<TurnView key={turn.id} turn={turn} onCancelWaiting={onCancelWaiting} />);
+      out.push(
+        <TurnView
+          key={turn.id}
+          turn={turn}
+          hadPriorDoneTurn={seenPriorDone}
+          onCancelWaiting={onCancelWaiting}
+        />,
+      );
+      if (turn.status === "done") seenPriorDone = true;
       i += 1;
       continue;
     }
@@ -1276,7 +1291,15 @@ function AccountSwitcher({
 }
 
 /** One exchange: what you said, then what came back. */
-function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id: string) => void }) {
+function TurnView({
+  turn,
+  hadPriorDoneTurn,
+  onCancelWaiting,
+}: {
+  turn: Turn;
+  hadPriorDoneTurn: boolean;
+  onCancelWaiting: (id: string) => void;
+}) {
   const t = useTranslations("claudeChat");
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -1476,11 +1499,21 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
           )}
 
           {/* Said out loud rather than hidden: a turn past the first that resumed
-              nothing began a fresh session, so it does not know what came before —
-              and the screen would otherwise show one seamless conversation. */}
-          {turn.turn_index > 1 && turn.status === "done" && !turn.resumed_session && (
-            <p className="text-[11px] text-status-warn">{t("contextLost")}</p>
-          )}
+              no engine session had its context rebuilt from our DB (the runner's
+              recovery path prepends the prior turns from claude_runs) — the live
+              session reset on a container restart, but the conversation carried
+              over. Gated on an earlier completed turn existing (hadPriorDoneTurn):
+              the rebuild draws only on prior done turns, so with none there was
+              nothing to restore and we stay silent instead of over-claiming. A
+              transient DB read failure during the rebuild is the one residual case
+              this can't see — it's logged server-side (transcript.ts). Info, not a
+              warning. */}
+          {turn.turn_index > 1 &&
+            turn.status === "done" &&
+            !turn.resumed_session &&
+            hadPriorDoneTurn && (
+              <p className="text-[11px] text-muted-foreground">{t("contextRestored")}</p>
+            )}
         </div>
       </div>
     </div>
