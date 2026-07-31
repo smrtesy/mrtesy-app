@@ -49,6 +49,9 @@ export interface DeployStatus {
   /** For the DB dot: the latest db_health_watchdog warning text + when it fired. */
   warning?: string | null;
   warnedAt?: string | null;
+  /** For the DB dot: a live one-liner from the metrics endpoint (e.g. "זיכרון 34% · דיסק 21%"),
+   *  shown even when healthy so hovering proves the live read is working. */
+  note?: string | null;
   /** When not configured (or misconfigured): which secret to set and where. */
   hint?: string;
   /** A provider/network error, surfaced rather than swallowed. */
@@ -385,6 +388,100 @@ function supabaseRef(): string | null {
  *  problem always shows amber, and a resolved one clears within ~this long. */
 const DB_WARN_WINDOW_MS = 90 * 60 * 1000;
 
+// ── live resource metrics (Supabase Prometheus endpoint) ─────────────────────────
+//
+// GET https://<ref>.supabase.co/customer/v1/privileged/metrics — Basic auth, username
+// "service_role", password = the service key the backend already holds. Returns
+// Prometheus text (node-exporter among ~200 series). We read memory% and disk% from
+// the STANDARD node-exporter names (stable across every deployment), so no metric name
+// is guessed. Everything degrades to null on any failure — a wrong key / unreachable
+// endpoint / absent metric simply means "no live overlay", never a broken dot.
+
+/** Amber when memory or disk crosses this — "a problem is approaching". */
+const MEM_WARN_PCT = 90;
+const DISK_WARN_PCT = 90;
+/** Cache the (relatively expensive) metrics scrape so many admin polls don't each hit
+ *  Supabase — one fetch per minute is plenty for a 30s-poll dot. */
+const METRICS_TTL_MS = 60_000;
+let metricsCache: { at: number; parsed: { memPct: number | null; diskPct: number | null } } | null = null;
+
+/** Last numeric value of a single (optionally-labelled) Prometheus gauge line. */
+function promGauge(text: string, name: string): number | null {
+  const m = new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([0-9eE+.\\-]+)`, "m").exec(text);
+  return m ? Number(m[1]) : null;
+}
+
+/** All samples of a labelled Prometheus series as {labels, value}. */
+function promSeries(text: string, name: string): Array<{ labels: Record<string, string>; value: number }> {
+  const out: Array<{ labels: Record<string, string>; value: number }> = [];
+  const re = new RegExp(`^${name}\\{([^}]*)\\}\\s+([0-9eE+.\\-]+)`, "gm");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const labels: Record<string, string> = {};
+    for (const pair of m[1].matchAll(/(\w+)="([^"]*)"/g)) labels[pair[1]] = pair[2];
+    out.push({ labels, value: Number(m[2]) });
+  }
+  return out;
+}
+
+function parseMetrics(text: string): { memPct: number | null; diskPct: number | null } {
+  // Memory: used = 1 - available/total.
+  const memTotal = promGauge(text, "node_memory_MemTotal_bytes");
+  const memAvail = promGauge(text, "node_memory_MemAvailable_bytes");
+  const memPct =
+    memTotal && memTotal > 0 && memAvail != null ? round1(100 * (1 - memAvail / memTotal)) : null;
+
+  // Disk: the busiest REAL filesystem (skip tmpfs/overlay/etc), used = 1 - avail/size.
+  const avail = promSeries(text, "node_filesystem_avail_bytes");
+  const size = promSeries(text, "node_filesystem_size_bytes");
+  const sizeByMount = new Map<string, number>();
+  for (const s of size) if (isRealFs(s.labels)) sizeByMount.set(s.labels.mountpoint, s.value);
+  let diskPct: number | null = null;
+  for (const a of avail) {
+    if (!isRealFs(a.labels)) continue;
+    const sz = sizeByMount.get(a.labels.mountpoint);
+    if (!sz || sz <= 0) continue;
+    const used = round1(100 * (1 - a.value / sz));
+    if (diskPct == null || used > diskPct) diskPct = used;
+  }
+  return { memPct, diskPct };
+}
+
+function isRealFs(labels: Record<string, string>): boolean {
+  const fs = labels.fstype ?? "";
+  return !["tmpfs", "overlay", "squashfs", "ramfs", "devtmpfs", "iso9660"].includes(fs);
+}
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+async function liveMetrics(): Promise<{ memPct: number | null; diskPct: number | null } | null> {
+  if (metricsCache && Date.now() - metricsCache.at < METRICS_TTL_MS) return metricsCache.parsed;
+  const ref = supabaseRef();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!ref || !key) return null;
+  try {
+    const auth = Buffer.from(`service_role:${key}`).toString("base64");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let text = "";
+    try {
+      const res = await fetch(`https://${ref}.supabase.co/customer/v1/privileged/metrics`, {
+        headers: { Authorization: `Basic ${auth}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      text = await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
+    const parsed = parseMetrics(text);
+    metricsCache = { at: Date.now(), parsed };
+    return parsed;
+  } catch {
+    return null; // unreachable / auth / parse — no overlay, never a broken dot.
+  }
+}
+
 /**
  * The latest early-warning from the hourly `db_health_watchdog()` (migration
  * 20260730203000): a `log_entries` row with `category='db_health'` inside the window.
@@ -450,16 +547,45 @@ export async function supabaseStatus(): Promise<DeployStatus> {
   // is otherwise up do we surface the watchdog's "approaching problem" as amber, so the
   // dot escalates green → amber (pressure) → red (down).
   if (base.state === "ready") {
-    const warn = await recentDbHealthWarning();
-    if (warn) {
+    const [metrics, warn] = await Promise.all([liveMetrics(), recentDbHealthWarning()]);
+
+    // Live metric summary — shown in the tooltip even when healthy, so hovering the DB
+    // dot proves the live read is working (and lets you watch memory/disk trend).
+    const note =
+      (metrics &&
+        [
+          metrics.memPct != null ? `זיכרון ${metrics.memPct}%` : null,
+          metrics.diskPct != null ? `דיסק ${metrics.diskPct}%` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")) ||
+      null;
+
+    // Amber triggers: a real-time metric over threshold (≤30s to show), OR the hourly
+    // in-DB watchdog. Either one is "a problem is approaching".
+    const metricIssues: string[] = [];
+    if (metrics?.memPct != null && metrics.memPct >= MEM_WARN_PCT)
+      metricIssues.push(`זיכרון ${metrics.memPct}%`);
+    if (metrics?.diskPct != null && metrics.diskPct >= DISK_WARN_PCT)
+      metricIssues.push(`דיסק ${metrics.diskPct}%`);
+
+    if (metricIssues.length > 0 || warn) {
+      const warning = [
+        metricIssues.length ? `לחץ משאבים: ${metricIssues.join(", ")}` : null,
+        warn?.message ?? null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
       return {
         ...base,
         state: "warn",
         rawState: "pressure",
-        warning: warn.message,
-        warnedAt: warn.at,
+        warning,
+        warnedAt: warn?.at ?? new Date().toISOString(),
+        note,
       };
     }
+    return { ...base, note };
   }
   return base;
 }
