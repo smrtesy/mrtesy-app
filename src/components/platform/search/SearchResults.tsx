@@ -64,17 +64,35 @@ function ResultRow({ item, locale }: { item: ResultItem; locale: string }) {
   );
 }
 
+// Cap each group so a broad query (e.g. a common word like "סודות", which
+// semantically matches many messages) doesn't flood the screen. Expand on click.
+const GROUP_CAP = 8;
+
 function Group({ titleKey, items, locale }: { titleKey: string; items: ResultItem[]; locale: string }) {
   const t = useTranslations("searchPage");
+  const [expanded, setExpanded] = useState(false);
   if (items.length === 0) return null;
+  const shown = expanded ? items : items.slice(0, GROUP_CAP);
+  const hidden = items.length - shown.length;
   return (
     <section className="space-y-2">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t(titleKey)}</h2>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t(titleKey)} <span className="font-normal">({items.length})</span>
+      </h2>
       <div className="space-y-1.5">
-        {items.map((item, i) => (
+        {shown.map((item, i) => (
           <ResultRow key={`${item.source_type}-${item.url}-${i}`} item={item} locale={locale} />
         ))}
       </div>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-xs text-primary hover:underline"
+        >
+          {t("showMore", { count: hidden })}
+        </button>
+      )}
     </section>
   );
 }
