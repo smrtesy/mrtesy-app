@@ -4482,6 +4482,11 @@
     "copied": "Copied",
     "modelLabel": "Model",
     "effortLabel": "Effort",
+    "defaults": {
+      "heading": "Defaults for new chats",
+      "model": "Default model",
+      "effort": "Default effort"
+    },
     "split": {
       "button": "Split the conversation",
       "none": "No topics to split — this conversation is about one thing",

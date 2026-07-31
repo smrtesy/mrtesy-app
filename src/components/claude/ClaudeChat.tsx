@@ -35,6 +35,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -218,6 +219,11 @@ export function ClaudeChat() {
   /** The Claude accounts the console can run on — feeds the header switcher. Loaded
    *  once; empty until then, which hides the switcher rather than showing a guess. */
   const [accounts, setAccounts] = useState<Account[]>([]);
+  /** Org-wide defaults a NEW chat opens on (from claude_instructions). Null until
+   *  fetched / until the operator picks one — a null falls back to the app's
+   *  built-in default (DEFAULT_MODEL / engine-chosen effort). */
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
+  const [defaultEffort, setDefaultEffort] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** Mirrors activeId for the async guard in loadThread. Synced in an effect, not
@@ -456,6 +462,40 @@ export function ClaudeChat() {
     bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
   }, [turns.length, hasLive]);
 
+  // The org's default model/effort for new chats. Read once on mount; a failure is
+  // ambient (the app's built-in default stays in effect).
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const d = await api<{ default_model: string | null; default_effort: string | null }>(
+          "/api/claude/instructions",
+        );
+        if (!alive) return;
+        setDefaultModel(d.default_model ?? null);
+        setDefaultEffort(d.default_effort ?? null);
+      } catch {
+        // Ambient — leave the built-in default in effect.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Persist a new-chat default. Sends "" to clear a field back to the app default
+   *  (the PUT is partial, so this never touches the standing-instructions body). */
+  const saveDefault = useCallback(
+    async (patch: { default_model?: string; default_effort?: string }) => {
+      try {
+        await api("/api/claude/instructions", { method: "PUT", body: patch });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [],
+  );
+
   /** Create the thread on demand — on the first send, or the moment a file is
    *  attached. Threads are never created just by opening the screen: an empty
    *  conversation in the list is noise. */
@@ -464,7 +504,13 @@ export function ClaudeChat() {
     try {
       const { thread: created } = await api<{ thread: Thread }>("/api/claude/threads", {
         method: "POST",
-        body: { model: DEFAULT_MODEL, ...pending },
+        // New chats open on the org default (the backend applies the same default
+        // as a backstop); a per-session override in `pending` still wins.
+        body: {
+          model: defaultModel ?? DEFAULT_MODEL,
+          ...(defaultEffort ? { effort: defaultEffort } : {}),
+          ...pending,
+        },
       });
       setPending({});
       setThreads((prev) => [created, ...prev]);
@@ -476,7 +522,7 @@ export function ClaudeChat() {
       toast.error(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [activeId, pending]);
+  }, [activeId, pending, defaultModel, defaultEffort]);
 
   const send = useCallback(
     async (message: string, attachmentIds: string[]) => {
@@ -923,6 +969,65 @@ export function ClaudeChat() {
 
             <StandingInstructions locale={locale} />
 
+            {/* New-chat defaults: pick the model + effort every new conversation
+                opens on, so you set it once here instead of per-thread in the
+                composer (which still overrides for a single chat). */}
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium text-muted-foreground">{t("defaults.heading")}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={defaultModel ?? DEFAULT_MODEL}
+                  onValueChange={(v) => {
+                    setDefaultModel(v);
+                    void saveDefault({ default_model: v });
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-auto gap-1 text-xs" aria-label={t("defaults.model")}>
+                    <span className="truncate">
+                      {MODELS.find((m) => m.id === (defaultModel ?? DEFAULT_MODEL))?.name ??
+                        (defaultModel ?? DEFAULT_MODEL)}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODELS.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        <span className="flex items-center gap-2">
+                          <span>{m.name}</span>
+                          <span dir="ltr" className="font-mono text-[10px] text-muted-foreground">
+                            {m.id}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={defaultEffort ?? EFFORT_DEFAULT}
+                  onValueChange={(v) => {
+                    const next = v === EFFORT_DEFAULT ? null : v;
+                    setDefaultEffort(next);
+                    // "" clears the stored default back to engine-chosen (partial PUT).
+                    void saveDefault({ default_effort: next ?? "" });
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-auto gap-1 text-xs" aria-label={t("defaults.effort")}>
+                    <span className="truncate">
+                      {defaultEffort ? t(`effort.${defaultEffort}`) : t("effortDefault")}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={EFFORT_DEFAULT}>{t("effortDefault")}</SelectItem>
+                    {EFFORTS.map((e) => (
+                      <SelectItem key={e} value={e}>
+                        {t(`effort.${e}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             {/* Stated where it is settable, not buried: the method and the standing
                 instructions only reach the engine on the FIRST message, because the
                 resumed session already holds them afterwards. */}
@@ -985,10 +1090,21 @@ export function ClaudeChat() {
           onSend={send}
           onStop={() => void stop()}
           models={MODELS}
-          model={(thread?.model ?? (pending.model as string | undefined)) ?? DEFAULT_MODEL}
+          // The org default is the fallback for a BRAND-NEW chat only. An existing
+          // thread shows its own stored value (→ app default for display if null),
+          // so the composer never shows a default the run won't actually use.
+          model={
+            thread
+              ? (thread.model ?? DEFAULT_MODEL)
+              : ((pending.model as string | undefined) ?? defaultModel ?? DEFAULT_MODEL)
+          }
           onModelChange={(v) => void patchThread({ model: v })}
           efforts={EFFORTS}
-          effort={(thread?.effort ?? (pending.effort as string | undefined)) || EFFORT_DEFAULT}
+          effort={
+            thread
+              ? ((thread.effort ?? "") || EFFORT_DEFAULT)
+              : ((pending.effort as string | undefined) || defaultEffort || EFFORT_DEFAULT)
+          }
           onEffortChange={(v) => void patchThread({ effort: v === EFFORT_DEFAULT ? "" : v })}
           effortDefaultValue={EFFORT_DEFAULT}
         />
