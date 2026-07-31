@@ -1670,6 +1670,12 @@
     "triageRuleLabel": "The rule that will enter the prompt (you can reword it)",
     "triageApproveRule": "Approve and add to prompt",
     "triageApproveClass": "Approve the classification",
+    "triageApproveFix": "Approve fix",
+    "triageDiscuss": "Continue discussion",
+    "triageDiagRunning": "🔍 Diagnosing the problem…",
+    "triageDiagFailed": "⚠️ Diagnosis couldn't run — you can still continue the discussion",
+    "triageDiagProblem": "Problem:",
+    "triageDiagFix": "Proposed fix:",
     "triageReject": "Reject",
     "triageApproved": "Approved",
     "triageRejected": "Rejected",
@@ -1682,7 +1688,8 @@
     "triageClass_needs_question": "Has a question",
     "triageClass_unclear": "Unclear",
     "triageUnderstood": "Understood: {text}",
-    "triageFixStarted": "Fix started — Claude is implementing it and opening a PR",
+    "triageFixStarted": "Fix started — Claude is implementing it and pushing per the repo rules",
+    "triageDiscussStarted": "Discussion opened — Claude will present the problem and ask how to proceed",
     "triageFixOpen": "View the conversation",
     "triageContinueClaude": "Continue with Claude"
   },
@@ -4642,6 +4649,7 @@
     "videoEmpty": "No video outputs in this project yet.",
     "costPending": "cost pending",
     "createTitle": "Create output",
+    "createPickFrom": "Pick from project artifacts…",
     "createModel": "Model",
     "createBasis": "Recommendation basis",
     "createRecipeHint": "Recommended prompt structure (from the recipe)",
@@ -4701,5 +4709,20 @@
     "voiceCreatePlaceholder": "Voice project name",
     "voiceCreatePrefixPlaceholder": "Prefix",
     "voiceCreatePrefixHint": "Line-code prefix: 1–3 letters (e.g. BR) — required for script creation"
+  },
+  "systemMessages": {
+    "bell": "System messages",
+    "title": "Recent system messages",
+    "empty": "No saved messages yet",
+    "clear": "Clear all messages",
+    "pageTab": "Message page",
+    "sendToClaude": "Send to Claude to diagnose",
+    "seedHeader": "An error message was captured in the app (from the sidebar system-messages center). Captured details:",
+    "seedMessage": "The error message shown",
+    "seedRoute": "Screen (route)",
+    "seedTime": "When it appeared",
+    "seedBrowser": "Browser",
+    "seedTask": "Locate where this error comes from in the code (search for the text or its translation key in src/messages/en.json, then the call that shows it and the server path behind it), diagnose the root cause, and fix it.",
+    "seedProblem": "Extra context (optional):"
   }
 }
