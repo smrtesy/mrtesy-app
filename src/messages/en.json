@@ -4645,6 +4645,7 @@
     "videoEmpty": "No video outputs in this project yet.",
     "costPending": "cost pending",
     "createTitle": "Create output",
+    "createPickFrom": "Pick from project artifacts…",
     "createModel": "Model",
     "createBasis": "Recommendation basis",
     "createRecipeHint": "Recommended prompt structure (from the recipe)",
