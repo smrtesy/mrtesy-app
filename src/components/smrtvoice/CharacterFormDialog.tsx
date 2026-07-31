@@ -42,6 +42,7 @@ interface CharacterInit {
   gender: Gender | null;
   personality_prompt: string | null;
   style_baseline_tags: string[] | null;
+  voice_provider: "resemble" | "minimax" | null;
 }
 
 /**
@@ -77,6 +78,9 @@ export function CharacterFormDialog({
   const [baselineTags, setBaselineTags] = useState<string[]>(
     character?.style_baseline_tags ?? [],
   );
+  const [voiceProvider, setVoiceProvider] = useState<"resemble" | "minimax">(
+    character?.voice_provider ?? "resemble",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,6 +94,7 @@ export function CharacterFormDialog({
     setGender("");
     setPersonalityPrompt("");
     setBaselineTags([]);
+    setVoiceProvider("resemble");
     setError(null);
   }
 
@@ -112,6 +117,7 @@ export function CharacterFormDialog({
       gender: gender || undefined,
       personality_prompt: personalityPrompt || undefined,
       style_baseline_tags: baselineTags,
+      voice_provider: voiceProvider,
     };
     try {
       if (isEdit) {
@@ -194,6 +200,19 @@ export function CharacterFormDialog({
               <option value="he">עברית</option>
               <option value="en">English</option>
             </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">{tf("providerLabel")}</label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={voiceProvider}
+              onChange={(e) => setVoiceProvider(e.target.value as "resemble" | "minimax")}
+            >
+              <option value="resemble">{tf("providerResemble")}</option>
+              <option value="minimax">{tf("providerMinimax")}</option>
+            </select>
+            <p className="text-xs text-muted-foreground">{tf("providerHint")}</p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

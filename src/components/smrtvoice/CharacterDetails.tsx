@@ -20,6 +20,7 @@ interface Character {
   description: string | null;
   resemble_voice_id: string | null;
   resemble_model: string | null;
+  voice_provider: "resemble" | "minimax" | null;
   language: "he" | "en";
   age_years: number | null;
   gender: "male" | "female" | "neutral" | null;
@@ -91,6 +92,7 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
               gender: character.gender,
               personality_prompt: character.personality_prompt,
               style_baseline_tags: character.style_baseline_tags,
+              voice_provider: character.voice_provider,
             }}
             onSaved={refresh}
           />
@@ -127,6 +129,10 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
             />
           )}
           <Stat label="Voice ID" value={character.resemble_voice_id ?? "—"} />
+          <Stat
+            label={tf("providerLabel")}
+            value={character.voice_provider === "minimax" ? tf("providerMinimax") : tf("providerResemble")}
+          />
           <Stat label="Model" value={character.resemble_model ?? "default (system setting)"} />
         </CardContent>
       </Card>
