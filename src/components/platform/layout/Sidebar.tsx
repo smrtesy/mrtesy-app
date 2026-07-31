@@ -569,7 +569,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 client-side archive; only its send-to-Claude action is admin-gated). */}
             <div className="flex items-center justify-center gap-2">
               {isAdmin && <SystemStatusStrip />}
-              <SystemMessagesBell isAdmin={isAdmin} />
+              <SystemMessagesBell isAdmin={!!isAdmin} />
             </div>
           </div>
         )}

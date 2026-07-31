@@ -43,10 +43,10 @@ const TYPE_ICON: Record<SystemMessageType, ReactNode> = {
 };
 
 /** Message time in New York (CLAUDE.md: all user-facing times are America/New_York). */
-function nyTime(iso: string): string {
+function nyTime(iso: string, locale: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat("he-IL", {
+  return new Intl.DateTimeFormat(locale, {
     timeZone: "America/New_York",
     day: "2-digit",
     month: "2-digit",
@@ -62,13 +62,19 @@ export function SystemMessagesBell({ isAdmin }: { isAdmin: boolean }) {
   const { openTab } = useTabsWorkspace();
   const [entries, setEntries] = useState<SystemMessageEntry[]>([]);
 
-  // Cold read on mount + live refresh while the popover is on screen: the
-  // recorder dispatches SYSTEM_MESSAGES_EVENT after every write.
+  // Cold read on mount + live refresh: the recorder in THIS document dispatches
+  // SYSTEM_MESSAGES_EVENT after every write; toasts inside iframe panes write
+  // from their own document, which reaches us as the cross-document "storage"
+  // event instead.
   useEffect(() => {
     const refresh = () => setEntries(readSystemMessages());
     refresh();
     window.addEventListener(SYSTEM_MESSAGES_EVENT, refresh);
-    return () => window.removeEventListener(SYSTEM_MESSAGES_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(SYSTEM_MESSAGES_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
   }, []);
 
   /** Compose the diagnostic seed and land it in the Claude composer as a draft. */
@@ -79,7 +85,7 @@ export function SystemMessagesBell({ isAdmin }: { isAdmin: boolean }) {
         "",
         `- ${t("seedMessage")}: "${entry.text}"`,
         `- ${t("seedRoute")}: \`${entry.path}\``,
-        `- ${t("seedTime")}: ${nyTime(entry.at)} (America/New_York)`,
+        `- ${t("seedTime")}: ${nyTime(entry.at, locale)} (America/New_York)`,
         `- ${t("seedBrowser")}: ${navigator.userAgent}`,
         "",
         t("seedTask"),
@@ -131,7 +137,7 @@ export function SystemMessagesBell({ isAdmin }: { isAdmin: boolean }) {
                   <p className="break-words" dir="auto">{e.text}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
                     <span className="tabular-nums" title="America/New_York">
-                      {nyTime(e.at)} NY
+                      {nyTime(e.at, locale)} NY
                     </span>
                     <button
                       type="button"

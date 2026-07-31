@@ -38,7 +38,11 @@ export function readSystemMessages(): SystemMessageEntry[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (e): e is SystemMessageEntry =>
-        !!e && typeof e === "object" && typeof (e as SystemMessageEntry).text === "string",
+        !!e &&
+        typeof e === "object" &&
+        typeof (e as SystemMessageEntry).text === "string" &&
+        typeof (e as SystemMessageEntry).path === "string" &&
+        typeof (e as SystemMessageEntry).at === "string",
     );
   } catch {
     // Corrupt/blocked storage — behave as an empty archive, never throw into UI.
