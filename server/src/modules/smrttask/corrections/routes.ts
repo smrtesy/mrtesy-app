@@ -185,9 +185,11 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
       ? body.rule.trim().slice(0, 400)
       : (prevTriage.suggested_rule_he as string | null | undefined) ?? null;
 
-  // Slice 4 — approving a code/ui correction spawns a fix thread that implements
-  // it and opens a PR (never merges). Dark unless SMRTTASK_CORRECTIONS_AUTOFIX=1,
-  // so by default this block is a no-op and approval behaves exactly as before.
+  // Slice 4 — approving a code/ui correction spawns a fix thread that first
+  // presents the problem+proposed fix for the user's approval, then (once
+  // approved) runs pre-push and pushes straight to `main` per the repo rules.
+  // Dark unless SMRTTASK_CORRECTIONS_AUTOFIX=1, so by default this block is a
+  // no-op and approval behaves exactly as before.
   let fixThreadId: string | null = null;
   if (decision === "approve" && (finalClass === "code" || finalClass === "ui") && autofixEnabled()) {
     let serial: string | null = null;

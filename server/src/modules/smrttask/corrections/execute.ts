@@ -4,9 +4,13 @@
  *
  * When the user approves a correction classified `code` or `ui`, this opens a
  * Claude thread (server/src/modules/claude) whose first turn instructs the
- * engine to implement the fix, run the repo's pre-push protocol, and open a PR —
- * NOT merge it. The user then reviews the plain-Hebrew PR body and the Vercel
- * preview and merges. Nothing reaches production without that human merge.
+ * engine to FIRST present, in plain Hebrew, the problem as it understands it and
+ * the fix it proposes, then STOP for the user's approval. Only after the user
+ * approves that plan does it implement the fix, run the repo's pre-push protocol,
+ * and — if that passes clean — merge to `main` with --no-ff and push directly,
+ * per the repo's push & merge rules (CLAUDE.md). The human gate is the up-front
+ * approval of the plan, not a review of the finished PR (a PR is only the
+ * fallback when the session lacks push access to `main`).
  *
  * COST: the thread runs on the subscription token (runner.ts strips the API
  * key), like every other Claude run here — no paid API.
@@ -61,12 +65,12 @@ function buildFixMessage(cls: "code" | "ui", ctx: FixContext): string {
     ctx.msg_subject ? `הודעת מקור: ${ctx.msg_sender ?? "—"} · ${ctx.msg_subject}` : "",
     "",
     "## מה לעשות — בדיוק",
-    "1. אתר את מקור הבעיה בקוד וישם את התיקון המינימלי. אל תשנה יותר מהנדרש.",
-    "2. הרץ את פרוטוקול קדם-הדחיפה של הריפו לפי CLAUDE.md (build + greps + סקירה עצמית). אל תדחוף אם ה-build נכשל.",
-    `3. צור ענף חדש (למשל ${branchHint}), דחוף אותו, ופתח PR. **אל תמזג ל-main ואל תדחוף ל-main ישירות** — המשתמש בודק תצוגה מקדימה וממזג בעצמו.`,
-    "4. בגוף ה-PR כתוב בעברית פשוטה מה השתנה ולמה — המשתמש לא קורא קוד, אז תאר את ההתנהגות, לא את ה-diff.",
-    "5. אם אינך מצליח לפתוח PR, דחוף את הענף ודווח את שמו המדויק בתשובתך.",
-    "6. אם אינך מבין מה לתקן או שהתיקון מסוכן/רחב מדי — עצור, אל תדחוף כלום, והסבר מה חסר.",
+    "1. אתר את מקור הבעיה בקוד והבן את התיקון המינימלי הנדרש. **בשלב הזה אל תשנה עדיין כלום.**",
+    "2. **קודם הצג למשתמש** (בעברית פשוטה): את **הבעיה כפי שאתה מבין אותה**, ואת **הפתרון שאתה מציע** — מה תשנה, באיזה קובץ, ולמה. תאר התנהגות, לא diff.",
+    "3. **עצור וחכה לאישור המפורש של המשתמש.** אל תיגע בקוד ואל תדחוף כלום לפני שאישר. אם התיקון מסוכן/רחב מדי או שאינך מבין מה לתקן — אמור זאת כאן, ואל תמשיך.",
+    `4. **רק אחרי שהמשתמש אישר** — עבוד על ענף (למשל ${branchHint}), ישם את התיקון המינימלי, והרץ את פרוטוקול קדם-הדחיפה של הריפו לפי CLAUDE.md (build + greps + סקירה עצמית) עד שהוא עובר נקי.`,
+    "5. **רק אם ה-pre-push עבר נקי** — מזג את הענף ל-main עם `--no-ff` ודחוף ל-main ישירות לפי כללי הדחיפה ומיזוג ב-CLAUDE.md, ואז דחוף גם את הענף. אם ה-build/הסקירה נכשלו — עצור, אל תדחוף כלום, ודווח מה נכשל. אם אין הרשאת דחיפה ל-main — fallback: דחוף את הענף ופתח PR.",
+    "6. אחרי הדחיפה ל-main אמת שהפרודקשן התקדם (`/api/deploy-info`), ודווח בעברית פשוטה מה עלה לאוויר.",
   ]
     .filter(Boolean)
     .join("\n");
