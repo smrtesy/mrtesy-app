@@ -246,6 +246,16 @@ const router = Router();
 // requireApp("smrtstudio") once the migration has run everywhere.
 router.use(requireAuth, requireOrg, requireAnyApp("smrtstudio", "smrtvoice"));
 
+// Access model: anyone entitled to smrtStudio/smrtVoice gets the FULL
+// production workflow — creating and casting characters, cloning voices,
+// generating/cancelling/editing lines, reading the stock voice pool. A member
+// with studio access is a producer, not a spectator. `requireRole("owner",
+// "admin")` is kept ONLY on genuinely administrative surfaces that change
+// shared account/org state: mutating the Resemble voice LIBRARY
+// (delete/label/generate-sample), reading the Resemble ACCOUNT, and the
+// org-wide voice SETTINGS (model toggle, budget). Reads of the voice pool and
+// its samples are open because casting depends on them.
+
 // ============================================================
 // CHARACTERS
 // ============================================================
@@ -270,7 +280,6 @@ router.get("/voice/characters", async (req: Request, res: Response) => {
 
 router.post(
   "/voice/characters",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const body = req.body as CreateCharacterRequest;
     if (!body?.name?.trim()) {
@@ -356,7 +365,6 @@ const CHARACTER_UPDATABLE = new Set([
 
 router.patch(
   "/voice/characters/:id",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const updates: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body ?? {})) {
@@ -389,7 +397,6 @@ router.patch(
 // any script casting that references it stay intact; it just leaves the list.
 router.delete(
   "/voice/characters/:id",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const { data, error } = await db
       .from("smrtvoice_characters")
@@ -408,7 +415,6 @@ router.delete(
 // POST /voice/characters/:id/sample-upload-url — signed URL to upload a sample.
 router.post(
   "/voice/characters/:id/sample-upload-url",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const characterId = req.params.id;
     const fileName: string = (req.body?.fileName as string) || "sample.wav";
@@ -436,7 +442,6 @@ router.post(
 // POST /voice/characters/:id/clone — body: { sample_path } or { sample_paths: [] }
 router.post(
   "/voice/characters/:id/clone",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     // Accept one path (legacy) or many (multi-file upload from the computer).
     const paths: string[] = Array.isArray(req.body?.sample_paths)
@@ -669,7 +674,6 @@ router.post("/voice/drive/list-audio", async (req: Request, res: Response) => {
 // POST /voice/characters/:id/clone-from-drive — body: { file_ids: string[] }
 router.post(
   "/voice/characters/:id/clone-from-drive",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const fileIds: string[] = Array.isArray(req.body?.file_ids) ? req.body.file_ids : [];
     if (fileIds.length === 0) return res.status(400).json({ error: "file_ids is required" });
@@ -1516,7 +1520,7 @@ router.post("/voice/scripts/:id/generate", async (req: Request, res: Response) =
 // voice_engine_job_id and stops launching new lines cooperatively) and clears
 // the script's generating state so the UI leaves it immediately — even if the
 // worker is slow or was never picked up. Lines already rendered are kept.
-router.post("/voice/scripts/:id/cancel", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+router.post("/voice/scripts/:id/cancel", async (req: Request, res: Response) => {
   const { data: script, error: scriptErr } = await db
     .from("smrtvoice_scripts")
     .select("id, completed_lines")
@@ -2009,7 +2013,6 @@ router.get("/voice/scripts/:id/lines", async (req: Request, res: Response) => {
 // (FK) and best-effort removes their audio from storage.
 router.post(
   "/voice/scripts/:id/lines/bulk",
-  requireRole("owner", "admin"),
   async (req: Request, res: Response) => {
     const action = req.body?.action as string;
     const ids: string[] = Array.isArray(req.body?.line_ids)
@@ -2903,7 +2906,7 @@ router.get("/voice/resemble/account", requireRole("owner", "admin"), async (req:
   }
 });
 
-router.get("/voice/resemble/voices", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+router.get("/voice/resemble/voices", async (req: Request, res: Response) => {
   try {
     const client = getVoiceEngineClient();
     const { voices } = await client.listVoices(req.query.refresh === "true");
@@ -3027,7 +3030,7 @@ router.post("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin")
   }
 });
 
-router.get("/voice/resemble/voices/:uuid/sample", requireRole("owner", "admin"), async (req: Request, res: Response) => {
+router.get("/voice/resemble/voices/:uuid/sample", async (req: Request, res: Response) => {
   const { data: preview, error } = await db
     .from("smrtvoice_voice_previews")
     .select("storage_path")

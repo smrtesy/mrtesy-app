@@ -22,7 +22,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
 import { triageCorrection, PROMPT_CLASSES, type PromptClass } from "./triage";
-import { createFixThread, autofixEnabled } from "./execute";
+import { createFixThread, correctionsAutoEnabled } from "./execute";
 
 const router = Router();
 
@@ -185,11 +185,13 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
       ? body.rule.trim().slice(0, 400)
       : (prevTriage.suggested_rule_he as string | null | undefined) ?? null;
 
-  // Slice 4 — approving a code/ui correction spawns a fix thread that implements
-  // it and opens a PR (never merges). Dark unless SMRTTASK_CORRECTIONS_AUTOFIX=1,
-  // so by default this block is a no-op and approval behaves exactly as before.
+  // Approving a code/ui correction (tap "אישור לתיקון") spawns the fix run, which
+  // implements the already-approved auto-diagnosis (prev.diagnosis) and pushes
+  // straight to `main` per the repo rules. The approve click IS the human gate.
+  // Kill-switch correctionsAutoEnabled() defaults ON; "0" disables the mechanism.
+  const diag = (prev.diagnosis ?? {}) as Record<string, unknown>;
   let fixThreadId: string | null = null;
-  if (decision === "approve" && (finalClass === "code" || finalClass === "ui") && autofixEnabled()) {
+  if (decision === "approve" && (finalClass === "code" || finalClass === "ui") && correctionsAutoEnabled()) {
     let serial: string | null = null;
     let taskTitle: string | null = null;
     if (existing.task_id) {
@@ -225,6 +227,10 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
         task_title: taskTitle,
         msg_subject: msgSubject,
         msg_sender: msgSender,
+        // The diagnosis the user just approved — hand it to the fix run so it
+        // implements the agreed plan instead of re-investigating.
+        diagnosis_problem_he: (diag.problem_he as string | null) ?? null,
+        diagnosis_fix_he: (diag.fix_he as string | null) ?? null,
       },
     );
   }
@@ -357,12 +363,14 @@ router.post("/corrections/export", async (req: Request, res: Response) => {
 });
 
 /**
- * POST /corrections/:id/claude-thread — "continue with Claude".
+ * POST /corrections/:id/claude-thread — "המשך דיון" (continue in a discussion).
  *
  * Human-initiated (a tap), so it is NOT gated by SMRTTASK_CORRECTIONS_AUTOFIX:
  * opening a Claude conversation on your own correction is exactly what the task
- * ClaudeLauncher already does. Creates a fix thread seeded with the correction's
- * context and starts it, then returns the thread id so the client can open it.
+ * ClaudeLauncher already does. Opens an INTERACTIVE thread (mode:"discuss") seeded
+ * with the correction + its diagnosis, that presents the problem and asks how to
+ * proceed and does NOT auto-push — the opposite of the "אישור לתיקון" fix run.
+ * Returns the thread id so the client can open it.
  */
 router.post("/corrections/:id/claude-thread", async (req: Request, res: Response) => {
   const id = String(req.params.id ?? "");
@@ -403,6 +411,7 @@ router.post("/corrections/:id/claude-thread", async (req: Request, res: Response
     msgSender = ((sm?.sender ?? sm?.sender_email) as string | null) ?? null;
   }
 
+  const diag = (ctx.diagnosis ?? {}) as Record<string, unknown>;
   const threadId = await createFixThread(
     id,
     cls,
@@ -416,8 +425,11 @@ router.post("/corrections/:id/claude-thread", async (req: Request, res: Response
       task_title: taskTitle,
       msg_subject: msgSubject,
       msg_sender: msgSender,
+      diagnosis_problem_he: (diag.problem_he as string | null) ?? null,
+      diagnosis_fix_he: (diag.fix_he as string | null) ?? null,
     },
-    { force: true },
+    // "המשך דיון": interactive, asks how to proceed, does NOT auto-push.
+    { force: true, mode: "discuss" },
   );
   if (!threadId) return res.status(500).json({ error: "could not open thread" });
 
