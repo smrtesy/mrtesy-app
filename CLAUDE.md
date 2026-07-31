@@ -746,11 +746,22 @@ can't cheaply undo deserves the same four.
 
 ## Migration discipline
 
-When you write SQL DDL (CREATE/ALTER/DROP) or DML that the user wants
-persisted, create a numbered file under `supabase/migrations/` named
-`YYYYMMDDHHMMSS_<slug>.sql` and tell the user to run it via Supabase
-CLI. Do not call `mcp__supabase__apply_migration` on a production
-project without explicit user authorization.
+When you write SQL DDL/DML the user wants persisted, always create a numbered
+file under `supabase/migrations/` named `YYYYMMDDHHMMSS_<slug>.sql` so the
+change is tracked in git.
+
+Whether you apply it to production yourself turns on one question — **does it
+delete or change existing data?**
+
+- **Does NOT delete or modify existing data** (`CREATE TABLE/INDEX`,
+  `ADD COLUMN/CONSTRAINT`, `COMMENT`, a `cron.schedule`, and the like):
+  **apply it yourself** via `mcp__supabase__apply_migration`, then verify.
+  No approval needed.
+- **Deletes or changes existing data** (`DROP`, `DELETE`, `TRUNCATE`, an
+  `UPDATE` that changes rows, `ALTER COLUMN TYPE` / `SET NOT NULL`, or anything
+  else that rewrites or removes existing data): **do not apply.** First run a
+  read-only `SELECT` to show exactly what will change (which rows / how many),
+  present that to the user, and apply only after explicit approval.
 
 ## Planning / design docs — commit and share a GitHub link
 
