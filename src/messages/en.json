@@ -188,9 +188,12 @@
     "searching": "Searching…",
     "answerLabel": "Answer",
     "answerHint": "Generated from the sources below — click to verify.",
-    "groupSettings": "Settings & pages",
+    "groupSettings": "Pages & sections",
+    "groupTasks": "Tasks & suggestions",
+    "groupInfo": "Info sources — email, WhatsApp, SMS & more",
     "groupContent": "Suggestions, tasks & info",
     "groupClaude": "Claude conversations",
+    "showMore": "Show {count} more",
     "empty": "No results found.",
     "emptyHint": "Try different wording, or make sure the index is built.",
     "external": "Open source"
