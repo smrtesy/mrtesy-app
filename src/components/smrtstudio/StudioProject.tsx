@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronDown, Plus, Zap } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
 import { AudioLineList } from "@/components/smrtvoice/AudioLineList";
 import { CreateScriptForm } from "@/components/smrtvoice/CreateScriptForm";
+import { ScriptCasting } from "@/components/smrtvoice/ScriptCasting";
 
 type Project = {
   id: string;
@@ -758,6 +759,17 @@ function VoiceContainer({ container, onChanged }: {
 
   return (
     <div className="space-y-3">
+      {/* Full production hub for this project — connect a script (Doc→parse),
+          voice casting, generation. The embedded tab is the fast path; the
+          full screen holds the complete production workflow. */}
+      <PaneLink
+        href={`/${locale}/voice/projects/${container.id}`}
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+      >
+        <ExternalLink className="h-3.5 w-3.5" />
+        {t("voiceOpenFullProject")}
+      </PaneLink>
+
       <QuickVoiceLine voiceProjectId={container.id} onCreated={refresh} />
 
       {/* Doc→parse. Gated on loaded scripts so nextCode reflects the real prefix. */}
@@ -795,8 +807,20 @@ function VoiceContainer({ container, onChanged }: {
               </span>
             </div>
             {isOpen && (
-              <div className="border-t p-2">
-                <AudioLineList scriptId={s.id} />
+              <div className="border-t p-2 space-y-4">
+                {/* Casting inline, right where the script opens — no need to
+                    leave for the full screen just to assign voices. Only
+                    meaningful once the script is parsed (draft has no speakers). */}
+                {s.status !== "draft" && (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-muted-foreground">{t("voiceCastingHeading")}</h4>
+                    <ScriptCasting scriptId={s.id} />
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold text-muted-foreground">{t("voiceTakesHeading")}</h4>
+                  <AudioLineList scriptId={s.id} />
+                </div>
               </div>
             )}
           </div>
