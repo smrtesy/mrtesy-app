@@ -75,11 +75,14 @@ type Artifact = {
  *  Order matters — audio and video are checked before the broad "image". */
 function mediaKindOf(f: SchemaField): "image" | "video" | "audio" | null {
   if (f.type.includes("integer") || f.type.includes("number") || f.type.includes("boolean")) return null;
-  const hay = `${f.name} ${f.description ?? ""}`.toLowerCase();
-  if (!/url|image|img|audio|voice|video|frame|reference|photo|portrait/.test(hay)) return null;
-  if (/audio|voice|speech|music|\bsound\b/.test(hay)) return "audio";
-  if (/video/.test(f.name.toLowerCase())) return "video";
-  if (/image|img|frame|reference|photo|portrait|face/.test(hay)) return "image";
+  // Classify on the field NAME only — a description that merely mentions "image"
+  // (e.g. a style/negative_prompt field) must not turn a text box into a picker.
+  // fal media inputs are `*_url`/`*_urls`, so the name carries the signal.
+  const name = f.name.toLowerCase();
+  if (!/url|image|img|audio|voice|video/.test(name)) return null;
+  if (/audio|voice|speech|music|sound/.test(name)) return "audio";
+  if (/video/.test(name)) return "video";
+  if (/image|img|frame|reference|photo|portrait|face/.test(name)) return "image";
   return null;
 }
 
@@ -202,8 +205,10 @@ export function StudioCreateForm({
     setValue(f.name, (kind === "audio" ? a.audio_url : a.output_url) ?? "");
     setSources((prev) => ({
       ...prev,
-      script_id: a.script_id ?? prev.script_id ?? null,
-      shot_seq: a.shot_seq ?? prev.shot_seq ?? null,
+      // The picked artifact's own shot/script win (no sticky-prev on re-pick);
+      // the other source id (image vs voice) accumulates across fields.
+      script_id: a.script_id,
+      shot_seq: a.shot_seq,
       ...(kind === "audio"
         ? { voice_line_id: a.voice_line_id ?? null }
         : { image_run_id: a.experiment_run_id ?? null }),
