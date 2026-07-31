@@ -774,6 +774,19 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
   const endpointId = String(req.body?.endpoint_id ?? "");
   const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
   const args = ((req.body?.args as Record<string, unknown>) ?? {});
+  // Optional derivation links (the compose flow, docs/studio-production-pipeline.md):
+  // which project artifacts this run was built from. All nullable — a plain
+  // prompt-only run sends none. The picker that fills these is org-scoped, so
+  // the ids are the caller's own artifacts.
+  const srcBody = (req.body?.sources ?? {}) as Record<string, unknown>;
+  const asUuid = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const asInt = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null);
+  const src = {
+    script_id: asUuid(srcBody.script_id),
+    shot_seq: asInt(srcBody.shot_seq),
+    voice_line_id: asUuid(srcBody.voice_line_id),
+    image_run_id: asUuid(srcBody.image_run_id),
+  };
 
   const [project, model] = await Promise.all([
     db.from("studio_projects").select("id").eq("org_id", orgId).eq("id", projectId).maybeSingle(),
@@ -814,6 +827,11 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
     studio_project_id: projectId,
     stage: model.data.kind === "image" ? "image" : model.data.kind === "voice" ? "voice" : "video",
     test_label: "studio-ui",
+    // derivation links (nullable): the spine's DAG is built from these
+    script_id: src.script_id,
+    shot_seq: src.shot_seq,
+    source_voice_line_id: src.voice_line_id,
+    source_image_run_id: src.image_run_id,
     code,
     model: endpointId,
     endpoint_id: endpointId,
