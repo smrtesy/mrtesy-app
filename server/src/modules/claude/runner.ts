@@ -29,6 +29,7 @@ import { db, getAppSecret } from "../../db";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
+import { buildThreadTranscript } from "./transcript";
 import { mintAppAccess, revokeAppAccess, BROWSER_HELPER_PATH } from "./app-access";
 
 /**
@@ -976,6 +977,19 @@ async function executeRunBody(runId: string): Promise<void> {
       `[claude/runner] resume ${initialResume} not found for run ${runId} — retrying as a fresh session`,
     );
     effectiveResume = null;
+    // Don't start blank. The engine session is gone, but the conversation isn't:
+    // rebuild it from OUR DB (claude_runs) and prepend it, so the fresh session
+    // continues WITH context instead of forgetting everything — the same stateless
+    // re-feed claude.ai does, sourced from our durable rows rather than the wiped
+    // on-disk transcript. Prepended to the in-memory promptText ONLY, deliberately
+    // NOT written back to claude_runs: a later reconstruction must read the clean
+    // user prompt so rebuilt history never nests inside itself and re-bloats.
+    if (run.thread_id) {
+      const history = await buildThreadTranscript(run.thread_id, runId);
+      if (history) {
+        promptText = `# רקע מהשיחה הקודמת (שוחזר מההיסטוריה)\n\n${history}\n\n---\n\n${promptText}`;
+      }
+    }
     attempt = await runEngine(null);
   }
 
