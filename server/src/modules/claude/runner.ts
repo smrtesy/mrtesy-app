@@ -1071,13 +1071,28 @@ async function executeRunBody(runId: string): Promise<void> {
 }
 
 /**
+ * Background LLM calls route by task TYPE, never by guessing difficulty (the
+ * "model proposes, code confirms" danger zone). Trivial/mechanical work — a thread
+ * title, a board summary — runs on the fast model. Decision/analysis work —
+ * split/group/decompose proposals — is PINNED to a strong model and is never
+ * downgraded, because a weaker model there would silently degrade a judgment the
+ * user can't easily see was wrong. Centralized here so each id has one place to
+ * update and can't age silently in five call sites.
+ */
+export const BG_MODEL_FAST = "claude-haiku-4-5-20251001";
+export const BG_MODEL_STRONG = "claude-opus-5";
+
+/**
  * Run a short prompt on the subscription and return its text — no rows, no events.
  *
  * This is the mechanism behind the analysis runs (a thread's real title today;
  * split/group proposals next — docs/claude-console/threads-split-and-group-plan.md).
  * It deliberately does NOT create a claude_runs row: a title is not a turn of the
  * conversation, and putting it in the thread would show the user an exchange they
- * never had.
+ * never had. It DOES write one best-effort `log_entries` provenance row per call
+ * (category `claude_bg_model`, level `info`) recording which model and account ran
+ * which task — required once background calls route to different models, so
+ * model→quality stays auditable. `label` names the task in that row.
  *
  * Runs on a subscription token like every other run, so it costs subscription
  * usage and ZERO paid API tokens. Returns null on any failure — a missing title is
@@ -1086,7 +1101,7 @@ async function executeRunBody(runId: string): Promise<void> {
  */
 export async function runOneShot(
   prompt: string,
-  opts: { model?: string; timeoutMs?: number; account?: string } = {},
+  opts: { model?: string; timeoutMs?: number; account?: string; label?: string } = {},
 ): Promise<string | null> {
   const { token } = await loadAccountToken(opts.account);
   if (!token) return null;
@@ -1097,6 +1112,36 @@ export async function runOneShot(
 
   const args = ["-p", prompt, "--output-format", "text"];
   if (opts.model) args.push("--model", opts.model);
+
+  const startedAt = Date.now();
+  // One best-effort provenance row per background call: which model/account ran
+  // which task, and whether it produced output. level 'info' on purpose — the
+  // error-notification trigger fires only on 'error', and a background model choice
+  // is not an error. Fire-and-forget so it never delays returning the result.
+  const logProvenance = (ok: boolean): void => {
+    // Fire-and-forget in its own async IIFE with try/catch: the PostgREST builder is
+    // a thenable without .catch, so a network-level reject would otherwise become an
+    // unhandled rejection. Provenance is best-effort and never fails a run.
+    void (async () => {
+      try {
+        const { error } = await db.from("log_entries").insert({
+          user_id: null,
+          level: "info",
+          category: "claude_bg_model",
+          status: ok ? "ok" : "failed",
+          processing_duration_ms: Date.now() - startedAt,
+          details: {
+            task: opts.label ?? "unknown",
+            model: opts.model ?? "cli-default",
+            account: opts.account ?? "primary",
+          },
+        });
+        if (error) console.error("[claude/oneshot] provenance log failed:", error.message);
+      } catch {
+        // best-effort
+      }
+    })();
+  };
 
   return new Promise((resolve) => {
     const child = spawn(resolveCli(), args, {
@@ -1115,11 +1160,14 @@ export async function runOneShot(
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 90_000);
     child.on("error", () => {
       clearTimeout(timer);
+      logProvenance(false);
       resolve(null);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve(code === 0 && out.trim() ? out.trim() : null);
+      const result = code === 0 && out.trim() ? out.trim() : null;
+      logProvenance(result !== null);
+      resolve(result);
     });
   });
 }
