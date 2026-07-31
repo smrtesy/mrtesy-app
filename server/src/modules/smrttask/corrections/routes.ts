@@ -363,12 +363,14 @@ router.post("/corrections/export", async (req: Request, res: Response) => {
 });
 
 /**
- * POST /corrections/:id/claude-thread — "continue with Claude".
+ * POST /corrections/:id/claude-thread — "המשך דיון" (continue in a discussion).
  *
  * Human-initiated (a tap), so it is NOT gated by SMRTTASK_CORRECTIONS_AUTOFIX:
  * opening a Claude conversation on your own correction is exactly what the task
- * ClaudeLauncher already does. Creates a fix thread seeded with the correction's
- * context and starts it, then returns the thread id so the client can open it.
+ * ClaudeLauncher already does. Opens an INTERACTIVE thread (mode:"discuss") seeded
+ * with the correction + its diagnosis, that presents the problem and asks how to
+ * proceed and does NOT auto-push — the opposite of the "אישור לתיקון" fix run.
+ * Returns the thread id so the client can open it.
  */
 router.post("/corrections/:id/claude-thread", async (req: Request, res: Response) => {
   const id = String(req.params.id ?? "");
@@ -409,6 +411,7 @@ router.post("/corrections/:id/claude-thread", async (req: Request, res: Response
     msgSender = ((sm?.sender ?? sm?.sender_email) as string | null) ?? null;
   }
 
+  const diag = (ctx.diagnosis ?? {}) as Record<string, unknown>;
   const threadId = await createFixThread(
     id,
     cls,
@@ -422,8 +425,11 @@ router.post("/corrections/:id/claude-thread", async (req: Request, res: Response
       task_title: taskTitle,
       msg_subject: msgSubject,
       msg_sender: msgSender,
+      diagnosis_problem_he: (diag.problem_he as string | null) ?? null,
+      diagnosis_fix_he: (diag.fix_he as string | null) ?? null,
     },
-    { force: true },
+    // "המשך דיון": interactive, asks how to proceed, does NOT auto-push.
+    { force: true, mode: "discuss" },
   );
   if (!threadId) return res.status(500).json({ error: "could not open thread" });
 

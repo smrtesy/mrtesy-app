@@ -93,6 +93,36 @@ function buildFixMessage(cls: "code" | "ui", ctx: FixContext): string {
     .join("\n");
 }
 
+/** The "המשך דיון" prompt: an interactive thread that presents the problem and the
+ *  proposed fix, then ASKS how to proceed — and touches no code and pushes nothing
+ *  until the user explicitly directs it. Deliberately NOT buildFixMessage. */
+function buildDiscussMessage(cls: "code" | "ui", ctx: FixContext): string {
+  const kind = cls === "ui" ? "בקשת ממשק (איך משהו נראה/מתנהג על המסך)" : "באג בקוד (לוגיקה/צינור)";
+  return [
+    "שיחת ליווי על תיקון ממנגנון מיון-התיקונים של smrtesy. המשתמש בחר **להמשיך בדיון** — הוא לא אישר תיקון אוטומטי.",
+    `סיווג: ${kind}.`,
+    "",
+    "## מה המשתמש רצה",
+    ctx.understood_he || ctx.note,
+    "",
+    "## ההערה המקורית של המשתמש (מילה במילה)",
+    ctx.note,
+    ctx.reason_he ? `\n## מה המיון מצא\n${ctx.reason_he}` : "",
+    ctx.diagnosis_problem_he || ctx.diagnosis_fix_he
+      ? `\n## האבחון שכבר נעשה\n` +
+        (ctx.diagnosis_problem_he ? `הבעיה: ${ctx.diagnosis_problem_he}\n` : "") +
+        (ctx.diagnosis_fix_he ? `הפתרון שהוצע: ${ctx.diagnosis_fix_he}` : "")
+      : "",
+    "",
+    "## מה לעשות",
+    "1. הצג בקצרה, בעברית פשוטה, את הבעיה כפי שאתה מבין אותה ואת מה שהיית מציע לתקן (אם יש אבחון למעלה — הישען עליו).",
+    "2. **שאל את המשתמש איך הוא רוצה להמשיך. אל תשנה שום קובץ ואל תדחוף כלום עד שהוא יורה לך במפורש מה לעשות.**",
+    "3. כשהמשתמש יורה מה לעשות — פעל לפי בקשתו. אם וכאשר תגיעו לדחיפה, בצע אותה לפי כללי הדחיפה ומיזוג ב-CLAUDE.md (pre-push נקי → main).",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
  * Open a fix thread for an approved code/ui correction. Returns the thread id,
  * or null if autofix is disabled or the thread could not be created. Never
@@ -104,12 +134,17 @@ export async function createFixThread(
   orgId: string,
   userId: string,
   fixCtx: FixContext,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; mode?: "fix" | "discuss" } = {},
 ): Promise<string | null> {
   // The auto-on-approval path is gated by the flag; a user who explicitly taps
-  // "continue with Claude" is initiating it themselves (like opening Claude on a
-  // task), so `force` bypasses the flag for that human-driven case only.
+  // "המשך דיון" is initiating it themselves (like opening Claude on a task), so
+  // `force` bypasses the flag for that human-driven case only.
   if (!opts.force && !correctionsAutoEnabled()) return null;
+  // "discuss" mode = the user tapped "המשך דיון": an interactive thread that asks
+  // how to proceed and does NOT auto-push. "fix" mode (default) = "אישור לתיקון":
+  // implement the approved diagnosis and push to main. The two must never share a
+  // prompt — that is how "discuss" silently became a production-push path before.
+  const mode: "fix" | "discuss" = opts.mode ?? "fix";
   try {
     // Concise initial title, no "אוטומטי" — the user initiated this by tapping,
     // it is not an automatic run. maybeTitle below replaces it with a title drawn
@@ -133,7 +168,7 @@ export async function createFixThread(
       return null;
     }
 
-    const message = buildFixMessage(cls, fixCtx);
+    const message = mode === "discuss" ? buildDiscussMessage(cls, fixCtx) : buildFixMessage(cls, fixCtx);
     const composed = await composePrompt(orgId, message, null);
 
     const { data: run, error: rErr } = await db

@@ -1688,6 +1688,7 @@
     "triageClass_unclear": "Unclear",
     "triageUnderstood": "Understood: {text}",
     "triageFixStarted": "Fix started — Claude is implementing it and pushing per the repo rules",
+    "triageDiscussStarted": "Discussion opened — Claude will present the problem and ask how to proceed",
     "triageFixOpen": "View the conversation",
     "triageContinueClaude": "Continue with Claude"
   },

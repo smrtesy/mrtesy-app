@@ -178,7 +178,7 @@ export function CorrectionsTriageReview({ refreshKey }: { refreshKey: number }) 
           `/api/corrections/${c.id}/claude-thread`,
           { method: "POST", body: {} },
         );
-        toast.success(t("triageFixStarted"));
+        toast.success(t("triageDiscussStarted"));
         // In-app tab in the tabs-workspace (not a browser window), deep-linked
         // onto the new conversation (ClaudeChat reads ?thread=).
         openTab(

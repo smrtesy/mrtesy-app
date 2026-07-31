@@ -1688,6 +1688,7 @@
     "triageClass_unclear": "לא ברור",
     "triageUnderstood": "הבנתי: {text}",
     "triageFixStarted": "התיקון התחיל לרוץ — Claude מיישם ודוחף לפי כללי הריפו",
+    "triageDiscussStarted": "נפתחה שיחה — Claude יציג את הבעיה וישאל איך להמשיך",
     "triageFixOpen": "צפה בשיחה",
     "triageContinueClaude": "המשך עם Claude"
   },
