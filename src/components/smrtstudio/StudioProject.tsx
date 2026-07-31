@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronDown, ExternalLink, Plus, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
 import { PaneLink } from "@/lib/panes/nav";
@@ -808,6 +808,20 @@ function VoiceContainer({ container, onChanged }: {
             </div>
             {isOpen && (
               <div className="border-t p-3">
+                {/* Breadcrumb: where you are (container › script), and one
+                    click back to the script list — the hierarchy anchor the
+                    embedded surface otherwise lacks when deep in a script. */}
+                <div className="mb-3 flex items-center gap-1 text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => setOpenScriptId(null)}
+                    className="hover:text-foreground hover:underline"
+                  >
+                    {container.name}
+                  </button>
+                  <ChevronRight className="h-3 w-3" />
+                  <span className="font-mono text-foreground">{s.code}</span>
+                </div>
                 {/* The full production surface for the script, inline: model +
                     LLM-emotion selects (auto = the per-model system default),
                     parse, generate/stop, casting, and the takes — the same
@@ -836,6 +850,8 @@ function VoiceTab({ containers, studioProjectId, onChanged }: {
   studioProjectId: string;
   onChanged: () => void;
 }) {
+  const t = useTranslations("studioProjects");
+  const locale = useLocale();
   const [ensureErr, setEnsureErr] = useState<string | null>(null);
   // Fire the ensure-POST at most once per mount. Without this, `onChanged`'s
   // changing identity (an inline arrow in the parent) re-runs the effect while
@@ -865,8 +881,26 @@ function VoiceTab({ containers, studioProjectId, onChanged }: {
 
   const showHeaders = containers.length > 1;
 
+  // Voice-wide tools that used to live in the standalone voice nav (dropped
+  // when the tab was embedded): general settings, the voice library, the
+  // character list, insights. Each screen still lives at its deep URL.
+  const tools: { href: string; label: string }[] = [
+    { href: `/${locale}/settings/apps/smrtstudio`, label: t("voiceToolsSettings") },
+    { href: `/${locale}/voice/library`, label: t("voiceToolsLibrary") },
+    { href: `/${locale}/voice/characters`, label: t("voiceToolsCharacters") },
+    { href: `/${locale}/voice/insights`, label: t("voiceToolsInsights") },
+  ];
+
   return (
     <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        {tools.map((tool) => (
+          <PaneLink key={tool.href} href={tool.href} className="text-muted-foreground hover:text-foreground hover:underline">
+            {tool.label}
+          </PaneLink>
+        ))}
+      </div>
+
       {containers.map((c) => (
         <div key={c.id} className={showHeaders ? "space-y-2" : ""}>
           {showHeaders && (
