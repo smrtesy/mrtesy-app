@@ -236,6 +236,27 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   // approve. `null` when the org has no repos, which just leaves the workspace bare.
   const finalRepo = repo || (await primaryRepoForOrg(req.org!.id));
 
+  // Fall back to the org's chosen defaults (claude_instructions.default_model /
+  // default_effort) when this create didn't specify one, so "every new chat opens
+  // on <model> / <effort>" holds no matter which client created it. A null default
+  // (never set) leaves the column null: the composer then shows the app's built-in
+  // default and the runner treats effort as engine-chosen. Fetched only when at
+  // least one field is missing, so a fully-specified create skips the round trip.
+  let effModel = model;
+  let effEffort = effort;
+  if (!effModel || !effEffort) {
+    const { data: defaults, error: defErr } = await db
+      .from("claude_instructions")
+      .select("default_model, default_effort")
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+    // Non-fatal: a lookup failure just means this chat opens on the app default
+    // instead of the org's — but log it, don't swallow it.
+    if (defErr) console.error("[claude/threads] default model/effort fetch failed:", defErr.message);
+    if (!effModel && defaults?.default_model) effModel = defaults.default_model;
+    if (!effEffort && defaults?.default_effort) effEffort = defaults.default_effort;
+  }
+
   const { data, error } = await db
     .from("claude_threads")
     .insert({
@@ -246,8 +267,8 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
       // become the permanent title of every thread whose titling call failed.
       title: str(body.title, MAX_TITLE),
       title_source: str(body.title, MAX_TITLE) ? "user" : "auto",
-      model: model || null,
-      effort: effort || null,
+      model: effModel || null,
+      effort: effEffort || null,
       repo: finalRepo || null,
       git_branch: gitBranch || null,
       playbook_id: playbookId,

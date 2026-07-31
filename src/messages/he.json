@@ -4477,10 +4477,16 @@
     "firstTurnNote": "שיטת העבודה וההוראות הקבועות נשלחות בהודעה הראשונה בלבד — מכאן והלאה הסשן זוכר אותן.",
     "taskRouter": "עדכון חופשי (משימות)",
     "contextLost": "התור הזה התחיל סשן חדש — הוא לא מכיר את מה שנאמר לפניו",
+    "contextRestored": "השיחה שוחזרה מההיסטוריה (הסשן החי התאפס באתחול)",
     "copyMessage": "העתק הודעה",
     "copied": "הועתק",
     "modelLabel": "מודל",
     "effortLabel": "רמת מאמץ",
+    "defaults": {
+      "heading": "ברירות מחדל לצ'אט חדש",
+      "model": "מודל ברירת מחדל",
+      "effort": "רמת מאמץ ברירת מחדל"
+    },
     "split": {
       "button": "פצל את השיחה",
       "none": "לא נמצאו נושאים לפצל — השיחה עוסקת בנושא אחד",
@@ -4622,7 +4628,10 @@
     "voiceEmpty": "אין פרויקט קול מקושר.",
     "voiceOpenFull": "פתח פרויקט מלא",
     "voiceScriptsEmpty": "אין עדיין תסריטים בפרויקט הזה.",
-    "voiceScriptOpenFull": "עריכה מלאה / ליהוק",
+    "voiceToolsSettings": "הגדרות קול",
+    "voiceToolsLibrary": "ספריית קולות",
+    "voiceToolsCharacters": "דמויות",
+    "voiceToolsInsights": "תובנות",
     "quickScriptLabel": "יצירות מהירות",
     "imageEmpty": "אין עדיין תוצרי תמונה בפרויקט.",
     "videoEmpty": "אין עדיין תוצרי וידאו בפרויקט.",

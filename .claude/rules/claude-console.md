@@ -33,9 +33,16 @@ ClaudeRunsClient, ApprovalsPanel). Server: `server/src/modules/claude/`.
   github.com — the token never touches disk; `redact()` scrubs it from
   anything stored. The clone contains the repo's CLAUDE.md, so the codebase
   map (`docs/codebase-map.md`) loads automatically in repo threads.
-- **Resume fallback:** Railway containers are ephemeral. A `--resume` whose
-  transcript is gone retries once as a fresh session and records
-  `resumed_session: null` (the "context lost" banner).
+- **Resume fallback + context restore:** Railway containers are ephemeral. A
+  `--resume` whose transcript is gone retries once as a fresh session with
+  `resumed_session: null`. Instead of starting blank, the runner rebuilds the
+  conversation from OUR DB — `buildThreadTranscript` (`transcript.ts`) reads each
+  prior turn's `claude_runs.prompt` + `result_summary` and the recovery path
+  prepends it to the fresh turn (in-memory only; never written back, so history
+  never nests). Same stateless re-feed claude.ai uses, sourced from durable rows
+  rather than the wiped on-disk transcript. The banner (`resumed_session` null on
+  a turn past the first) now reads "context restored from history", not "context
+  lost".
 - **Thread split:** method A = `--fork-session` from the parent's session (in
   the parent's workspace — `workspace_thread_id`); method B = seed-context
   prepended to the child's first prompt.
