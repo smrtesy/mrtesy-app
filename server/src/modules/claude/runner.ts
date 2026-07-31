@@ -29,6 +29,7 @@ import { db, getAppSecret } from "../../db";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
+import { buildThreadTranscript } from "./transcript";
 import { mintAppAccess, revokeAppAccess, BROWSER_HELPER_PATH } from "./app-access";
 
 /**
@@ -65,6 +66,48 @@ const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
  */
 export const AUTOMATION_ACCOUNT = "automation";
 const AUTOMATION_TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION";
+
+/** The default account id — interactive console threads with no explicit choice
+ *  run here (a NULL `claude_account` resolves to this token in loadAccountToken). */
+export const PRIMARY_ACCOUNT = "primary";
+
+/** Optional human labels for the two accounts, so the operator can name them in the
+ *  switcher ("החשבון של מאור" vs "חשבון משני") without a code change. Unset → the UI
+ *  falls back to its own default label per account id. */
+const PRIMARY_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL";
+const AUTOMATION_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL_AUTOMATION";
+
+export interface AccountInfo {
+  /** The id stored on a thread and sent to loadAccountToken. */
+  id: string;
+  /** Operator-set label, or null to let the client pick a default for this id. */
+  label: string | null;
+  /** True when this account's OAuth token is actually configured. The switcher
+   *  disables an unconfigured account so the user can't route a thread to a
+   *  phantom credential that would silently fall back to the primary token. */
+  configured: boolean;
+}
+
+/**
+ * Describe the accounts the console can run on — what the switcher lists.
+ *
+ * Reads only the presence of each token (never the token itself) plus the optional
+ * labels. The automation account being unconfigured is normal: loadAccountToken
+ * falls back to the primary token, so it is reported `configured:false` and the UI
+ * greys it out rather than offering a route that does nothing.
+ */
+export async function describeAccounts(): Promise<AccountInfo[]> {
+  const [primaryTok, autoTok, primaryLabel, autoLabel] = await Promise.all([
+    getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY),
+    getAppSecret(TOKEN_APP_SLUG, AUTOMATION_TOKEN_KEY, AUTOMATION_TOKEN_KEY),
+    getAppSecret(TOKEN_APP_SLUG, PRIMARY_LABEL_KEY, PRIMARY_LABEL_KEY),
+    getAppSecret(TOKEN_APP_SLUG, AUTOMATION_LABEL_KEY, AUTOMATION_LABEL_KEY),
+  ]);
+  return [
+    { id: PRIMARY_ACCOUNT, label: primaryLabel?.trim() || null, configured: !!primaryTok?.trim() },
+    { id: AUTOMATION_ACCOUNT, label: autoLabel?.trim() || null, configured: !!autoTok?.trim() },
+  ];
+}
 
 /**
  * Resolve the subscription token for a run's account.
@@ -204,9 +247,13 @@ export function cancelRun(runId: string): boolean {
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 /** How long a timed-out child gets to exit on SIGTERM before it is SIGKILLed. */
 const SIGKILL_GRACE_MS = 10_000;
-/** Events are flushed in batches — a write per event would serialize the stream. */
-const FLUSH_EVERY = 25;
-const FLUSH_INTERVAL_MS = 1000;
+/** Events are flushed in batches — a write per event would serialize the stream.
+ *  Tuned down from 25/1000ms to 8/500ms so streamed output reaches the DB (and the
+ *  polling UI) about twice as fast — the perceived-speed win. Still a batch, so a
+ *  chatty turn is not one insert per event; the cost is roughly 2x more small
+ *  inserts on a live turn, which the events table absorbs comfortably. */
+const FLUSH_EVERY = 8;
+const FLUSH_INTERVAL_MS = 500;
 /** Text is cheap but not free: keep rows bounded, keep media as URLs elsewhere. */
 const MAX_TEXT = 20_000;
 const MAX_PAYLOAD_CHARS = 100_000;
@@ -601,26 +648,15 @@ async function executeRunBody(runId: string): Promise<void> {
 
   // App access — a real short-lived session for the launching user, minted fresh
   // per turn, so the run can call the platform's own API the way the frontend does
-  // (the env preamble in composePrompt tells it how). Best-effort: a mint failure
-  // just leaves the variables unset, and the run works as before.
-  const appAccess = run.created_by ? await mintAppAccess(run.created_by) : null;
-  if (appAccess) {
-    env.SMRTESY_API_URL = appAccess.url;
-    env.SMRTESY_API_TOKEN = appAccess.token;
-    if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
-    // Real-browser access: the helper script logs a headless Chromium into the
-    // app as the user (same session as the API token, as cookies) and can post
-    // screenshots back into this very turn — hence the run id. The helper is
-    // shipped with the server build, next to this file's compiled form, so its
-    // require('playwright') resolves from the server's own node_modules no
-    // matter which workspace directory the turn runs in.
-    if (appAccess.browser) {
-      env.SMRTESY_APP_URL = appAccess.browser.appUrl;
-      env.SMRTESY_BROWSER_COOKIES = JSON.stringify(appAccess.browser.cookies);
-      env.SMRTESY_BROWSER_HELPER = BROWSER_HELPER_PATH;
-      env.SMRTESY_RUN_ID = runId;
-    }
-  }
+  // (the env preamble in composePrompt tells it how). Minted every turn for every
+  // run exactly as before — UNCHANGED behavior — but kicked off HERE as a promise so
+  // its ~3 sequential Supabase auth round-trips overlap the attachment download and
+  // workspace-trust below instead of running strictly before them (the prep-latency
+  // win). Awaited further down, before the env vars that use it are set. Best-effort:
+  // a mint failure just leaves the variables unset, and the run works as before.
+  const appAccessPromise = run.created_by
+    ? mintAppAccess(run.created_by)
+    : Promise.resolve(null);
 
   // Attachments: downloaded into the working directory, then named in the prompt.
   // The engine reads files by path (its Read tool handles images too) — the CLI's
@@ -661,6 +697,28 @@ async function executeRunBody(runId: string): Promise<void> {
   // never shows the dialog, so we pre-accept it — exactly what that warning asks
   // the operator to do by hand.
   if (cwd) await trustWorkspace(cwd);
+
+  // Fold in the app-access result now (its Supabase round-trips overlapped the prep
+  // above). Declared before buildArgs so its closure captures it. Same env vars as
+  // before — only the moment they're computed moved.
+  const appAccess = await appAccessPromise;
+  if (appAccess) {
+    env.SMRTESY_API_URL = appAccess.url;
+    env.SMRTESY_API_TOKEN = appAccess.token;
+    if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
+    // Real-browser access: the helper script logs a headless Chromium into the
+    // app as the user (same session as the API token, as cookies) and can post
+    // screenshots back into this very turn — hence the run id. The helper is
+    // shipped with the server build, next to this file's compiled form, so its
+    // require('playwright') resolves from the server's own node_modules no
+    // matter which workspace directory the turn runs in.
+    if (appAccess.browser) {
+      env.SMRTESY_APP_URL = appAccess.browser.appUrl;
+      env.SMRTESY_BROWSER_COOKIES = JSON.stringify(appAccess.browser.cookies);
+      env.SMRTESY_BROWSER_HELPER = BROWSER_HELPER_PATH;
+      env.SMRTESY_RUN_ID = runId;
+    }
+  }
 
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
@@ -934,6 +992,19 @@ async function executeRunBody(runId: string): Promise<void> {
       `[claude/runner] resume ${initialResume} not found for run ${runId} — retrying as a fresh session`,
     );
     effectiveResume = null;
+    // Don't start blank. The engine session is gone, but the conversation isn't:
+    // rebuild it from OUR DB (claude_runs) and prepend it, so the fresh session
+    // continues WITH context instead of forgetting everything — the same stateless
+    // re-feed claude.ai does, sourced from our durable rows rather than the wiped
+    // on-disk transcript. Prepended to the in-memory promptText ONLY, deliberately
+    // NOT written back to claude_runs: a later reconstruction must read the clean
+    // user prompt so rebuilt history never nests inside itself and re-bloats.
+    if (run.thread_id) {
+      const history = await buildThreadTranscript(run.thread_id, runId);
+      if (history) {
+        promptText = `# רקע מהשיחה הקודמת (שוחזר מההיסטוריה)\n\n${history}\n\n---\n\n${promptText}`;
+      }
+    }
     attempt = await runEngine(null);
   }
 
@@ -1000,13 +1071,28 @@ async function executeRunBody(runId: string): Promise<void> {
 }
 
 /**
+ * Background LLM calls route by task TYPE, never by guessing difficulty (the
+ * "model proposes, code confirms" danger zone). Trivial/mechanical work — a thread
+ * title, a board summary — runs on the fast model. Decision/analysis work —
+ * split/group/decompose proposals — is PINNED to a strong model and is never
+ * downgraded, because a weaker model there would silently degrade a judgment the
+ * user can't easily see was wrong. Centralized here so each id has one place to
+ * update and can't age silently in five call sites.
+ */
+export const BG_MODEL_FAST = "claude-haiku-4-5-20251001";
+export const BG_MODEL_STRONG = "claude-opus-5";
+
+/**
  * Run a short prompt on the subscription and return its text — no rows, no events.
  *
  * This is the mechanism behind the analysis runs (a thread's real title today;
  * split/group proposals next — docs/claude-console/threads-split-and-group-plan.md).
  * It deliberately does NOT create a claude_runs row: a title is not a turn of the
  * conversation, and putting it in the thread would show the user an exchange they
- * never had.
+ * never had. It DOES write one best-effort `log_entries` provenance row per call
+ * (category `claude_bg_model`, level `info`) recording which model and account ran
+ * which task — required once background calls route to different models, so
+ * model→quality stays auditable. `label` names the task in that row.
  *
  * Runs on a subscription token like every other run, so it costs subscription
  * usage and ZERO paid API tokens. Returns null on any failure — a missing title is
@@ -1015,7 +1101,7 @@ async function executeRunBody(runId: string): Promise<void> {
  */
 export async function runOneShot(
   prompt: string,
-  opts: { model?: string; timeoutMs?: number; account?: string } = {},
+  opts: { model?: string; timeoutMs?: number; account?: string; label?: string } = {},
 ): Promise<string | null> {
   const { token } = await loadAccountToken(opts.account);
   if (!token) return null;
@@ -1026,6 +1112,36 @@ export async function runOneShot(
 
   const args = ["-p", prompt, "--output-format", "text"];
   if (opts.model) args.push("--model", opts.model);
+
+  const startedAt = Date.now();
+  // One best-effort provenance row per background call: which model/account ran
+  // which task, and whether it produced output. level 'info' on purpose — the
+  // error-notification trigger fires only on 'error', and a background model choice
+  // is not an error. Fire-and-forget so it never delays returning the result.
+  const logProvenance = (ok: boolean): void => {
+    // Fire-and-forget in its own async IIFE with try/catch: the PostgREST builder is
+    // a thenable without .catch, so a network-level reject would otherwise become an
+    // unhandled rejection. Provenance is best-effort and never fails a run.
+    void (async () => {
+      try {
+        const { error } = await db.from("log_entries").insert({
+          user_id: null,
+          level: "info",
+          category: "claude_bg_model",
+          status: ok ? "ok" : "failed",
+          processing_duration_ms: Date.now() - startedAt,
+          details: {
+            task: opts.label ?? "unknown",
+            model: opts.model ?? "cli-default",
+            account: opts.account ?? "primary",
+          },
+        });
+        if (error) console.error("[claude/oneshot] provenance log failed:", error.message);
+      } catch {
+        // best-effort
+      }
+    })();
+  };
 
   return new Promise((resolve) => {
     const child = spawn(resolveCli(), args, {
@@ -1044,11 +1160,14 @@ export async function runOneShot(
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 90_000);
     child.on("error", () => {
       clearTimeout(timer);
+      logProvenance(false);
       resolve(null);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve(code === 0 && out.trim() ? out.trim() : null);
+      const result = code === 0 && out.trim() ? out.trim() : null;
+      logProvenance(result !== null);
+      resolve(result);
     });
   });
 }

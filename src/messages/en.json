@@ -243,6 +243,7 @@
     "planTeam": "By worker",
     "planScore": "Score outputs",
     "studio": "Dashboard",
+    "studioProduction": "Production",
     "studioModels": "Model catalog",
     "studioResearch": "Research centre",
     "claude": "Claude"
@@ -4463,6 +4464,13 @@
     "delete": "Delete",
     "confirmDelete": "Delete this chat and all of its turns?",
     "settings": "Conversation settings",
+    "account": {
+      "aria": "Claude account: {name} — click to switch",
+      "menuTitle": "Claude account",
+      "primary": "Primary account",
+      "automation": "Second account",
+      "notConnected": "not connected"
+    },
     "empty": "Write a message to begin",
     "thinking": "Thinking…",
     "toolCount": "{count} tool calls",
@@ -4477,10 +4485,16 @@
     "firstTurnNote": "The working method and standing instructions are sent with the first message only — the session remembers them from then on.",
     "taskRouter": "Free-text task update",
     "contextLost": "This turn started a new session — it does not know the earlier messages",
+    "contextRestored": "Conversation restored from history (the live session reset)",
     "copyMessage": "Copy message",
     "copied": "Copied",
     "modelLabel": "Model",
     "effortLabel": "Effort",
+    "defaults": {
+      "heading": "Defaults for new chats",
+      "model": "Default model",
+      "effort": "Default effort"
+    },
     "split": {
       "button": "Split the conversation",
       "none": "No topics to split — this conversation is about one thing",
@@ -4598,6 +4612,8 @@
   },
   "studioProjects": {
     "title": "Projects",
+    "productionTitle": "Production",
+    "selectProject": "Select project",
     "quickLineTitle": "Quick create",
     "quickLineProject": "Project",
     "quickLineNewProject": "＋ New project",
@@ -4620,7 +4636,10 @@
     "voiceEmpty": "No linked voice project.",
     "voiceOpenFull": "Open full project",
     "voiceScriptsEmpty": "No scripts in this project yet.",
-    "voiceScriptOpenFull": "Full edit / casting",
+    "voiceToolsSettings": "Voice settings",
+    "voiceToolsLibrary": "Voice library",
+    "voiceToolsCharacters": "Characters",
+    "voiceToolsInsights": "Insights",
     "quickScriptLabel": "Quick creations",
     "imageEmpty": "No image outputs in this project yet.",
     "videoEmpty": "No video outputs in this project yet.",

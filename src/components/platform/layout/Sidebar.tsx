@@ -15,6 +15,7 @@ import {
   MessageSquare,
   FlaskConical,
   Clapperboard,
+  Film,
   Layers,
   PanelRightClose,
   PanelRightOpen,
@@ -93,9 +94,10 @@ const smrtInfoItems = [
 ] as const;
 
 const smrtStudioItems = [
-  { key: "studio",         href: "/studio",          icon: Clapperboard },
-  { key: "studioModels",   href: "/studio/models",   icon: Layers       },
-  { key: "studioResearch", href: "/studio/research", icon: FlaskConical },
+  { key: "studio",           href: "/studio",          icon: Clapperboard },
+  { key: "studioProduction", href: "/studio/projects", icon: Film         },
+  { key: "studioModels",     href: "/studio/models",   icon: Layers       },
+  { key: "studioResearch",   href: "/studio/research", icon: FlaskConical },
 ] as const;
 
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };

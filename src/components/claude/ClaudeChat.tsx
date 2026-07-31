@@ -17,8 +17,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslations, useLocale } from "next-intl";
 import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
+  CircleUser,
   Crosshair,
   Loader2,
   MessageSquarePlus,
@@ -33,6 +35,15 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/common/Markdown";
@@ -78,7 +89,7 @@ const LIVE = ["queued", "running", "waiting"] as const;
  *  Stop button targets. A 'waiting' turn has no process to stop; it is removed
  *  from the queue instead. */
 const EXECUTING = ["queued", "running"] as const;
-const POLL_MS = 1500;
+const POLL_MS = 900;
 
 /** 12345 → "12.3K" — the compact way the usage figures read in the chrome. */
 function fmtTokens(n: number): string {
@@ -97,8 +108,21 @@ interface Thread {
   repo: string | null;
   git_branch: string | null;
   playbook_id: string | null;
+  /** Which Claude subscription account this thread runs on. Null = the primary
+   *  account (the default); "automation" = the second account. */
+  claude_account: string | null;
   last_message_at: string;
 }
+
+/** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
+interface Account {
+  id: string;
+  /** Operator-set label, or null to fall back to the per-id default label. */
+  label: string | null;
+  configured: boolean;
+}
+
+const DEFAULT_ACCOUNT = "primary";
 
 interface TurnEvent {
   seq: number;
@@ -119,6 +143,10 @@ interface Turn {
   resumed_session: string | null;
   /** Set when this turn was moved to a split child — folded away on the parent. */
   moved_to_thread_id: string | null;
+  /** The model this turn ran on — shown as a quiet per-turn label so you can see
+   *  which model produced which answer (the console's "everything visible" rule).
+   *  Null = the engine's default was used (no explicit model on the run). */
+  model: string | null;
   /** Consumption the engine reported for this turn — what the usage line shows. */
   input_tokens: number | null;
   output_tokens: number | null;
@@ -192,6 +220,14 @@ export function ClaudeChat() {
   const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
   const [grouped, setGrouped] = useState(false);
   const [regrouping, setRegrouping] = useState(false);
+  /** The Claude accounts the console can run on — feeds the header switcher. Loaded
+   *  once; empty until then, which hides the switcher rather than showing a guess. */
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  /** Org-wide defaults a NEW chat opens on (from claude_instructions). Null until
+   *  fetched / until the operator picks one — a null falls back to the app's
+   *  built-in default (DEFAULT_MODEL / engine-chosen effort). */
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
+  const [defaultEffort, setDefaultEffort] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** Mirrors activeId for the async guard in loadThread. Synced in an effect, not
@@ -342,6 +378,20 @@ export function ClaudeChat() {
     void loadThreads();
   }, [loadThreads]);
 
+  // The account list is org-wide config, not per-thread — load it once. A failure
+  // leaves `accounts` empty, which hides the switcher; the run still uses the
+  // thread's stored account server-side, so nothing breaks.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { accounts: list } = await api<{ accounts: Account[] }>("/api/claude/accounts");
+        setAccounts(list ?? []);
+      } catch {
+        // Non-fatal: no switcher, default account still runs.
+      }
+    })();
+  }, []);
+
   // Continue where you left off: open the most recent conversation automatically on
   // arrival, so the screen is a running chat rather than a blank one every time.
   // Fires ONCE (autoOpenedRef) — after that, "New chat" (activeId=null) and the poll
@@ -416,6 +466,40 @@ export function ClaudeChat() {
     bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
   }, [turns.length, hasLive]);
 
+  // The org's default model/effort for new chats. Read once on mount; a failure is
+  // ambient (the app's built-in default stays in effect).
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const d = await api<{ default_model: string | null; default_effort: string | null }>(
+          "/api/claude/instructions",
+        );
+        if (!alive) return;
+        setDefaultModel(d.default_model ?? null);
+        setDefaultEffort(d.default_effort ?? null);
+      } catch {
+        // Ambient — leave the built-in default in effect.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Persist a new-chat default. Sends "" to clear a field back to the app default
+   *  (the PUT is partial, so this never touches the standing-instructions body). */
+  const saveDefault = useCallback(
+    async (patch: { default_model?: string; default_effort?: string }) => {
+      try {
+        await api("/api/claude/instructions", { method: "PUT", body: patch });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [],
+  );
+
   /** Create the thread on demand — on the first send, or the moment a file is
    *  attached. Threads are never created just by opening the screen: an empty
    *  conversation in the list is noise. */
@@ -424,7 +508,13 @@ export function ClaudeChat() {
     try {
       const { thread: created } = await api<{ thread: Thread }>("/api/claude/threads", {
         method: "POST",
-        body: { model: DEFAULT_MODEL, ...pending },
+        // New chats open on the org default (the backend applies the same default
+        // as a backstop); a per-session override in `pending` still wins.
+        body: {
+          model: defaultModel ?? DEFAULT_MODEL,
+          ...(defaultEffort ? { effort: defaultEffort } : {}),
+          ...pending,
+        },
       });
       setPending({});
       setThreads((prev) => [created, ...prev]);
@@ -436,7 +526,7 @@ export function ClaudeChat() {
       toast.error(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [activeId, pending]);
+  }, [activeId, pending, defaultModel, defaultEffort]);
 
   const send = useCallback(
     async (message: string, attachmentIds: string[]) => {
@@ -456,6 +546,7 @@ export function ClaudeChat() {
         error: null,
         resumed_session: null,
         moved_to_thread_id: null,
+        model: null,
         input_tokens: null,
         output_tokens: null,
         duration_ms: null,
@@ -751,6 +842,22 @@ export function ClaudeChat() {
             </span>
           )}
 
+          {/* Which Claude account this conversation runs on, and how to switch it.
+              Shown only once the account list loaded, so it never guesses. Writing
+              persists to the thread; before a thread exists it is held in `pending`
+              and applied on the first message (same path as model/effort). */}
+          {accounts.length > 0 && (
+            <AccountSwitcher
+              accounts={accounts}
+              value={thread?.claude_account ?? (pending.claude_account as string | undefined) ?? DEFAULT_ACCOUNT}
+              disabled={!!runningTurn}
+              onChange={(id) => {
+                if (activeId) void patchThread({ claude_account: id });
+                else setPending((p) => ({ ...p, claude_account: id }));
+              }}
+            />
+          )}
+
           {/* Mark a place in the app: arms the global inspect mode (ClaudeInspector,
               mounted in the app layout). Click a component in a neighboring pane /
               any screen, and the captured context lands here as a draft message. */}
@@ -867,6 +974,65 @@ export function ClaudeChat() {
 
             <StandingInstructions locale={locale} />
 
+            {/* New-chat defaults: pick the model + effort every new conversation
+                opens on, so you set it once here instead of per-thread in the
+                composer (which still overrides for a single chat). */}
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium text-muted-foreground">{t("defaults.heading")}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={defaultModel ?? DEFAULT_MODEL}
+                  onValueChange={(v) => {
+                    setDefaultModel(v);
+                    void saveDefault({ default_model: v });
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-auto gap-1 text-xs" aria-label={t("defaults.model")}>
+                    <span className="truncate">
+                      {MODELS.find((m) => m.id === (defaultModel ?? DEFAULT_MODEL))?.name ??
+                        (defaultModel ?? DEFAULT_MODEL)}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODELS.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        <span className="flex items-center gap-2">
+                          <span>{m.name}</span>
+                          <span dir="ltr" className="font-mono text-[10px] text-muted-foreground">
+                            {m.id}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={defaultEffort ?? EFFORT_DEFAULT}
+                  onValueChange={(v) => {
+                    const next = v === EFFORT_DEFAULT ? null : v;
+                    setDefaultEffort(next);
+                    // "" clears the stored default back to engine-chosen (partial PUT).
+                    void saveDefault({ default_effort: next ?? "" });
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-auto gap-1 text-xs" aria-label={t("defaults.effort")}>
+                    <span className="truncate">
+                      {defaultEffort ? t(`effort.${defaultEffort}`) : t("effortDefault")}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={EFFORT_DEFAULT}>{t("effortDefault")}</SelectItem>
+                    {EFFORTS.map((e) => (
+                      <SelectItem key={e} value={e}>
+                        {t(`effort.${e}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             {/* Stated where it is settable, not buried: the method and the standing
                 instructions only reach the engine on the FIRST message, because the
                 resumed session already holds them afterwards. */}
@@ -929,10 +1095,21 @@ export function ClaudeChat() {
           onSend={send}
           onStop={() => void stop()}
           models={MODELS}
-          model={(thread?.model ?? (pending.model as string | undefined)) ?? DEFAULT_MODEL}
+          // The org default is the fallback for a BRAND-NEW chat only. An existing
+          // thread shows its own stored value (→ app default for display if null),
+          // so the composer never shows a default the run won't actually use.
+          model={
+            thread
+              ? (thread.model ?? DEFAULT_MODEL)
+              : ((pending.model as string | undefined) ?? defaultModel ?? DEFAULT_MODEL)
+          }
           onModelChange={(v) => void patchThread({ model: v })}
           efforts={EFFORTS}
-          effort={(thread?.effort ?? (pending.effort as string | undefined)) || EFFORT_DEFAULT}
+          effort={
+            thread
+              ? ((thread.effort ?? "") || EFFORT_DEFAULT)
+              : ((pending.effort as string | undefined) || defaultEffort || EFFORT_DEFAULT)
+          }
           onEffortChange={(v) => void patchThread({ effort: v === EFFORT_DEFAULT ? "" : v })}
           effortDefaultValue={EFFORT_DEFAULT}
         />
@@ -1106,10 +1283,25 @@ function renderTurns(
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
   let i = 0;
+  // Tracks whether an earlier COMPLETED turn of this thread has been seen. The
+  // context-restored banner is gated on it: the runner rebuilds context only from
+  // prior done turns (transcript.ts), so with no earlier done turn there is nothing
+  // to restore and the banner must stay silent rather than over-claim. Moved turns
+  // don't count — their run left this thread, so the rebuild (queried by thread_id)
+  // won't include them either.
+  let seenPriorDone = false;
   while (i < turns.length) {
     const turn = turns[i];
     if (!turn.moved_to_thread_id) {
-      out.push(<TurnView key={turn.id} turn={turn} onCancelWaiting={onCancelWaiting} />);
+      out.push(
+        <TurnView
+          key={turn.id}
+          turn={turn}
+          hadPriorDoneTurn={seenPriorDone}
+          onCancelWaiting={onCancelWaiting}
+        />,
+      );
+      if (turn.status === "done") seenPriorDone = true;
       i += 1;
       continue;
     }
@@ -1136,8 +1328,99 @@ function renderTurns(
   return out;
 }
 
+/**
+ * The header account switcher — shows which Claude subscription account the open
+ * conversation runs on, and lets the user move it to the other account.
+ *
+ * Why it exists: two accounts are configured (primary + a second), and when one hits
+ * its rolling usage limit the conversation should be movable to the one that still
+ * has budget — without leaving the console. Compact by default (CLAUDE.md): a small
+ * labelled icon button that opens a menu only on click. An account with no token
+ * configured is listed but greyed out, so the user can see it exists yet cannot
+ * route a thread to a credential that would silently fall back to the primary.
+ */
+function AccountSwitcher({
+  accounts,
+  value,
+  disabled,
+  onChange,
+}: {
+  accounts: Account[];
+  value: string;
+  disabled: boolean;
+  onChange: (id: string) => void;
+}) {
+  const t = useTranslations("claudeChat");
+  // Explicit id→key map (not a template key) so next-intl's typed keys still check.
+  const defaultLabel = (id: string) =>
+    id === "automation" ? t("account.automation") : t("account.primary");
+  const labelFor = (a: Account) => a.label?.trim() || defaultLabel(a.id);
+
+  const current = accounts.find((a) => a.id === value);
+  const currentLabel = current ? labelFor(current) : defaultLabel(value);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={disabled}
+          className="h-8 max-w-[9rem] shrink-0 gap-1 px-2 text-[11px] text-muted-foreground"
+          aria-label={t("account.aria", { name: currentLabel })}
+          title={t("account.aria", { name: currentLabel })}
+        >
+          <CircleUser className="size-4 shrink-0" />
+          <span className="truncate" dir="auto">
+            {currentLabel}
+          </span>
+          <ChevronDown className="size-3 shrink-0 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[12rem]">
+        <DropdownMenuLabel>{t("account.menuTitle")}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {accounts.map((a) => {
+          const selected = a.id === value;
+          // The current account is always shown selectable (it may be an
+          // unconfigured value stored earlier); other accounts need a token.
+          const selectable = a.configured || selected;
+          return (
+            <DropdownMenuItem
+              key={a.id}
+              disabled={!selectable}
+              onSelect={() => {
+                if (!selected && selectable) onChange(a.id);
+              }}
+              className="gap-2"
+            >
+              <Check className={cn("size-3.5 shrink-0", selected ? "opacity-100" : "opacity-0")} />
+              <span className="min-w-0 flex-1 truncate" dir="auto">
+                {labelFor(a)}
+              </span>
+              {!a.configured && (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {t("account.notConnected")}
+                </span>
+              )}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** One exchange: what you said, then what came back. */
-function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id: string) => void }) {
+function TurnView({
+  turn,
+  hadPriorDoneTurn,
+  onCancelWaiting,
+}: {
+  turn: Turn;
+  hadPriorDoneTurn: boolean;
+  onCancelWaiting: (id: string) => void;
+}) {
   const t = useTranslations("claudeChat");
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -1158,6 +1441,21 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
   const live = turn.status === "queued" || turn.status === "running";
   const waiting = turn.status === "waiting";
   const turnTokens = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0);
+  // Friendly model name for the quiet per-turn label; fall back to the raw id for a
+  // model not in the picker list (older runs), null when the run pinned no model.
+  const modelName = turn.model ? (MODELS.find((m) => m.id === turn.model)?.name ?? turn.model) : null;
+
+  // A failed turn often records the SAME text twice — the runner stores the engine's
+  // last message as both result_summary (rendered as the answer bubble) and error
+  // (rendered as the red line). A usage-limit hit — "You've hit your weekly limit ·
+  // resets 4am (UTC)" — is the case in point, and it showed up once in grey and once
+  // in red. Suppress the grey duplicate whenever the error line already contains the
+  // whole answer text, so it is stated once, in red. Lossless: the error line is
+  // always shown on failure and here holds the answer verbatim. A failed turn whose
+  // answer carries MORE than the error (a real partial answer) keeps both.
+  const errText = (turn.error ?? "").trim();
+  const answerDupesError = turn.status === "failed" && !!answer && errText.startsWith(answer);
+  const showAnswer = !!answer && !answerDupesError;
   // Two kinds of files on one turn: what the user SENT (chips on their message)
   // and what the run PRODUCED — browser screenshots posted back mid-run, shown
   // as inline images with the reply. `source` is absent on rows created before
@@ -1232,7 +1530,7 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
             </div>
           )}
 
-          {answer && (
+          {showAnswer && (
             <div className="group/msg flex items-start gap-1">
               {/* Rich rendering, chat density: headings, lists, tables and code
                   the same way the .md docs render, tightened to a bubble. */}
@@ -1314,22 +1612,38 @@ function TurnView({ turn, onCancelWaiting }: { turn: Turn; onCancelWaiting: (id:
             <p className="text-xs text-muted-foreground">{t("stopped")}</p>
           )}
 
-          {/* The turn's own consumption, stated quietly once it finished. */}
-          {!live && !waiting && turnTokens > 0 && (
+          {/* The turn's own consumption + which model produced it, stated quietly
+              once it finished. Model shows even when no token figures came back. */}
+          {!live && !waiting && (turnTokens > 0 || modelName) && (
             <p dir="ltr" className="text-[10px] tabular-nums text-muted-foreground/70 text-start">
-              {fmtTokens(turnTokens)} {t("usage.tokens")}
-              {typeof turn.duration_ms === "number" && turn.duration_ms > 0
-                ? ` · ${Math.round(turn.duration_ms / 1000)}s`
-                : ""}
+              {turnTokens > 0 && (
+                <>
+                  {fmtTokens(turnTokens)} {t("usage.tokens")}
+                  {typeof turn.duration_ms === "number" && turn.duration_ms > 0
+                    ? ` · ${Math.round(turn.duration_ms / 1000)}s`
+                    : ""}
+                </>
+              )}
+              {modelName ? `${turnTokens > 0 ? " · " : ""}${modelName}` : ""}
             </p>
           )}
 
           {/* Said out loud rather than hidden: a turn past the first that resumed
-              nothing began a fresh session, so it does not know what came before —
-              and the screen would otherwise show one seamless conversation. */}
-          {turn.turn_index > 1 && turn.status === "done" && !turn.resumed_session && (
-            <p className="text-[11px] text-status-warn">{t("contextLost")}</p>
-          )}
+              no engine session had its context rebuilt from our DB (the runner's
+              recovery path prepends the prior turns from claude_runs) — the live
+              session reset on a container restart, but the conversation carried
+              over. Gated on an earlier completed turn existing (hadPriorDoneTurn):
+              the rebuild draws only on prior done turns, so with none there was
+              nothing to restore and we stay silent instead of over-claiming. A
+              transient DB read failure during the rebuild is the one residual case
+              this can't see — it's logged server-side (transcript.ts). Info, not a
+              warning. */}
+          {turn.turn_index > 1 &&
+            turn.status === "done" &&
+            !turn.resumed_session &&
+            hadPriorDoneTurn && (
+              <p className="text-[11px] text-muted-foreground">{t("contextRestored")}</p>
+            )}
         </div>
       </div>
     </div>

@@ -24,7 +24,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, cancelRun, runOneShot } from "./runner";
+import { executeRun, cancelRun, runOneShot, BG_MODEL_FAST } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
@@ -54,7 +54,11 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, archived_at, last_message_at, created_at";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at";
+
+/** The account ids the runner knows how to route (loadAccountToken). An empty
+ *  string / null means "use the default", stored as NULL. */
+const ACCOUNTS = new Set(["primary", "automation"]);
 
 function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -223,12 +227,35 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   if (gitBranch && !isValidBranch(gitBranch)) return res.status(400).json({ error: "invalid branch" });
   const playbookId = str(body.playbook_id, 64) || null;
   if (playbookId && !UUID_RE.test(playbookId)) return res.status(400).json({ error: "invalid playbook_id" });
+  const account = str(body.claude_account, 32);
+  if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
 
   // Auto-connect the repo: when the caller didn't pick one, default to the org's
   // primary repo so the workspace has real code from turn one — the backend clones
   // it (ensureClone), NOT Claude via a shell command that a headless run can't
   // approve. `null` when the org has no repos, which just leaves the workspace bare.
   const finalRepo = repo || (await primaryRepoForOrg(req.org!.id));
+
+  // Fall back to the org's chosen defaults (claude_instructions.default_model /
+  // default_effort) when this create didn't specify one, so "every new chat opens
+  // on <model> / <effort>" holds no matter which client created it. A null default
+  // (never set) leaves the column null: the composer then shows the app's built-in
+  // default and the runner treats effort as engine-chosen. Fetched only when at
+  // least one field is missing, so a fully-specified create skips the round trip.
+  let effModel = model;
+  let effEffort = effort;
+  if (!effModel || !effEffort) {
+    const { data: defaults, error: defErr } = await db
+      .from("claude_instructions")
+      .select("default_model, default_effort")
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+    // Non-fatal: a lookup failure just means this chat opens on the app default
+    // instead of the org's — but log it, don't swallow it.
+    if (defErr) console.error("[claude/threads] default model/effort fetch failed:", defErr.message);
+    if (!effModel && defaults?.default_model) effModel = defaults.default_model;
+    if (!effEffort && defaults?.default_effort) effEffort = defaults.default_effort;
+  }
 
   const { data, error } = await db
     .from("claude_threads")
@@ -240,11 +267,12 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
       // become the permanent title of every thread whose titling call failed.
       title: str(body.title, MAX_TITLE),
       title_source: str(body.title, MAX_TITLE) ? "user" : "auto",
-      model: model || null,
-      effort: effort || null,
+      model: effModel || null,
+      effort: effEffort || null,
       repo: finalRepo || null,
       git_branch: gitBranch || null,
       playbook_id: playbookId,
+      claude_account: account || null,
     })
     .select(THREAD_COLS)
     .single();
@@ -452,6 +480,12 @@ router.patch("/claude/threads/:id", async (req: Request, res: Response) => {
     if (p && !UUID_RE.test(p)) return res.status(400).json({ error: "invalid playbook_id" });
     patch.playbook_id = p;
   }
+  if (body.claude_account !== undefined) {
+    const account = str(body.claude_account, 32);
+    if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
+    // Empty → NULL, which loadAccountToken reads as the primary account.
+    patch.claude_account = account || null;
+  }
 
   const { data, error } = await db
     .from("claude_threads")
@@ -615,7 +649,7 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
 
   const { data: thread, error: tErr } = await db
     .from("claude_threads")
-    .select("id, session_id, model, effort, repo, git_branch, playbook_id, title, title_source, workspace_thread_id")
+    .select("id, session_id, model, effort, repo, git_branch, playbook_id, claude_account, title, title_source, workspace_thread_id")
     .eq("id", req.params.id)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -702,6 +736,9 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
       effort: thread.effort,
       repo: thread.repo,
       git_branch: thread.git_branch,
+      // The account this conversation runs on — the header switcher writes it onto
+      // the thread; here it rides onto each turn so the runner picks the right token.
+      claude_account: thread.claude_account,
       status: hasLive ? "waiting" : "queued",
     })
     .select("id, turn_index, status, user_prompt, created_at")
@@ -1021,7 +1058,12 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
       transcript,
     ].join("\n");
 
-    const raw = await runOneShot(prompt, { timeoutMs: 60_000 });
+    // Trivial/mechanical (a ≤6-word title) → fast model. Never a judgment.
+    const raw = await runOneShot(prompt, {
+      timeoutMs: 60_000,
+      model: BG_MODEL_FAST,
+      label: "thread-title",
+    });
     if (!raw) return;
     // First line only, quotes stripped: a model that adds a sentence of
     // explanation must not turn that into the thread's name.
@@ -1234,7 +1276,7 @@ router.post("/claude/threads/:id/children", async (req: Request, res: Response) 
   const orgId = req.org!.id;
   const { data: parent, error: pErr } = await db
     .from("claude_threads")
-    .select("id, title, model, effort, repo, git_branch, playbook_id")
+    .select("id, title, model, effort, repo, git_branch, playbook_id, claude_account")
     .eq("id", req.params.id)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -1259,6 +1301,7 @@ router.post("/claude/threads/:id/children", async (req: Request, res: Response) 
       repo: parent.repo,
       git_branch: parent.git_branch,
       playbook_id: parent.playbook_id,
+      claude_account: parent.claude_account,
       parent_thread_id: parent.id,
       seed_context: briefing,
     })
@@ -1352,7 +1395,12 @@ router.post("/claude/threads/:id/board/summarize", async (req: Request, res: Res
 
   let summary = "";
   try {
-    const raw = await runOneShot(prompt, { timeoutMs: 90_000 });
+    // Trivial/mechanical (a 2-5 line status summary) → fast model. Never a judgment.
+    const raw = await runOneShot(prompt, {
+      timeoutMs: 90_000,
+      model: BG_MODEL_FAST,
+      label: "board-summary",
+    });
     summary = (raw ?? "").trim();
   } catch (e) {
     return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });

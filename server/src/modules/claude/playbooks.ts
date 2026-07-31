@@ -32,6 +32,11 @@ import { BROWSER_HELPER_PATH } from "./app-access";
 const router = Router();
 
 const KINDS = new Set(["research", "planning", "build", "review", "content", "other"]);
+// Mirrors threads.ts — the per-org defaults are validated by the same rules a
+// per-thread model/effort is, so a stored default can never be a value the run
+// launcher would then reject.
+const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_NAME = 200;
 const MAX_URL = 1000;
 const MAX_BODY = 60_000;
@@ -394,7 +399,7 @@ router.post("/claude/playbooks/refresh", async (req: Request, res: Response) => 
 router.get("/claude/instructions", async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("claude_instructions")
-    .select("body, updated_at")
+    .select("body, default_model, default_effort, updated_at")
     .eq("org_id", req.org!.id)
     .maybeSingle();
 
@@ -403,32 +408,78 @@ router.get("/claude/instructions", async (req: Request, res: Response) => {
     return res.status(500).json({ error: "could not load instructions" });
   }
   // An org that never saved one reads as empty, not 404 — the screen always has a
-  // document to open.
-  return res.json({ body: data?.body ?? "", updated_at: data?.updated_at ?? null });
+  // document to open. Defaults are null until the operator picks them (the client
+  // then falls back to the app's built-in default).
+  return res.json({
+    body: data?.body ?? "",
+    default_model: data?.default_model ?? null,
+    default_effort: data?.default_effort ?? null,
+    updated_at: data?.updated_at ?? null,
+  });
 });
 
 router.put("/claude/instructions", async (req: Request, res: Response) => {
-  const body = typeof req.body?.body === "string" ? req.body.body.slice(0, MAX_BODY) : "";
+  const b = req.body ?? {};
+
+  // Partial: only the fields present in the request change. The screen has two
+  // independent writers on this one-row-per-org table — the standing-instructions
+  // textarea and the default model/effort selects — so a save of one must never
+  // blank the other.
+  let bodyText: string | undefined;
+  if (b.body !== undefined) bodyText = typeof b.body === "string" ? b.body.slice(0, MAX_BODY) : "";
+
+  let defaultModel: string | null | undefined;
+  if (b.default_model !== undefined) {
+    const m = str(b.default_model, 64);
+    if (m && !MODEL_RE.test(m)) return res.status(400).json({ error: "invalid default_model" });
+    defaultModel = m || null; // "" clears back to the app default
+  }
+
+  let defaultEffort: string | null | undefined;
+  if (b.default_effort !== undefined) {
+    const e = str(b.default_effort, 16);
+    if (e && !EFFORTS.has(e)) return res.status(400).json({ error: "invalid default_effort" });
+    defaultEffort = e || null; // "" clears back to engine-chosen
+  }
+
+  // Read-modify-write so a partial patch upserts a COMPLETE row: an org's
+  // first-ever save (e.g. only default_model) must still write the NOT NULL body
+  // default, and each field carried forward keeps the others intact.
+  const { data: existing, error: readErr } = await db
+    .from("claude_instructions")
+    .select("body, default_model, default_effort")
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[claude/instructions] read-before-save failed:", readErr.message);
+    return res.status(500).json({ error: "could not save instructions" });
+  }
+
+  const row = {
+    org_id: req.org!.id,
+    body: (bodyText !== undefined ? bodyText : existing?.body) ?? "",
+    default_model: (defaultModel !== undefined ? defaultModel : existing?.default_model) ?? null,
+    default_effort: (defaultEffort !== undefined ? defaultEffort : existing?.default_effort) ?? null,
+    updated_by: req.user!.id,
+    updated_at: new Date().toISOString(),
+  };
 
   const { data, error } = await db
     .from("claude_instructions")
-    .upsert(
-      {
-        org_id: req.org!.id,
-        body,
-        updated_by: req.user!.id,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "org_id" },
-    )
-    .select("body, updated_at")
+    .upsert(row, { onConflict: "org_id" })
+    .select("body, default_model, default_effort, updated_at")
     .single();
 
   if (error) {
     console.error("[claude/instructions] save failed:", error.message);
     return res.status(500).json({ error: "could not save instructions" });
   }
-  return res.json({ body: data.body, updated_at: data.updated_at });
+  return res.json({
+    body: data.body,
+    default_model: data.default_model,
+    default_effort: data.default_effort,
+    updated_at: data.updated_at,
+  });
 });
 
 // ── prompt composition ────────────────────────────────────────────────────────

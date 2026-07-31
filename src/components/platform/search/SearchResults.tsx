@@ -130,10 +130,16 @@ export default function SearchResults() {
     };
   }, [q]);
 
-  const total =
-    (data?.groups.settings.length ?? 0) +
-    (data?.groups.content.length ?? 0) +
-    (data?.groups.claude.length ?? 0);
+  // Fully null-safe: a malformed/error response (no `groups`) must render as
+  // empty, never crash the page.
+  const settingsItems = data?.groups?.settings ?? [];
+  const contentItems = data?.groups?.content ?? [];
+  const claudeItems = data?.groups?.claude ?? [];
+  const taskItems = contentItems.filter(
+    (r) => r.source_type === "task" || r.source_type === "suggestion",
+  );
+  const infoItems = contentItems.filter((r) => r.source_type === "info");
+  const total = settingsItems.length + contentItems.length + claudeItems.length;
 
   return (
     <div className="mx-auto w-full max-w-3xl p-4 space-y-5">
@@ -165,22 +171,12 @@ export default function SearchResults() {
             <div className="space-y-5">
               {/* Order + split per the product spec: pages first, then tasks/
                   suggestions, then info sources, then Claude conversations. The
-                  backend still returns task+suggestion+info in one `content`
-                  group; we split it here by source_type. */}
-              <Group titleKey="groupSettings" items={data.groups.settings} locale={locale} />
-              <Group
-                titleKey="groupTasks"
-                items={data.groups.content.filter(
-                  (r) => r.source_type === "task" || r.source_type === "suggestion",
-                )}
-                locale={locale}
-              />
-              <Group
-                titleKey="groupInfo"
-                items={data.groups.content.filter((r) => r.source_type === "info")}
-                locale={locale}
-              />
-              <Group titleKey="groupClaude" items={data.groups.claude} locale={locale} />
+                  backend returns task+suggestion+info in one `content` group;
+                  we split it here by source_type. */}
+              <Group titleKey="groupSettings" items={settingsItems} locale={locale} />
+              <Group titleKey="groupTasks" items={taskItems} locale={locale} />
+              <Group titleKey="groupInfo" items={infoItems} locale={locale} />
+              <Group titleKey="groupClaude" items={claudeItems} locale={locale} />
             </div>
           )}
         </>

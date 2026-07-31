@@ -12,14 +12,15 @@ import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown, Plus, Zap } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api/client";
-import { PaneLink } from "@/lib/panes/nav";
+import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
+import { Breadcrumbs, type Crumb } from "@/components/ui/breadcrumbs";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StudioCreateForm } from "@/components/smrtstudio/StudioCreateForm";
 import { AudioLineList } from "@/components/smrtvoice/AudioLineList";
 import { CreateScriptForm } from "@/components/smrtvoice/CreateScriptForm";
+import { ScriptOverview } from "@/components/smrtvoice/ScriptOverview";
 
 type Project = {
   id: string;
@@ -32,6 +33,7 @@ type Project = {
 type VoiceProject = {
   id: string;
   name: string;
+  code_prefix: string | null;
   status: string;
   total_lines: number;
   completed_lines: number;
@@ -567,20 +569,17 @@ type Voice = { uuid: string; name?: string; display_name?: string | null };
  * standard AudioLineList tools (play / star / download / regenerate).
  */
 function QuickVoiceLine({
-  studioProjectId,
-  voiceProjects,
+  voiceProjectId,
   onCreated,
 }: {
-  studioProjectId: string;
-  voiceProjects: VoiceProject[];
+  // The voice container this quick line belongs to (one of the studio
+  // project's containers, passed down by VoiceContainer).
+  voiceProjectId: string;
   onCreated: () => void;
 }) {
   const t = useTranslations("studioProjects");
   const [voices, setVoices] = useState<Voice[] | null>(null);
   const [voicesErr, setVoicesErr] = useState<string | null>(null);
-  const [projectId, setProjectId] = useState<string>(voiceProjects[0]?.id ?? "__new__");
-  const [newName, setNewName] = useState("");
-  const [newPrefix, setNewPrefix] = useState("");
   const [voiceId, setVoiceId] = useState("");
   const [model, setModel] = useState("");
   const [text, setText] = useState("");
@@ -606,15 +605,7 @@ function QuickVoiceLine({
     };
   }, []);
 
-  const creatingNew = projectId === "__new__";
-  // Prefix is optional here (the backend derives one when absent); validate
-  // only its shape when the user did type something.
-  const prefixOk = newPrefix.trim() === "" || /^[A-Za-z]{1,3}$/.test(newPrefix.trim());
-  const canRun =
-    !!voiceId &&
-    !!text.trim() &&
-    (creatingNew ? !!newName.trim() && prefixOk : !!projectId) &&
-    !submitting;
+  const canRun = !!voiceId && !!text.trim() && !submitting;
 
   const run = async () => {
     if (inFlight.current || !canRun) return;
@@ -623,19 +614,11 @@ function QuickVoiceLine({
     setErr(null);
     setResultScriptId(null);
     try {
-      let targetProjectId = projectId;
-      if (creatingNew) {
-        const created = await api<{ voice_project: { id: string } }>(
-          `/api/studio/projects/${studioProjectId}/voice-projects`,
-          { method: "POST", body: { name: newName.trim(), code_prefix: newPrefix.trim() || undefined } },
-        );
-        targetProjectId = created.voice_project.id;
-      }
       const voice = voices?.find((v) => v.uuid === voiceId);
       const voiceLabel = voice?.display_name || voice?.name || "";
       const res = await api<{ script_id: string }>("/api/voice/quick-line", {
         method: "POST",
-        body: { project_id: targetProjectId, voice_id: voiceId, voice_label: voiceLabel, model, text: text.trim() },
+        body: { project_id: voiceProjectId, voice_id: voiceId, voice_label: voiceLabel, model, text: text.trim() },
       });
       setResultScriptId(res.script_id);
       setText("");
@@ -654,35 +637,6 @@ function QuickVoiceLine({
         <Zap className="h-4 w-4" /> {t("quickLineTitle")}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          className="rounded-md border bg-background px-2 py-1 text-sm"
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          aria-label={t("quickLineProject")}
-        >
-          {voiceProjects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-          <option value="__new__">{t("quickLineNewProject")}</option>
-        </select>
-        {creatingNew && (
-          <>
-            <Input
-              className="h-8 w-40 text-sm"
-              placeholder={t("quickLineNewProjectName")}
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <Input
-              className="h-8 w-24 text-sm"
-              placeholder={t("quickLinePrefix")}
-              value={newPrefix}
-              onChange={(e) => setNewPrefix(e.target.value)}
-            />
-          </>
-        )}
         <select
           className="rounded-md border bg-background px-2 py-1 text-sm"
           value={voiceId}
@@ -732,92 +686,6 @@ function QuickVoiceLine({
   );
 }
 
-function VoiceCreateToggle({ projectId, onCreated }: { projectId: string; onCreated: () => void }) {
-  const t = useTranslations("studioProjects");
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  // Required in practice: script creation hard-rejects a project without a
-  // code prefix (voice routes) — omitting it here would mint dead-end
-  // projects that only the old smrtVoice form could have configured.
-  const [prefix, setPrefix] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const inFlight = useRef(false);
-
-  const prefixOk = /^[A-Za-z]{1,3}$/.test(prefix.trim());
-
-  const create = async () => {
-    const trimmed = name.trim();
-    if (!trimmed || !prefixOk || inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setErr(null);
-    try {
-      await api(`/api/studio/projects/${projectId}/voice-projects`, {
-        method: "POST",
-        body: { name: trimmed, code_prefix: prefix.trim().toUpperCase() },
-      });
-      setName("");
-      setPrefix("");
-      setOpen(false);
-      onCreated();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="mb-3">
-      {open ? (
-        <div className="flex items-center gap-2">
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void create();
-              if (e.key === "Escape") { setOpen(false); setName(""); }
-            }}
-            placeholder={t("voiceCreatePlaceholder")}
-            className="h-8 w-56"
-          />
-          <Input
-            value={prefix}
-            onChange={(e) => setPrefix(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void create();
-              if (e.key === "Escape") { setOpen(false); setName(""); setPrefix(""); }
-            }}
-            placeholder={t("voiceCreatePrefixPlaceholder")}
-            title={t("voiceCreatePrefixHint")}
-            maxLength={3}
-            className="h-8 w-20"
-          />
-          <Button size="sm" onClick={() => void create()} disabled={busy || !name.trim() || !prefixOk}>
-            {t("create")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => { setOpen(false); setName(""); setPrefix(""); }}
-          >
-            {t("cancel")}
-          </Button>
-        </div>
-      ) : (
-        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => setOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          {t("voiceCreate")}
-        </Button>
-      )}
-      {err && <p className="mt-1 text-xs text-red-600 break-words">{err}</p>}
-    </div>
-  );
-}
-
 function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
   runs: Run[]; empty: string; vlmEnabled: boolean; onChanged: () => void;
 }) {
@@ -859,129 +727,189 @@ function RunGrid({ runs, empty, vlmEnabled, onChanged }: {
   );
 }
 
-/** One linked voice project (folder), collapsible. Expanded, it shows the
- *  unified takes view — the folder's scripts, each opening its AudioLineList
- *  inline — plus a Doc→parse entry (CreateScriptForm) and deep links to the
- *  full voice screens for casting/generation. Compact-UI rule: only the latest
- *  project is open by default; the rest collapse to a single header row. */
-function VoiceProjectGroup({
-  project, defaultOpen, locale, onChanged,
-}: {
-  project: VoiceProject;
-  defaultOpen: boolean;
-  locale: string;
+/**
+ * One voice container (folder) inside a studio project: its quick-line +
+ * Doc→parse creation forms and its scripts, each opening its AudioLineList
+ * inline. Casting/generation for Doc scripts still opens the full voice screen.
+ */
+function VoiceContainer({ container, openScript, setOpenScript, onChanged }: {
+  container: { id: string; name: string; code_prefix: string | null };
+  // Which script is open across the whole voice tab (lifted so the top-level
+  // breadcrumb can name it and collapse it). Only one open at a time.
+  openScript: { scriptId: string; code: string } | null;
+  setOpenScript: (s: { scriptId: string; code: string } | null) => void;
   onChanged: () => void;
 }) {
   const t = useTranslations("studioProjects");
-  const [open, setOpen] = useState(defaultOpen);
-  const [codePrefix, setCodePrefix] = useState<string | null>(null);
   const [scripts, setScripts] = useState<ScriptRow[] | null>(null);
   const [scriptsErr, setScriptsErr] = useState<string | null>(null);
-  const [openScriptId, setOpenScriptId] = useState<string | null>(null);
 
   const loadScripts = useCallback(async () => {
     setScriptsErr(null);
     try {
-      // Fetch the folder (for its code_prefix → nextCode) and its scripts in
-      // parallel, exactly like ProjectOverview does.
-      const [{ project: folder }, { scripts: rows }] = await Promise.all([
-        api<{ project: { code_prefix: string | null } }>(`/api/voice/projects/${project.id}`),
-        api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${project.id}/scripts`),
-      ]);
-      setCodePrefix(folder.code_prefix ?? "");
+      const { scripts: rows } = await api<{ scripts: ScriptRow[] }>(`/api/voice/projects/${container.id}/scripts`);
       setScripts(rows ?? []);
     } catch (e) {
       setScriptsErr(e instanceof Error ? e.message : String(e));
     }
-  }, [project.id]);
+  }, [container.id]);
 
-  // Load once, the first time this group is opened.
-  useEffect(() => {
-    if (open && scripts === null && scriptsErr === null) void loadScripts();
-  }, [open, scripts, scriptsErr, loadScripts]);
+  useEffect(() => { void loadScripts(); }, [loadScripts]);
 
   const nextSeq = (scripts ?? []).reduce((max, s) => Math.max(max, s.seq), 0) + 1;
-  const nextCode = `${codePrefix ?? ""}${nextSeq}`;
+  const nextCode = `${container.code_prefix ?? ""}${nextSeq}`;
+  const refresh = () => { void loadScripts(); onChanged(); };
 
   return (
-    <li className="rounded-lg border">
-      <div className="flex items-center justify-between gap-3 p-3">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-start"
-          aria-expanded={open}
-        >
-          <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`} />
-          <span className="truncate font-medium">{project.name}</span>
-        </button>
-        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-          <span>
-            {project.completed_lines}/{project.total_lines} · ${Number(project.total_cost_usd).toFixed(2)} · {project.status}
-          </span>
-          <PaneLink href={`/${locale}/voice/projects/${project.id}`} className="underline hover:text-foreground">
-            {t("voiceOpenFull")}
-          </PaneLink>
-        </span>
-      </div>
+    <div className="space-y-3">
+      <QuickVoiceLine voiceProjectId={container.id} onCreated={refresh} />
 
-      {open && (
-        <div className="space-y-2 border-t p-3">
-          {/* Only after the folder + scripts load do we know the real
-              code_prefix → nextCode; gating avoids briefly showing "1"
-              instead of e.g. "EP1" in the create dialog. */}
-          {scripts !== null && (
-            <CreateScriptForm projectId={project.id} nextCode={nextCode} onCreated={() => { setScripts(null); setScriptsErr(null); onChanged(); }} />
-          )}
-
-          {scriptsErr && <p className="text-xs text-destructive">{scriptsErr}</p>}
-          {scripts === null && !scriptsErr && <p className="text-xs text-muted-foreground">…</p>}
-          {scripts !== null && scripts.length === 0 && (
-            <p className="py-2 text-sm text-muted-foreground">{t("voiceScriptsEmpty")}</p>
-          )}
-
-          {(scripts ?? []).map((s) => {
-            const label = s.name === "__quick__" ? t("quickScriptLabel") : (s.name || s.code);
-            const isOpen = openScriptId === s.id;
-            return (
-              <div key={s.id} className="rounded-md border">
-                <div className="flex items-center justify-between gap-3 p-2">
-                  <button
-                    type="button"
-                    onClick={() => setOpenScriptId(isOpen ? null : s.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-start text-sm"
-                    aria-expanded={isOpen}
-                  >
-                    <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`} />
-                    <span className="font-mono text-xs">{s.code}</span>
-                    <span className="truncate">{label}</span>
-                  </button>
-                  <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                    <span>{s.completed_lines}/{s.total_lines} · {s.status}</span>
-                    <PaneLink href={`/${locale}/voice/scripts/${s.id}`} className="underline hover:text-foreground">
-                      {t("voiceScriptOpenFull")}
-                    </PaneLink>
-                  </span>
-                </div>
-                {isOpen && (
-                  <div className="border-t p-2">
-                    <AudioLineList scriptId={s.id} />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+      {/* Doc→parse. Gated on loaded scripts so nextCode reflects the real prefix. */}
+      {scripts !== null && (
+        <CreateScriptForm projectId={container.id} nextCode={nextCode} onCreated={refresh} />
       )}
-    </li>
+
+      {scriptsErr && <p className="text-xs text-destructive">{scriptsErr}</p>}
+      {scripts === null && !scriptsErr && <p className="text-xs text-muted-foreground">…</p>}
+      {scripts !== null && scripts.length === 0 && (
+        <p className="py-2 text-sm text-muted-foreground">{t("voiceScriptsEmpty")}</p>
+      )}
+
+      {(scripts ?? []).map((s) => {
+        const label = s.name === "__quick__" ? t("quickScriptLabel") : (s.name || s.code);
+        const isOpen = openScript?.scriptId === s.id;
+        return (
+          <div key={s.id} className="rounded-md border">
+            <div className="flex items-center justify-between gap-3 p-2">
+              <button
+                type="button"
+                onClick={() => setOpenScript(isOpen ? null : { scriptId: s.id, code: s.code })}
+                className="flex min-w-0 flex-1 items-center gap-2 text-start text-sm"
+                aria-expanded={isOpen}
+              >
+                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`} />
+                <span className="font-mono text-xs">{s.code}</span>
+                <span className="truncate">{label}</span>
+              </button>
+              <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                <span>{s.completed_lines}/{s.total_lines} · {s.status}</span>
+              </span>
+            </div>
+            {isOpen && (
+              <div className="border-t p-3">
+                {/* The full production surface for the script, inline: model +
+                    LLM-emotion selects (auto = the per-model system default),
+                    parse, generate/stop, casting, and the takes — the same
+                    ScriptOverview the standalone screen renders, header hidden. */}
+                <ScriptOverview scriptId={s.id} embedded />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
-export function StudioProject({ projectId }: { projectId: string }) {
+/**
+ * The voice tab of a studio project. A studio project may hold MORE THAN ONE
+ * voice container (legacy projects grouped their work into separate folders —
+ * e.g. Hebrew vs English). Show ALL of the project's containers, each with its
+ * scripts, so nothing is hidden. When a project has no container yet, ensure
+ * the single hidden default (POST .../voice-project) and reload. Container
+ * headers appear only when there are 2+ — a fresh single-container project
+ * still reads as "the project is the only unit" (docs/studio-hierarchy-plan.md).
+ */
+function VoiceTab({ containers, studioProjectId, openScript, setOpenScript, onChanged }: {
+  containers: VoiceProject[];
+  studioProjectId: string;
+  openScript: { scriptId: string; code: string } | null;
+  setOpenScript: (s: { scriptId: string; code: string } | null) => void;
+  onChanged: () => void;
+}) {
+  const t = useTranslations("studioProjects");
+  const locale = useLocale();
+  const [ensureErr, setEnsureErr] = useState<string | null>(null);
+  // Fire the ensure-POST at most once per mount. Without this, `onChanged`'s
+  // changing identity (an inline arrow in the parent) re-runs the effect while
+  // the first POST is still in flight, and since there is no unique index on
+  // (org_id, studio_project_id) two POSTs race into two hidden containers
+  // (StrictMode reproduces this on mount). The ref makes it idempotent.
+  const ensured = useRef(false);
+
+  // Only ensure a default container when the project truly has none yet.
+  useEffect(() => {
+    if (containers.length > 0 || ensured.current) return;
+    ensured.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await api(`/api/studio/projects/${studioProjectId}/voice-project`, { method: "POST" });
+        if (!cancelled) onChanged();
+      } catch (e) {
+        if (!cancelled) { ensured.current = false; setEnsureErr(e instanceof Error ? e.message : String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [containers.length, studioProjectId, onChanged]);
+
+  if (ensureErr) return <p className="text-sm text-destructive">{ensureErr}</p>;
+  if (containers.length === 0) return <p className="text-sm text-muted-foreground py-4">…</p>;
+
+  const showHeaders = containers.length > 1;
+
+  // Voice-wide tools that used to live in the standalone voice nav (dropped
+  // when the tab was embedded): general settings, the voice library, the
+  // character list, insights. Each screen still lives at its deep URL.
+  const tools: { href: string; label: string }[] = [
+    { href: `/${locale}/settings/apps/smrtstudio`, label: t("voiceToolsSettings") },
+    { href: `/${locale}/voice/library`, label: t("voiceToolsLibrary") },
+    { href: `/${locale}/voice/characters`, label: t("voiceToolsCharacters") },
+    { href: `/${locale}/voice/insights`, label: t("voiceToolsInsights") },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        {tools.map((tool) => (
+          <OpenTabLink
+            key={tool.href}
+            href={tool.href}
+            label={tool.label}
+            className="text-muted-foreground hover:text-foreground hover:underline"
+          >
+            {tool.label}
+          </OpenTabLink>
+        ))}
+      </div>
+
+      {containers.map((c) => (
+        <div key={c.id} className={showHeaders ? "space-y-2" : ""}>
+          {showHeaders && (
+            <h3 className="text-sm font-semibold text-muted-foreground">{c.name}</h3>
+          )}
+          <VoiceContainer
+            container={{ id: c.id, name: c.name, code_prefix: c.code_prefix }}
+            openScript={openScript}
+            setOpenScript={setOpenScript}
+            onChanged={onChanged}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function StudioProject({ projectId, embedded = false }: { projectId: string; embedded?: boolean }) {
   const t = useTranslations("studioProjects");
   const locale = useLocale();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which voice script is open — lifted here so the top breadcrumb names it and
+  // can collapse it. Cleared when the project changes (a stale script code from
+  // the previous project must not linger in the breadcrumb).
+  const [openScript, setOpenScript] = useState<{ scriptId: string; code: string } | null>(null);
+  useEffect(() => { setOpenScript(null); }, [projectId]);
 
   const load = useCallback(async () => {
     try {
@@ -1017,47 +945,50 @@ export function StudioProject({ projectId }: { projectId: string }) {
           + (r.qc_cost_usd == null ? 0 : Number(r.qc_cost_usd) || 0), 0);
   const voiceUsd = voice_projects
     .reduce((sum, v) => sum + (Number(v.total_cost_usd) || 0), 0);
+  // Voice-tab count = takes across the project's voice container(s), since the
+  // container itself is hidden — the number of voice lines is what's meaningful.
+  const voiceTakes = voice_projects.reduce((sum, v) => sum + (Number(v.total_lines) || 0), 0);
+
+  const crumbs: Crumb[] = [
+    { label: t("productionTitle"), href: `/${locale}/studio/projects` },
+    { label: name, onClick: openScript ? () => setOpenScript(null) : undefined },
+    ...(openScript ? [{ label: openScript.code }] : []),
+  ];
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-4 space-y-4">
-      <div className="flex items-baseline gap-3">
-        <h1 className="text-lg font-semibold">{name}</h1>
-        <span className="text-xs text-muted-foreground">
-          {t("projectCost", { fal: `$${falUsd.toFixed(2)}`, voice: `$${voiceUsd.toFixed(2)}` })}
-        </span>
-      </div>
+    <div className={embedded ? "space-y-4" : "mx-auto w-full max-w-5xl p-4 space-y-4"}>
+      {/* Standing house rule: the hierarchy breadcrumb sits at the top-left of
+          every hierarchical screen (src/components/ui/breadcrumbs.tsx). Here:
+          Production › project › open script. */}
+      <Breadcrumbs items={crumbs} />
+
+      {/* When embedded in the production surface, the project selector already
+          names the project + shows the balance, so the standalone header is
+          suppressed to avoid a duplicate title. */}
+      {!embedded && (
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-lg font-semibold">{name}</h1>
+          <span className="text-xs text-muted-foreground">
+            {t("projectCost", { fal: `$${falUsd.toFixed(2)}`, voice: `$${voiceUsd.toFixed(2)}` })}
+          </span>
+        </div>
+      )}
 
       <Tabs defaultValue="voice">
         <TabsList>
-          <TabsTrigger value="voice">{t("tabVoice")} ({voice_projects.length})</TabsTrigger>
+          <TabsTrigger value="voice">{t("tabVoice")} ({voiceTakes})</TabsTrigger>
           <TabsTrigger value="image">{t("tabImage")} ({image_runs.length})</TabsTrigger>
           <TabsTrigger value="video">{t("tabVideo")} ({video_runs.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="voice">
-          <QuickVoiceLine
+          <VoiceTab
+            containers={voice_projects}
             studioProjectId={projectId}
-            voiceProjects={voice_projects}
-            onCreated={() => void load()}
+            openScript={openScript}
+            setOpenScript={setOpenScript}
+            onChanged={() => void load()}
           />
-          <div className="mt-3">
-            <VoiceCreateToggle projectId={projectId} onCreated={() => void load()} />
-          {voice_projects.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">{t("voiceEmpty")}</p>
-          ) : (
-            <ul className="space-y-2">
-              {voice_projects.map((v, i) => (
-                <VoiceProjectGroup
-                  key={v.id}
-                  project={v}
-                  defaultOpen={i === 0}
-                  locale={locale}
-                  onChanged={() => void load()}
-                />
-              ))}
-            </ul>
-          )}
-          </div>
         </TabsContent>
 
         <TabsContent value="image">
