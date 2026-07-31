@@ -89,7 +89,7 @@ const LIVE = ["queued", "running", "waiting"] as const;
  *  Stop button targets. A 'waiting' turn has no process to stop; it is removed
  *  from the queue instead. */
 const EXECUTING = ["queued", "running"] as const;
-const POLL_MS = 1500;
+const POLL_MS = 900;
 
 /** 12345 → "12.3K" — the compact way the usage figures read in the chrome. */
 function fmtTokens(n: number): string {

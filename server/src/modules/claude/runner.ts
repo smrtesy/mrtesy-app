@@ -247,9 +247,13 @@ export function cancelRun(runId: string): boolean {
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 /** How long a timed-out child gets to exit on SIGTERM before it is SIGKILLed. */
 const SIGKILL_GRACE_MS = 10_000;
-/** Events are flushed in batches — a write per event would serialize the stream. */
-const FLUSH_EVERY = 25;
-const FLUSH_INTERVAL_MS = 1000;
+/** Events are flushed in batches — a write per event would serialize the stream.
+ *  Tuned down from 25/1000ms to 8/500ms so streamed output reaches the DB (and the
+ *  polling UI) about twice as fast — the perceived-speed win. Still a batch, so a
+ *  chatty turn is not one insert per event; the cost is roughly 2x more small
+ *  inserts on a live turn, which the events table absorbs comfortably. */
+const FLUSH_EVERY = 8;
+const FLUSH_INTERVAL_MS = 500;
 /** Text is cheap but not free: keep rows bounded, keep media as URLs elsewhere. */
 const MAX_TEXT = 20_000;
 const MAX_PAYLOAD_CHARS = 100_000;
@@ -644,26 +648,15 @@ async function executeRunBody(runId: string): Promise<void> {
 
   // App access — a real short-lived session for the launching user, minted fresh
   // per turn, so the run can call the platform's own API the way the frontend does
-  // (the env preamble in composePrompt tells it how). Best-effort: a mint failure
-  // just leaves the variables unset, and the run works as before.
-  const appAccess = run.created_by ? await mintAppAccess(run.created_by) : null;
-  if (appAccess) {
-    env.SMRTESY_API_URL = appAccess.url;
-    env.SMRTESY_API_TOKEN = appAccess.token;
-    if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
-    // Real-browser access: the helper script logs a headless Chromium into the
-    // app as the user (same session as the API token, as cookies) and can post
-    // screenshots back into this very turn — hence the run id. The helper is
-    // shipped with the server build, next to this file's compiled form, so its
-    // require('playwright') resolves from the server's own node_modules no
-    // matter which workspace directory the turn runs in.
-    if (appAccess.browser) {
-      env.SMRTESY_APP_URL = appAccess.browser.appUrl;
-      env.SMRTESY_BROWSER_COOKIES = JSON.stringify(appAccess.browser.cookies);
-      env.SMRTESY_BROWSER_HELPER = BROWSER_HELPER_PATH;
-      env.SMRTESY_RUN_ID = runId;
-    }
-  }
+  // (the env preamble in composePrompt tells it how). Minted every turn for every
+  // run exactly as before — UNCHANGED behavior — but kicked off HERE as a promise so
+  // its ~3 sequential Supabase auth round-trips overlap the attachment download and
+  // workspace-trust below instead of running strictly before them (the prep-latency
+  // win). Awaited further down, before the env vars that use it are set. Best-effort:
+  // a mint failure just leaves the variables unset, and the run works as before.
+  const appAccessPromise = run.created_by
+    ? mintAppAccess(run.created_by)
+    : Promise.resolve(null);
 
   // Attachments: downloaded into the working directory, then named in the prompt.
   // The engine reads files by path (its Read tool handles images too) — the CLI's
@@ -704,6 +697,28 @@ async function executeRunBody(runId: string): Promise<void> {
   // never shows the dialog, so we pre-accept it — exactly what that warning asks
   // the operator to do by hand.
   if (cwd) await trustWorkspace(cwd);
+
+  // Fold in the app-access result now (its Supabase round-trips overlapped the prep
+  // above). Declared before buildArgs so its closure captures it. Same env vars as
+  // before — only the moment they're computed moved.
+  const appAccess = await appAccessPromise;
+  if (appAccess) {
+    env.SMRTESY_API_URL = appAccess.url;
+    env.SMRTESY_API_TOKEN = appAccess.token;
+    if (run.org_id) env.SMRTESY_ORG_ID = run.org_id;
+    // Real-browser access: the helper script logs a headless Chromium into the
+    // app as the user (same session as the API token, as cookies) and can post
+    // screenshots back into this very turn — hence the run id. The helper is
+    // shipped with the server build, next to this file's compiled form, so its
+    // require('playwright') resolves from the server's own node_modules no
+    // matter which workspace directory the turn runs in.
+    if (appAccess.browser) {
+      env.SMRTESY_APP_URL = appAccess.browser.appUrl;
+      env.SMRTESY_BROWSER_COOKIES = JSON.stringify(appAccess.browser.cookies);
+      env.SMRTESY_BROWSER_HELPER = BROWSER_HELPER_PATH;
+      env.SMRTESY_RUN_ID = runId;
+    }
+  }
 
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
