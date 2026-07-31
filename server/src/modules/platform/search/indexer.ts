@@ -92,12 +92,23 @@ interface TaskRow {
 interface MsgRow {
   id: string;
   user_id: string | null;
+  source_type: string | null;
   subject: string | null;
   body_text: string | null;
   source_url: string | null;
   sender: string | null;
   sender_email: string | null;
   sender_phone: string | null;
+}
+
+// WhatsApp/SMS have no useful external URL — route them to their in-app screen
+// so a result opens inside smrtesy, not out to a dead link. Email/Drive/Calendar
+// keep their deep external source_url.
+function msgUrl(m: MsgRow): string {
+  const st = m.source_type ?? "";
+  if (st === "whatsapp" || st === "whatsapp_echo") return "/whatsapp";
+  if (st === "sms" || st === "sms_echo") return "/sms";
+  return m.source_url || "/info";
 }
 interface ThreadRow {
   id: string;
@@ -126,7 +137,7 @@ function msgInput(m: MsgRow): SearchDocInput {
     source_id: m.id,
     title: m.subject?.trim() || m.sender?.trim() || "הודעה",
     snippet: m.body_text ? m.body_text.slice(0, 300) : null,
-    url: m.source_url || "/info",
+    url: msgUrl(m),
     keywords:
       [m.sender, m.sender_email, m.sender_phone, m.subject].filter(Boolean).join(" ") || null,
     language: null,
@@ -176,7 +187,7 @@ export async function indexDestinations(): Promise<number> {
 export async function indexTasksForUser(userId: string, cap = DEFAULT_CAP): Promise<number> {
   const { data, error } = await db
     .from("tasks")
-    .select("id, title, title_he, description, serial_display")
+    .select("id, user_id, title, title_he, description, serial_display")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
     .limit(cap);
@@ -186,29 +197,8 @@ export async function indexTasksForUser(userId: string, cap = DEFAULT_CAP): Prom
   }
 
   let n = 0;
-  for (const t of data ?? []) {
-    const row = t as {
-      id: string;
-      title: string | null;
-      title_he: string | null;
-      description: string | null;
-      serial_display: string | null;
-    };
-    const title = (row.title_he || row.title || "משימה").trim();
-    const ok = await upsertDoc(
-      {
-        org_id: null,
-        user_id: userId,
-        source_type: "task",
-        source_id: row.id,
-        title,
-        snippet: row.description ? row.description.slice(0, 300) : null,
-        url: `/tasks?focus=${row.id}`,
-        keywords: [row.title, row.title_he, row.serial_display].filter(Boolean).join(" ") || null,
-        language: null,
-      },
-      userId,
-    );
+  for (const t of (data ?? []) as unknown as TaskRow[]) {
+    const ok = await upsertDoc(taskInput(t), userId);
     if (ok !== "error") n++;
   }
   return n;
@@ -218,7 +208,7 @@ export async function indexTasksForUser(userId: string, cap = DEFAULT_CAP): Prom
 export async function indexInfoForUser(userId: string, cap = DEFAULT_CAP): Promise<number> {
   const { data, error } = await db
     .from("source_messages")
-    .select("id, subject, body_text, source_url, sender, sender_email, sender_phone")
+    .select("id, user_id, source_type, subject, body_text, source_url, sender, sender_email, sender_phone")
     .eq("user_id", userId)
     .order("received_at", { ascending: false })
     .limit(cap);
@@ -228,34 +218,8 @@ export async function indexInfoForUser(userId: string, cap = DEFAULT_CAP): Promi
   }
 
   let n = 0;
-  for (const m of data ?? []) {
-    const row = m as {
-      id: string;
-      subject: string | null;
-      body_text: string | null;
-      source_url: string | null;
-      sender: string | null;
-      sender_email: string | null;
-      sender_phone: string | null;
-    };
-    const title = (row.subject || row.sender || "הודעה").trim();
-    const ok = await upsertDoc(
-      {
-        org_id: null,
-        user_id: userId,
-        source_type: "info",
-        source_id: row.id,
-        title,
-        snippet: row.body_text ? row.body_text.slice(0, 300) : null,
-        // Fall back to the info center if the message has no deep source URL.
-        url: row.source_url || "/info",
-        keywords: [row.sender, row.sender_email, row.sender_phone, row.subject]
-          .filter(Boolean)
-          .join(" ") || null,
-        language: null,
-      },
-      userId,
-    );
+  for (const m of (data ?? []) as unknown as MsgRow[]) {
+    const ok = await upsertDoc(msgInput(m), userId);
     if (ok !== "error") n++;
   }
   return n;
@@ -265,7 +229,7 @@ export async function indexInfoForUser(userId: string, cap = DEFAULT_CAP): Promi
 export async function indexClaudeThreadsForOrg(orgId: string, cap = DEFAULT_CAP): Promise<number> {
   const { data, error } = await db
     .from("claude_threads")
-    .select("id, title")
+    .select("id, org_id, title")
     .eq("org_id", orgId)
     .order("last_message_at", { ascending: false })
     .limit(cap);
@@ -275,20 +239,8 @@ export async function indexClaudeThreadsForOrg(orgId: string, cap = DEFAULT_CAP)
   }
 
   let n = 0;
-  for (const th of data ?? []) {
-    const row = th as { id: string; title: string | null };
-    const title = (row.title || "שיחת קלוד").trim();
-    const ok = await upsertDoc({
-      org_id: orgId,
-      user_id: null,
-      source_type: "claude_thread",
-      source_id: row.id,
-      title,
-      snippet: null,
-      url: `/claude?thread=${row.id}`,
-      keywords: title,
-      language: null,
-    });
+  for (const th of (data ?? []) as unknown as ThreadRow[]) {
+    const ok = await upsertDoc(threadInput(th));
     if (ok !== "error") n++;
   }
   return n;
@@ -317,7 +269,7 @@ const SOURCE_TABLE: Record<string, string> = {
 };
 const SOURCE_SELECT: Record<string, string> = {
   task: "id, user_id, title, title_he, description, serial_display",
-  info: "id, user_id, subject, body_text, source_url, sender, sender_email, sender_phone",
+  info: "id, user_id, source_type, subject, body_text, source_url, sender, sender_email, sender_phone",
   claude_thread: "id, org_id, title",
 };
 

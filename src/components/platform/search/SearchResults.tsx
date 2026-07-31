@@ -34,12 +34,12 @@ function ResultRow({ item, locale }: { item: ResultItem; locale: string }) {
   const isExternal = /^https?:\/\//i.test(item.url);
 
   const body = (
-    <>
-      <div className="font-medium truncate">{item.title}</div>
+    <div className="min-w-0 flex-1">
+      <div className="text-sm font-medium truncate">{item.title}</div>
       {item.snippet && (
-        <div className="text-sm text-muted-foreground line-clamp-2">{item.snippet}</div>
+        <div className="text-xs text-muted-foreground line-clamp-2">{item.snippet}</div>
       )}
-    </>
+    </div>
   );
 
   const cls =
@@ -69,7 +69,7 @@ function Group({ titleKey, items, locale }: { titleKey: string; items: ResultIte
   if (items.length === 0) return null;
   return (
     <section className="space-y-2">
-      <h2 className="text-sm font-semibold text-muted-foreground">{t(titleKey)}</h2>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t(titleKey)}</h2>
       <div className="space-y-1.5">
         {items.map((item, i) => (
           <ResultRow key={`${item.source_type}-${item.url}-${i}`} item={item} locale={locale} />
@@ -145,8 +145,23 @@ export default function SearchResults() {
             </div>
           ) : (
             <div className="space-y-5">
-              <Group titleKey="groupContent" items={data.groups.content} locale={locale} />
+              {/* Order + split per the product spec: pages first, then tasks/
+                  suggestions, then info sources, then Claude conversations. The
+                  backend still returns task+suggestion+info in one `content`
+                  group; we split it here by source_type. */}
               <Group titleKey="groupSettings" items={data.groups.settings} locale={locale} />
+              <Group
+                titleKey="groupTasks"
+                items={data.groups.content.filter(
+                  (r) => r.source_type === "task" || r.source_type === "suggestion",
+                )}
+                locale={locale}
+              />
+              <Group
+                titleKey="groupInfo"
+                items={data.groups.content.filter((r) => r.source_type === "info")}
+                locale={locale}
+              />
               <Group titleKey="groupClaude" items={data.groups.claude} locale={locale} />
             </div>
           )}
