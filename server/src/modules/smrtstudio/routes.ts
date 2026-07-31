@@ -774,6 +774,19 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
   const endpointId = String(req.body?.endpoint_id ?? "");
   const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
   const args = ((req.body?.args as Record<string, unknown>) ?? {});
+  // Optional derivation links (the compose flow, docs/studio-production-pipeline.md):
+  // which project artifacts this run was built from. All nullable — a plain
+  // prompt-only run sends none. The picker that fills these is org-scoped, so
+  // the ids are the caller's own artifacts.
+  const srcBody = (req.body?.sources ?? {}) as Record<string, unknown>;
+  const asUuid = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const asInt = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null);
+  const src = {
+    script_id: asUuid(srcBody.script_id),
+    shot_seq: asInt(srcBody.shot_seq),
+    voice_line_id: asUuid(srcBody.voice_line_id),
+    image_run_id: asUuid(srcBody.image_run_id),
+  };
 
   const [project, model] = await Promise.all([
     db.from("studio_projects").select("id").eq("org_id", orgId).eq("id", projectId).maybeSingle(),
@@ -814,6 +827,11 @@ router.post("/studio/runs", async (req: Request, res: Response) => {
     studio_project_id: projectId,
     stage: model.data.kind === "image" ? "image" : model.data.kind === "voice" ? "voice" : "video",
     test_label: "studio-ui",
+    // derivation links (nullable): the spine's DAG is built from these
+    script_id: src.script_id,
+    shot_seq: src.shot_seq,
+    source_voice_line_id: src.voice_line_id,
+    source_image_run_id: src.image_run_id,
     code,
     model: endpointId,
     endpoint_id: endpointId,
@@ -1549,6 +1567,47 @@ router.post("/studio/projects/:id/voice-project", async (req: Request, res: Resp
   if (rErr) return res.status(500).json({ error: rErr.message });
   if (!resolved) return res.status(500).json({ error: "failed to resolve voice container" });
   res.json({ voice_project: resolved });
+});
+
+/**
+ * GET /studio/projects/:id/artifacts — the read side of the unified spine
+ * (studio_artifacts, docs/studio-production-pipeline.md). Returns every artifact
+ * of the project (voice / image / video / character / …), optionally filtered by
+ * ?type=, newest first. Voice artifacts carry a storage PATH (meta.audio_path in
+ * the private smrtvoice-audio bucket, not a URL) — signed here (1h) as audio_url
+ * so the client can play it. Powers the shot-grouped view and the model-input
+ * pickers (a model's schema slot → a project artifact of the matching type).
+ */
+router.get("/studio/projects/:id/artifacts", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+
+  const { data: project, error: pErr } = await db.from("studio_projects")
+    .select("id").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  const typeFilter = typeof req.query.type === "string" && req.query.type ? req.query.type : null;
+  let q = db.from("studio_artifacts")
+    .select("id, type, status, output_url, model, cost_usd, script_id, shot_seq, angle, parent_id, experiment_run_id, voice_take_id, voice_line_id, meta, created_at")
+    .eq("org_id", orgId)
+    .eq("studio_project_id", project.id)
+    .order("created_at", { ascending: false });
+  if (typeFilter) q = q.eq("type", typeFilter);
+  const { data: rows, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Sign voice audio paths so the client can play a take directly.
+  const artifacts = await Promise.all((rows ?? []).map(async (r) => {
+    const path = (r.meta as { audio_path?: string } | null)?.audio_path;
+    let audio_url: string | null = null;
+    if (r.type === "voice" && path) {
+      const { data } = await db.storage.from("smrtvoice-audio").createSignedUrl(path, 3600);
+      audio_url = data?.signedUrl ?? null;
+    }
+    return { ...r, audio_url };
+  }));
+
+  res.json({ artifacts });
 });
 
 /** PATCH /studio/projects/:id — rename / describe / archive. */

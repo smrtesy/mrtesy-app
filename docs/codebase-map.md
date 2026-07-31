@@ -117,6 +117,11 @@ tasks/info/claude threads; `match_search_documents` hybrid RPC) +
 `search_index_queue` (DB triggers enqueue changed rows; a pg_cron→
 `/api/search/index/drain` worker keeps the index fresh) —
 `server/src/modules/platform/search/`.
+Studio unified model: `studio_artifacts` (the SPINE — one row per artifact of a
+project: voice/image/video/character/background/storyboard/…, referencing the
+per-type detail row) + `studio_artifact_sources` (the derivation DAG, role-typed
+edges). A trigger projects `experiment_runs` (image/video) into the spine; voice
+projection + DAG population are staged. Design: `docs/studio-production-pipeline.md`.
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`

@@ -31,8 +31,8 @@ import { Crosshair, X } from "lucide-react";
 const SEED_KEY = "smrtesy-claude-inspect-seed";
 /** The platform's own repository — where the marked component's code lives. This is
  *  the app's identity, the same for every tenant, not tenant data. */
-const APP_REPO = "smrtesy/mrtesy-app";
-const APP_BRANCH = "main";
+export const APP_REPO = "smrtesy/mrtesy-app";
+export const APP_BRANCH = "main";
 const ARM_EVENT = "smrtesy:claude-inspect-arm";
 const SEED_EVENT = "smrtesy:claude-inspect-seed";
 
@@ -40,6 +40,24 @@ export interface InspectSeed {
   text: string;
   repo: string;
   branch: string;
+}
+
+/**
+ * Deliver a composer seed exactly like an inspect capture does. Shared by every
+ * "send this to Claude" entry point (the picker below, the system-messages
+ * bell's error button) so they all speak the one contract ClaudeChat reads.
+ * Both channels on purpose: the event reaches a Claude pane that is already
+ * mounted (which would never re-run its mount-time read); the storage covers
+ * the not-yet-mounted case and survives the navigation. Caller navigates to
+ * /claude afterwards.
+ */
+export function deliverInspectSeed(seed: InspectSeed) {
+  try {
+    sessionStorage.setItem(SEED_KEY, JSON.stringify(seed));
+  } catch {
+    // Storage full/blocked — the event alone still covers the mounted case.
+  }
+  window.dispatchEvent(new CustomEvent(SEED_EVENT, { detail: seed }));
 }
 
 /** tag#id.class1.class2 — enough to grep for, short enough to read. */
@@ -164,17 +182,7 @@ export function ClaudeInspector() {
         "",
         `${t("seedProblem")} `,
       ];
-      const seed: InspectSeed = { text: lines.join("\n"), repo: APP_REPO, branch: APP_BRANCH };
-
-      // Both channels on purpose: the event reaches a Claude pane that is already
-      // mounted (which would never re-run its mount-time read); the storage covers
-      // the not-yet-mounted case and survives the navigation.
-      try {
-        sessionStorage.setItem(SEED_KEY, JSON.stringify(seed));
-      } catch {
-        // Storage full/blocked — the event alone still covers the mounted case.
-      }
-      window.dispatchEvent(new CustomEvent(SEED_EVENT, { detail: seed }));
+      deliverInspectSeed({ text: lines.join("\n"), repo: APP_REPO, branch: APP_BRANCH });
       router.push(`/${locale}/claude`);
     },
     [elementAt, locale, router, t],
