@@ -16,11 +16,12 @@
  * COST: the thread runs on the subscription token (runner.ts strips the API
  * key), like every other Claude run here — no paid API.
  *
- * DARK BY DEFAULT. Auto-spawning a coding agent from a user tap is powerful, and
- * it cannot be validated end-to-end from a sandbox (no live clone+implement+PR).
- * So it is gated behind SMRTTASK_CORRECTIONS_AUTOFIX=1. Off (the default),
- * approving a code/ui correction changes nothing in production — it is simply
- * acknowledged, exactly as before. Turn it on only after a controlled live test.
+ * KILL-SWITCH, DEFAULT ON. Nothing here reaches production without a human
+ * click: the auto-diagnosis (diagnose.ts) only reads and reports, and this fix
+ * run only spawns when the user taps "אישור לתיקון". So the env var is no longer
+ * a safety gate — it is a plain emergency kill-switch. `SMRTTASK_CORRECTIONS_AUTOFIX`
+ * defaults ON; set it to "0" to disable the whole automatic mechanism (no
+ * diagnosis, no fix), which returns corrections to classify-only + "המשך דיון".
  */
 
 import { db } from "../../../db";
@@ -29,12 +30,14 @@ import { maybeTitle } from "../../claude/threads";
 import { composePrompt } from "../../claude/playbooks";
 
 /** The repo autofix works against. Overridable, defaults to the app repo. */
-const AUTOFIX_REPO = process.env.SMRTTASK_AUTOFIX_REPO || "smrtesy/mrtesy-app";
+export const AUTOFIX_REPO = process.env.SMRTTASK_AUTOFIX_REPO || "smrtesy/mrtesy-app";
 
-/** Master switch. Off unless explicitly enabled, so the merged code is inert in
- *  production until a human has validated one live run. */
-export function autofixEnabled(): boolean {
-  return process.env.SMRTTASK_CORRECTIONS_AUTOFIX === "1";
+/** Emergency kill-switch for the whole automatic corrections mechanism
+ *  (auto-diagnosis + one-tap fix). Default ON — the human gate is the
+ *  "אישור לתיקון" click, not this flag. Set `SMRTTASK_CORRECTIONS_AUTOFIX=0` to
+ *  disable everything and fall back to classify-only + "המשך דיון". */
+export function correctionsAutoEnabled(): boolean {
+  return process.env.SMRTTASK_CORRECTIONS_AUTOFIX !== "0";
 }
 
 interface FixContext {
@@ -106,7 +109,7 @@ export async function createFixThread(
   // The auto-on-approval path is gated by the flag; a user who explicitly taps
   // "continue with Claude" is initiating it themselves (like opening Claude on a
   // task), so `force` bypasses the flag for that human-driven case only.
-  if (!opts.force && !autofixEnabled()) return null;
+  if (!opts.force && !correctionsAutoEnabled()) return null;
   try {
     // Concise initial title, no "אוטומטי" — the user initiated this by tapping,
     // it is not an automatic run. maybeTitle below replaces it with a title drawn

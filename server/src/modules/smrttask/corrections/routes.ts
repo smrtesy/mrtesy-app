@@ -22,7 +22,7 @@ import { db } from "../../../db";
 import { requireAuth, requireOrg, requireApp } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
 import { triageCorrection, PROMPT_CLASSES, type PromptClass } from "./triage";
-import { createFixThread, autofixEnabled } from "./execute";
+import { createFixThread, correctionsAutoEnabled } from "./execute";
 
 const router = Router();
 
@@ -185,13 +185,13 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
       ? body.rule.trim().slice(0, 400)
       : (prevTriage.suggested_rule_he as string | null | undefined) ?? null;
 
-  // Slice 4 — approving a code/ui correction spawns a fix thread that first
-  // presents the problem+proposed fix for the user's approval, then (once
-  // approved) runs pre-push and pushes straight to `main` per the repo rules.
-  // Dark unless SMRTTASK_CORRECTIONS_AUTOFIX=1, so by default this block is a
-  // no-op and approval behaves exactly as before.
+  // Approving a code/ui correction (tap "אישור לתיקון") spawns the fix run, which
+  // implements the already-approved auto-diagnosis (prev.diagnosis) and pushes
+  // straight to `main` per the repo rules. The approve click IS the human gate.
+  // Kill-switch correctionsAutoEnabled() defaults ON; "0" disables the mechanism.
+  const diag = (prev.diagnosis ?? {}) as Record<string, unknown>;
   let fixThreadId: string | null = null;
-  if (decision === "approve" && (finalClass === "code" || finalClass === "ui") && autofixEnabled()) {
+  if (decision === "approve" && (finalClass === "code" || finalClass === "ui") && correctionsAutoEnabled()) {
     let serial: string | null = null;
     let taskTitle: string | null = null;
     if (existing.task_id) {
@@ -227,6 +227,10 @@ router.post("/corrections/:id/decision", async (req: Request, res: Response) => 
         task_title: taskTitle,
         msg_subject: msgSubject,
         msg_sender: msgSender,
+        // The diagnosis the user just approved — hand it to the fix run so it
+        // implements the agreed plan instead of re-investigating.
+        diagnosis_problem_he: (diag.problem_he as string | null) ?? null,
+        diagnosis_fix_he: (diag.fix_he as string | null) ?? null,
       },
     );
   }
