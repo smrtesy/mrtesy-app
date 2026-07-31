@@ -1551,6 +1551,47 @@ router.post("/studio/projects/:id/voice-project", async (req: Request, res: Resp
   res.json({ voice_project: resolved });
 });
 
+/**
+ * GET /studio/projects/:id/artifacts — the read side of the unified spine
+ * (studio_artifacts, docs/studio-production-pipeline.md). Returns every artifact
+ * of the project (voice / image / video / character / …), optionally filtered by
+ * ?type=, newest first. Voice artifacts carry a storage PATH (meta.audio_path in
+ * the private smrtvoice-audio bucket, not a URL) — signed here (1h) as audio_url
+ * so the client can play it. Powers the shot-grouped view and the model-input
+ * pickers (a model's schema slot → a project artifact of the matching type).
+ */
+router.get("/studio/projects/:id/artifacts", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+
+  const { data: project, error: pErr } = await db.from("studio_projects")
+    .select("id").eq("org_id", orgId).eq("id", req.params.id).maybeSingle();
+  if (pErr) return res.status(500).json({ error: pErr.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  const typeFilter = typeof req.query.type === "string" && req.query.type ? req.query.type : null;
+  let q = db.from("studio_artifacts")
+    .select("id, type, status, output_url, model, cost_usd, script_id, shot_seq, angle, parent_id, experiment_run_id, voice_take_id, voice_line_id, meta, created_at")
+    .eq("org_id", orgId)
+    .eq("studio_project_id", project.id)
+    .order("created_at", { ascending: false });
+  if (typeFilter) q = q.eq("type", typeFilter);
+  const { data: rows, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Sign voice audio paths so the client can play a take directly.
+  const artifacts = await Promise.all((rows ?? []).map(async (r) => {
+    const path = (r.meta as { audio_path?: string } | null)?.audio_path;
+    let audio_url: string | null = null;
+    if (r.type === "voice" && path) {
+      const { data } = await db.storage.from("smrtvoice-audio").createSignedUrl(path, 3600);
+      audio_url = data?.signedUrl ?? null;
+    }
+    return { ...r, audio_url };
+  }));
+
+  res.json({ artifacts });
+});
+
 /** PATCH /studio/projects/:id — rename / describe / archive. */
 router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
