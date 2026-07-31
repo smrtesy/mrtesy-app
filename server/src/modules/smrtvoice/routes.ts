@@ -581,11 +581,12 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
   // fal finished, so the voice is ready by definition. Don't ask Resemble about
   // a MiniMax id (it would 404).
   if (character.voice_provider === "minimax") {
-    await db
+    const { error: healErr } = await db
       .from("smrtvoice_characters")
       .update({ voice_status: "ready" })
       .eq("id", req.params.id)
       .eq("org_id", req.org!.id);
+    if (healErr) console.warn("[smrtvoice] minimax voice_status self-heal failed:", healErr.message);
     return res.json({ voice_uuid: character.resemble_voice_id, status: "finished" });
   }
 
@@ -817,6 +818,9 @@ router.post(
         sample_urls: signedUrls,
         name: character.name,
         language: character.language,
+        // Same provider rule as the upload-clone route: the character's
+        // provider decides where the voice is cloned.
+        provider: character.voice_provider === "minimax" ? "minimax" : "resemble",
         clean: req.body?.clean !== false,
       });
 
@@ -833,7 +837,11 @@ router.post(
 
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
-        .update({ resemble_voice_id: result.voice_id, voice_status: "training" })
+        .update({
+          resemble_voice_id: result.voice_id,
+          // MiniMax clones come back ready; Resemble trains async.
+          voice_status: result.status === "ready" ? "ready" : "training",
+        })
         .eq("id", character.id)
         .select()
         .maybeSingle();
@@ -3198,6 +3206,19 @@ router.patch(
       if (SETTINGS_UPDATABLE.has(k)) updates[k] = v;
     }
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No updatable fields in body" });
+    // The org default model governs RESEMBLE voices only (buildSpeakerMap
+    // forces minimax-* per voice by provider), and the engine now routes by
+    // model prefix — so an arbitrary string here (e.g. "minimax-2.8-hd")
+    // would silently send every Resemble voice to the wrong adapter.
+    if (
+      "default_resemble_model" in updates &&
+      updates.default_resemble_model !== null &&
+      !SCRIPT_MODEL_CHOICES.has(updates.default_resemble_model as string)
+    ) {
+      return res.status(400).json({
+        error: "default_resemble_model must be null or one of: " + [...SCRIPT_MODEL_CHOICES].join(", "),
+      });
+    }
 
     const { data, error } = await db
       .from("smrtvoice_settings")
