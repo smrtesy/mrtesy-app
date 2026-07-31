@@ -102,6 +102,13 @@ type SpeakerMapEntry = SpeakerVoice & { voices?: SpeakerVoice[] };
 // inherit from the engine's own env default).
 const DEFAULT_RESEMBLE_MODEL = "resemble-ultra";
 
+// The model a MiniMax-provider voice always renders with. A MiniMax
+// custom_voice_id only exists on MiniMax — the script/org model choice (which
+// governs Resemble voices) can never apply to it, so the provider forces the
+// model per voice. "minimax-*" models are routed by the engine to its MiniMax
+// (fal) adapter.
+const MINIMAX_DEFAULT_MODEL = "minimax-2.8-hd";
+
 /**
  * Build the speaker_map sent to the engine from a script's casting. A speaker
  * cast to several characters (its primary character_id plus extra_character_ids)
@@ -143,6 +150,7 @@ async function buildSpeakerMap(
       description: string | null;
       resemble_voice_id: string | null;
       resemble_model: string | null;
+      voice_provider: string | null;
       language: string;
       personality_prompt: string | null;
       style_baseline_tags: string[] | null;
@@ -152,7 +160,7 @@ async function buildSpeakerMap(
     const { data: chars, error: charsErr } = await db
       .from("smrtvoice_characters")
       .select(
-        "id, name, description, resemble_voice_id, resemble_model, language, personality_prompt, style_baseline_tags",
+        "id, name, description, resemble_voice_id, resemble_model, voice_provider, language, personality_prompt, style_baseline_tags",
       )
       .in("id", [...ids])
       .eq("org_id", orgId);
@@ -179,12 +187,15 @@ async function buildSpeakerMap(
     if (!ch?.resemble_voice_id) return null;
     return {
       resemble_voice_id: ch.resemble_voice_id,
-      // Always the script's effective model — never the character's own. A
-      // legacy per-character model (frozen 'resemble-ultra' snapshot on old
-      // rows) must NOT win, or it would both defeat the per-script override and
+      // The script's effective model — never the character's own. A legacy
+      // per-character model (frozen 'resemble-ultra' snapshot on old rows)
+      // must NOT win, or it would both defeat the per-script override and
       // desync the emotion decision (which is computed from the same effective
-      // model). The per-character model is vestigial; the script/org choice governs.
-      model: defaultModel,
+      // model). The per-character model is vestigial; the script/org choice
+      // governs. ONE exception: a MiniMax-provider voice can only render on
+      // MiniMax (its id is a MiniMax custom_voice_id, meaningless to
+      // Resemble), so the provider forces its model per voice.
+      model: ch.voice_provider === "minimax" ? MINIMAX_DEFAULT_MODEL : defaultModel,
       language: ch.language,
       character_id: id,
       character_name: ch.name,
@@ -303,6 +314,9 @@ router.post(
           ? body.style_baseline_tags
           : [],
         resemble_model: null,
+        // Which provider will hold this character's cloned voice (drives the
+        // clone flow below and forces minimax-* models at generation time).
+        voice_provider: body.voice_provider === "minimax" ? "minimax" : "resemble",
       })
       .select()
       .single();
@@ -348,6 +362,7 @@ const CHARACTER_UPDATABLE = new Set([
   "personality_prompt",
   "style_baseline_tags",
   "resemble_model",
+  "voice_provider",
   "default_exaggeration",
   "default_pitch",
   "default_pace",
@@ -369,6 +384,34 @@ router.patch(
     // (mirrors the create route) so a stray scalar/null can't break synthesis.
     if ("style_baseline_tags" in updates && !Array.isArray(updates.style_baseline_tags)) {
       updates.style_baseline_tags = [];
+    }
+    if ("voice_provider" in updates) {
+      if (updates.voice_provider !== "resemble" && updates.voice_provider !== "minimax") {
+        return res.status(400).json({ error: "voice_provider must be 'resemble' or 'minimax'" });
+      }
+      // A cloned voice id is provider-specific (a MiniMax custom_voice_id means
+      // nothing to Resemble and vice versa). Switching provider under an
+      // existing voice would silently break generation for this character, so
+      // block it — the voice must be re-cloned under the new provider instead.
+      const { data: current, error: curErr } = await db
+        .from("smrtvoice_characters")
+        .select("resemble_voice_id, voice_provider")
+        .eq("id", req.params.id)
+        .eq("org_id", req.org!.id)
+        .maybeSingle();
+      if (curErr) return res.status(500).json({ error: curErr.message });
+      if (!current) return res.status(404).json({ error: "Not found" });
+      if (
+        current.resemble_voice_id &&
+        (current.voice_provider ?? "resemble") !== updates.voice_provider
+      ) {
+        return res.status(409).json({
+          error:
+            "Character already has a cloned voice on " +
+            (current.voice_provider ?? "resemble") +
+            " — re-clone the voice under the new provider instead of switching in place",
+        });
+      }
     }
 
     const { data, error } = await db
@@ -467,12 +510,18 @@ router.post(
       signedUrls.push(signed.signedUrl);
     }
 
+    // The character's provider decides where the voice is cloned: Resemble
+    // (rapid→ultra, $2/mo while the voice exists) or MiniMax via fal (one-time
+    // $1.50, no monthly fee, ready the moment the call returns).
+    const provider = character.voice_provider === "minimax" ? "minimax" : "resemble";
+
     try {
       const client = getVoiceEngineClient();
       const result = await client.createVoiceClone({
         sample_urls: signedUrls,
         name: character.name,
         language: character.language,
+        provider,
         // Default to cleaning; pass clean:false to clone the raw audio (e.g. to
         // A/B a raw clone against a cleaned one).
         clean: req.body?.clean !== false,
@@ -480,7 +529,11 @@ router.post(
 
       const { data: updated, error: updateError } = await db
         .from("smrtvoice_characters")
-        .update({ resemble_voice_id: result.voice_id, voice_status: "training" })
+        .update({
+          resemble_voice_id: result.voice_id,
+          // MiniMax clones come back ready (no training phase to poll).
+          voice_status: result.status === "ready" ? "ready" : "training",
+        })
         .eq("id", req.params.id)
         .select()
         .maybeSingle();
@@ -515,7 +568,7 @@ router.post(
 router.get("/voice/characters/:id/voice-status", async (req: Request, res: Response) => {
   const { data: character, error } = await db
     .from("smrtvoice_characters")
-    .select("resemble_voice_id")
+    .select("resemble_voice_id, voice_provider")
     .eq("id", req.params.id)
     .eq("org_id", req.org!.id)
     .maybeSingle();
@@ -523,6 +576,18 @@ router.get("/voice/characters/:id/voice-status", async (req: Request, res: Respo
   if (error) return res.status(500).json({ error: error.message });
   if (!character) return res.status(404).json({ error: "Character not found" });
   if (!character.resemble_voice_id) return res.json({ status: "none", voice_uuid: null });
+
+  // MiniMax voices have no training phase — the clone call returned only after
+  // fal finished, so the voice is ready by definition. Don't ask Resemble about
+  // a MiniMax id (it would 404).
+  if (character.voice_provider === "minimax") {
+    await db
+      .from("smrtvoice_characters")
+      .update({ voice_status: "ready" })
+      .eq("id", req.params.id)
+      .eq("org_id", req.org!.id);
+    return res.json({ voice_uuid: character.resemble_voice_id, status: "finished" });
+  }
 
   try {
     const client = getVoiceEngineClient();
