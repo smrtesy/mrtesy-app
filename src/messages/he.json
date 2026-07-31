@@ -4452,6 +4452,13 @@
     "delete": "מחק",
     "confirmDelete": "למחוק את הצ'אט הזה וכל התורים שבו?",
     "settings": "הגדרות השיחה",
+    "account": {
+      "aria": "חשבון Claude: {name} — לחץ להחלפה",
+      "menuTitle": "חשבון Claude",
+      "primary": "חשבון ראשי",
+      "automation": "חשבון משני",
+      "notConnected": "לא מחובר"
+    },
     "empty": "כתוב הודעה כדי להתחיל",
     "thinking": "חושב…",
     "toolCount": "{count} פעולות כלים",
