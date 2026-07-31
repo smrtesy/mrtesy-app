@@ -66,6 +66,48 @@ const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 export const AUTOMATION_ACCOUNT = "automation";
 const AUTOMATION_TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION";
 
+/** The default account id — interactive console threads with no explicit choice
+ *  run here (a NULL `claude_account` resolves to this token in loadAccountToken). */
+export const PRIMARY_ACCOUNT = "primary";
+
+/** Optional human labels for the two accounts, so the operator can name them in the
+ *  switcher ("החשבון של מאור" vs "חשבון משני") without a code change. Unset → the UI
+ *  falls back to its own default label per account id. */
+const PRIMARY_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL";
+const AUTOMATION_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL_AUTOMATION";
+
+export interface AccountInfo {
+  /** The id stored on a thread and sent to loadAccountToken. */
+  id: string;
+  /** Operator-set label, or null to let the client pick a default for this id. */
+  label: string | null;
+  /** True when this account's OAuth token is actually configured. The switcher
+   *  disables an unconfigured account so the user can't route a thread to a
+   *  phantom credential that would silently fall back to the primary token. */
+  configured: boolean;
+}
+
+/**
+ * Describe the accounts the console can run on — what the switcher lists.
+ *
+ * Reads only the presence of each token (never the token itself) plus the optional
+ * labels. The automation account being unconfigured is normal: loadAccountToken
+ * falls back to the primary token, so it is reported `configured:false` and the UI
+ * greys it out rather than offering a route that does nothing.
+ */
+export async function describeAccounts(): Promise<AccountInfo[]> {
+  const [primaryTok, autoTok, primaryLabel, autoLabel] = await Promise.all([
+    getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY),
+    getAppSecret(TOKEN_APP_SLUG, AUTOMATION_TOKEN_KEY, AUTOMATION_TOKEN_KEY),
+    getAppSecret(TOKEN_APP_SLUG, PRIMARY_LABEL_KEY, PRIMARY_LABEL_KEY),
+    getAppSecret(TOKEN_APP_SLUG, AUTOMATION_LABEL_KEY, AUTOMATION_LABEL_KEY),
+  ]);
+  return [
+    { id: PRIMARY_ACCOUNT, label: primaryLabel?.trim() || null, configured: !!primaryTok?.trim() },
+    { id: AUTOMATION_ACCOUNT, label: autoLabel?.trim() || null, configured: !!autoTok?.trim() },
+  ];
+}
+
 /**
  * Resolve the subscription token for a run's account.
  *

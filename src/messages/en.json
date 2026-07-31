@@ -243,6 +243,7 @@
     "planTeam": "By worker",
     "planScore": "Score outputs",
     "studio": "Dashboard",
+    "studioProduction": "Production",
     "studioModels": "Model catalog",
     "studioResearch": "Research centre",
     "claude": "Claude"
@@ -4456,6 +4457,13 @@
     "delete": "Delete",
     "confirmDelete": "Delete this chat and all of its turns?",
     "settings": "Conversation settings",
+    "account": {
+      "aria": "Claude account: {name} — click to switch",
+      "menuTitle": "Claude account",
+      "primary": "Primary account",
+      "automation": "Second account",
+      "notConnected": "not connected"
+    },
     "empty": "Write a message to begin",
     "thinking": "Thinking…",
     "toolCount": "{count} tool calls",
@@ -4591,6 +4599,8 @@
   },
   "studioProjects": {
     "title": "Projects",
+    "productionTitle": "Production",
+    "selectProject": "Select project",
     "quickLineTitle": "Quick create",
     "quickLineProject": "Project",
     "quickLineNewProject": "＋ New project",

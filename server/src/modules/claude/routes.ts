@@ -20,7 +20,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun } from "./runner";
+import { executeRun, describeAccounts } from "./runner";
 import { composePrompt } from "./playbooks";
 import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
 import { deployStatus } from "./deploy-status";
@@ -129,6 +129,22 @@ router.post("/claude/runs", async (req: Request, res: Response) => {
   );
 
   return res.status(201).json({ run: data });
+});
+
+/**
+ * GET /api/claude/accounts — the Claude subscription accounts the console can run on.
+ *
+ * Feeds the header account switcher: which accounts exist, whether each is
+ * configured, and any operator-set label. No token value ever leaves the server.
+ */
+router.get("/claude/accounts", async (_req: Request, res: Response) => {
+  try {
+    const accounts = await describeAccounts();
+    return res.json({ accounts });
+  } catch (e) {
+    console.error("[claude/accounts] failed:", e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: "could not load accounts" });
+  }
 });
 
 router.get("/claude/runs", async (req: Request, res: Response) => {
