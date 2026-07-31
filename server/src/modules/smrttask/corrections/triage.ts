@@ -39,6 +39,7 @@ import { db } from "../../../db";
 import { runOneShot, AUTOMATION_ACCOUNT } from "../../claude/runner";
 import { notify } from "../../../lib/platform/notify";
 import { validateRuleAgainstGoldenSet, type GoldenCheck } from "./golden";
+import { createDiagnosisRun } from "./diagnose";
 
 /** The verdicts triage may return. Only "prompt" ever reaches the classifier. */
 export const PROMPT_CLASSES = [
@@ -365,6 +366,21 @@ async function runTriage(correctionId: string): Promise<void> {
       .update({ context, updated_at: new Date().toISOString() })
       .eq("id", correctionId);
     if (updErr) console.error("[corrections.triage] update failed:", updErr.message);
+
+    // Auto-diagnosis (option B): for a fixable class, spawn a READ-ONLY console
+    // run that investigates the code and writes problem+fix onto context.diagnosis
+    // (diagnose.ts). Fire-and-forget, on the subscription — zero paid tokens — and
+    // it never blocks or fails triage. The kill-switch lives in createDiagnosisRun.
+    if (effective.prompt_class === "code" || effective.prompt_class === "ui") {
+      void createDiagnosisRun(correctionId, effective.prompt_class, orgId, userId, {
+        note,
+        understood_he: effective.understood_he ?? null,
+        reason_he: effective.reason_he ?? null,
+        serial: null,
+      }).catch((e) =>
+        console.error("[corrections.triage] diagnosis enqueue threw:", e instanceof Error ? e.message : e),
+      );
+    }
 
     // The notification IS the mechanism that keeps a fail-closed pipeline from
     // being a silent one. It carries the verdict, the reason, and — for a real

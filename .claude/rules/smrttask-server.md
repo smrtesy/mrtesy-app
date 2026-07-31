@@ -18,7 +18,9 @@ paths:
   `whatsapp-view.ts`, `knowledge.ts`, `transcription-experiment.ts`, and
   `claude-session.ts` — the machine endpoint (`x-cron-secret` gated) that the
   Claude Code Stop hook posts session proposals to.
-- `corrections/` — corrections triage (triage, execute, golden, jobs).
+- `corrections/` — corrections triage (triage, execute, golden, jobs, diagnose).
+  `diagnose.ts` is the auto-diagnosis run (read-only console run → problem+fix onto
+  `context.diagnosis`); `jobs.ts` carries its `/diagnosis/:id` callback + stale sweep.
 - `daily-report/`, `marathon/`, `reminders/`, `projects/`.
 
 Conventions that bite here: every tenant route needs

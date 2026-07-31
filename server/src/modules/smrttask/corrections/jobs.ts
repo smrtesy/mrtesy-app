@@ -26,6 +26,8 @@
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { sweepUntriagedCorrections } from "./triage";
+import { db } from "../../../db";
+import { DIAGNOSIS_TIMEOUT_MS } from "./diagnose";
 
 const router = Router();
 
@@ -59,6 +61,91 @@ router.post("/api/corrections/jobs/triage-sweep", async (req: Request, res: Resp
   } catch (e) {
     console.error("[corrections.jobs] sweep failed:", e instanceof Error ? e.message : e);
     return res.status(500).json({ error: "sweep_failed" });
+  }
+});
+
+// The auto-diagnosis run (diagnose.ts) POSTs its verdict here. Same secret gate
+// as the sweeps (this path is under /api/corrections/jobs). The run_id in the
+// body must match the one we recorded when spawning the run, so a stray POST
+// cannot overwrite a correction's diagnosis.
+router.post("/api/corrections/jobs/diagnosis/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const runId = typeof body.run_id === "string" ? body.run_id : "";
+
+  const { data: row, error: findErr } = await db
+    .from("task_corrections")
+    .select("context")
+    .eq("id", id)
+    .maybeSingle();
+  if (findErr) return res.status(500).json({ error: findErr.message });
+  if (!row) return res.status(404).json({ error: "not_found" });
+
+  const prev = (row.context ?? {}) as Record<string, unknown>;
+  const prevDiag = (prev.diagnosis ?? {}) as Record<string, unknown>;
+  // Anti-spoof: only the run we spawned may write this correction's diagnosis.
+  if (!runId || prevDiag.run_id !== runId) {
+    return res.status(409).json({ error: "run_mismatch" });
+  }
+
+  const risk = ["low", "med", "high"].includes(String(body.risk)) ? String(body.risk) : null;
+  const files = Array.isArray(body.files)
+    ? body.files.filter((f) => typeof f === "string").slice(0, 40)
+    : [];
+  const context = {
+    ...prev,
+    diagnosis: {
+      ...prevDiag,
+      status: "done",
+      problem_he: String(body.problem_he ?? "").slice(0, 2000),
+      fix_he: String(body.fix_he ?? "").slice(0, 2000),
+      risk,
+      files,
+      ran_at: new Date().toISOString(),
+    },
+  };
+  const { error: updErr } = await db
+    .from("task_corrections")
+    .update({ context, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+  return res.json({ ok: true });
+});
+
+// Safety gate (user requirement): a diagnosis run that never posts back must not
+// leave the correction stuck on "מאבחן…" forever. This flips any diagnosis that
+// has been `running` longer than the timeout to `failed`, so the card surfaces
+// "האבחון לא הצליח לרוץ" and the user can still act. Idempotent and bounded.
+router.post("/api/corrections/jobs/diagnosis-sweep", async (_req: Request, res: Response) => {
+  try {
+    const { data: rows, error } = await db
+      .from("task_corrections")
+      .select("id, context")
+      .eq("context->diagnosis->>status", "running")
+      .limit(200);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const cutoff = Date.now() - DIAGNOSIS_TIMEOUT_MS;
+    let failed = 0;
+    for (const row of rows ?? []) {
+      const prev = (row.context ?? {}) as Record<string, unknown>;
+      const diag = (prev.diagnosis ?? {}) as Record<string, unknown>;
+      const startedAt = Date.parse(String(diag.started_at ?? ""));
+      if (!Number.isFinite(startedAt) || startedAt > cutoff) continue;
+      const context = {
+        ...prev,
+        diagnosis: { ...diag, status: "failed", error: "timeout", ran_at: new Date().toISOString() },
+      };
+      const { error: updErr } = await db
+        .from("task_corrections")
+        .update({ context, updated_at: new Date().toISOString() })
+        .eq("id", row.id as string);
+      if (!updErr) failed += 1;
+    }
+    return res.json({ ok: true, failed });
+  } catch (e) {
+    console.error("[corrections.jobs] diagnosis-sweep failed:", e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: "diagnosis_sweep_failed" });
   }
 });
 

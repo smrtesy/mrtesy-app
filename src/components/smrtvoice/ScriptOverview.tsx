@@ -58,7 +58,7 @@ const STAGE_BANDS: Record<string, [number, number]> = {
   generating: [35, 100],
 };
 
-export function ScriptOverview({ scriptId }: { scriptId: string }) {
+export function ScriptOverview({ scriptId, embedded = false }: { scriptId: string; embedded?: boolean }) {
   const locale = useLocale();
   const router = useRouter();
   const t = useTranslations("smrtVoice.scripts");
@@ -224,26 +224,31 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
 
   return (
     <div className="space-y-6">
-      {/* Breadcrumb + header */}
+      {/* Breadcrumb + header. Hidden when embedded (the studio production tab
+          already shows the script's code/name in its row header). */}
       <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <Link
-            href={`/${locale}/voice/projects/${script.project_id}`}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline"
-          >
-            <ChevronRight className="h-3 w-3 rotate-180" />
-            {t("backToFolder")}
-          </Link>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <span className="font-mono">{script.code}</span>
-            {script.name ? <span className="text-muted-foreground">· {script.name}</span> : null}
-          </h1>
-          {script.google_doc_tab_title ? (
-            <p className="text-xs text-muted-foreground">
-              {t("readingFromTab", { tab: script.google_doc_tab_title })}
-            </p>
-          ) : null}
-        </div>
+        {embedded ? (
+          <div />
+        ) : (
+          <div className="space-y-1">
+            <Link
+              href={`/${locale}/voice/projects/${script.project_id}`}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline"
+            >
+              <ChevronRight className="h-3 w-3 rotate-180" />
+              {t("backToFolder")}
+            </Link>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <span className="font-mono">{script.code}</span>
+              {script.name ? <span className="text-muted-foreground">· {script.name}</span> : null}
+            </h1>
+            {script.google_doc_tab_title ? (
+              <p className="text-xs text-muted-foreground">
+                {t("readingFromTab", { tab: script.google_doc_tab_title })}
+              </p>
+            ) : null}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           {/* Script language — gates which pronunciation-lexicon entries apply
               (a 'he' entry fires only on Hebrew scripts, 'en' only on English). */}
@@ -287,9 +292,11 @@ export function ScriptOverview({ scriptId }: { scriptId: string }) {
             <option value="off">{t("emotionOff")}</option>
           </select>
           <ProjectStatusBadge status={script.status} />
-          <Button variant="ghost" size="icon" onClick={onDelete} disabled={busy} title={t("delete")}>
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {!embedded && (
+            <Button variant="ghost" size="icon" onClick={onDelete} disabled={busy} title={t("delete")}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 

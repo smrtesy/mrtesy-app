@@ -16,6 +16,7 @@ import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 import { PullToRefresh } from "@/components/platform/pwa/PullToRefresh";
 import { ClaudeInspector } from "@/components/claude/ClaudeInspector";
+import { SystemMessagesRecorder } from "@/components/platform/layout/SystemMessagesRecorder";
 
 export default async function AppLayout({
   children,
@@ -186,6 +187,10 @@ export default async function AppLayout({
               Admin-only, matching the /claude routes' requireSuperAdmin gate: for
               anyone else the capture would land on a screen whose every call 403s. */}
           {isAdmin && <ClaudeInspector />}
+          {/* Archives every toast shown into the sidebar bell (SystemMessagesBell).
+              Lives INSIDE TabsWorkspaceProvider so it can attribute each message
+              to the active tab's screen (panes never change the top URL). */}
+          <SystemMessagesRecorder />
         </WhatsAppPanelProvider>
       </TabsWorkspaceProvider>
       </QueryProvider>

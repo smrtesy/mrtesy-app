@@ -95,7 +95,8 @@ export function ScriptCasting({
       setChoice(initial);
       setExtras(initialExtras);
 
-      // Stock voices are owner/admin-gated; degrade gracefully if forbidden.
+      // Stock voices are readable by any studio member; degrade gracefully on
+      // any fetch error so casting still renders with the cached pool.
       try {
         const { voices } = await api<{ voices: StockVoice[] }>("/api/voice/resemble/voices");
         setStock(voices ?? []);
