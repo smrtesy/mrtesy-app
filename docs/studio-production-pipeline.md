@@ -110,25 +110,38 @@
 ## הכרעות (ננעלו ע"י המשתמש, 2026-07-31)
 
 1. **מנוע-הקול: מיגור מלא** — לא שיקוף. הקול עובר לטבלאות ה-studio החדשות.
-   ✅ **ביקורת-המלאי בוצעה** — והיא נעלה את המגבלה הקריטית: **מנוע-הקול הוא שירות
-   Python ברפו נפרד `voice-engine`** (אחד משלושת הרפואים), שמדבר עם smrtesy ב-HTTP
-   **וגם כותב/קורא ישירות ל-DB ב-service role.** נקודות-המגע שאסור לשנות בלי עדכון
-   מתואם של `voice-engine` באותו effort:
-   - **קורא:** `smrtvoice_scripts` (שפה/מודל/doc), `smrtvoice_projects.project_id`
-     (שפה/מודל), `smrtvoice_script_speakers` (קאסטינג), `smrtvoice_lines`, `smrtvoice_pronunciation_lexicon`.
-   - **כותב:** `smrtvoice_lines` (status/`output_audio_path`/משך/עלות), **`smrtvoice_line_takes`**
-     (שורה לכל clip), `smrtvoice_scripts` (מוני-התקדמות), `smrtvoice_jobs` (לפי `voice_engine_job_id`),
-     `smrtvoice_webhook_outbox`.
-   - **האודיו אינו URL** — הוא `output_audio_path` בבאקט הפרטי `smrtvoice-audio`, signed on-demand.
+   ✅ **שתי ביקורות בוצעו** (צד-smrtesy + קוד ה-Python של `voice-engine`). התמונה
+   המדויקת — ועם **תיקון** להנחה קודמת:
 
-   **נתיב מיגור-קול מדורג (בלי לשבור הפקה חיה):**
-   - **א. ייצוג מאוחד קודם:** כל טייק (`smrtvoice_line_takes`) נחשף כשורת `studio_artifacts`
-     type=voice — דרך view/סנכרון — כך שה-Studio קורא מודל אחיד **בלי** שהמנוע משתנה עדיין.
-   - **ב. גמילת-המנוע מתואמת:** ב-`voice-engine` מעבירים כתיבה לטבלאות/עמודות ה-studio
-     (או שכבת-תאימות שהמנוע ממשיך לכתוב אליה), בזוג-commit חוצה-רפו.
-   - **ג. השבתת `smrtvoice_*`** רק אחרי שהמנוע גמול ואומת. `smrtvoice_projects.project_id`
-     נשאר עד שלב ג'.
-   > המשמעות: מיגור מלא אפשרי (הרפו בסקופ) אבל הוא **פרויקט חוצה-רפו מדורג**, לא מיגרציית-סכמה בודדת.
+   **המנוע הוא כמעט-לגמרי מעבד-jobs חסר-מצב** (supabase-py/PostgREST, service-role):
+   - **תיקון:** המנוע **לא** קורא `smrtvoice_projects.project_id` לשפה/מודל —
+     `db/projects.py.get()` מוגדר אך **לא נקרא אף פעם**. שפה/מודל/קאסטינג מגיעים
+     כולם ב-**payload** (`language`, `speaker_map[].model`, `llm_model`). קריאות ה-DB
+     היחידות: `smrtvoice_characters` + `smrtvoice_pronunciation_lexicon` (read-only,
+     fallback בלבד — הכל מגיע ב-payload) ו-`smrtvoice_lines` (regenerate).
+   - **כותב תוצאות ישירות:** `smrtvoice_lines` (`mark_completed`: status/`output_audio_path`/
+     משך/עלות), **`smrtvoice_line_takes`** (שורה לכל clip), `smrtvoice_scripts` (מוני-התקדמות),
+     `smrtvoice_jobs` (לפי `voice_engine_job_id`, **לא** `id`), `smrtvoice_webhook_outbox`.
+   - **האודיו** = `output_audio_path` (נתיב יחסי, לא URL) בבאקט `smrtvoice-audio`, נתיב
+     `{org_id}/projects/{script_id}/output/...`, signed on-demand.
+   - **אילוצים כבדי-משקל** (הכי מסוכן לשנות): המפתח-הטבעי `(script_id, line_number)` +
+     `on_conflict` עליו; ריקוד שתי-הצעדים line→take (insert line → get_id → insert take);
+     ו-`_row_to_processed_line` ש**מתדרדר בשקט** על שם-עמודה שהשתנה (`.get(x) or default`).
+
+   **ה-unlock (מהמפה):** המנוע **כבר שולח את התוצאה המלאה** ב-webhook `line.completed`
+   (`output_audio_path`, duration, cost, model, text_used…). כלומר אפשר **לנתק את
+   כתיבות-ה-DB הישירות של המנוע** — הוא יחזיר תוצאה, ו**צד-המוצר יכתוב**. רוב הצינור
+   כבר קיים. זה הופך את "המיגור המלא" מרפקטור-סכמה-מסוכן למהלך-גבולות נקי.
+
+   **נתיב מיגור-קול מדורג (מעודכן):**
+   - **א. ניתוק-הכתיבות (ה-unlock):** להפוך את `line.completed` לעמיד (outbox — כרגע
+     best-effort כי המנוע כותב ישיר), ולהעביר את כתיבת lines/takes/progress לצד-המוצר
+     מתוך ה-webhook. אחרי זה **כל** כתיבות-ה-DB בצד אחד.
+   - **ב. עמוד-שדרה מאוחד:** `studio_artifacts` כאינדקס-משותף + קשתות-DAG; הקול שומר את
+     `smrtvoice_lines`/`_line_takes` העשירות (לא מפרקים את המפתח `(script_id,line_number)`
+     ולא את היסטוריית-הטייקים לתוך טבלת-ענק).
+   - **ג. השבתת שאריות** רק אחרי אימות. `smrtvoice_projects` הוא ממילא משקל-מת למנוע.
+   > `ai_usage` + `apps` שהמנוע נוגע בהם הם טבלאות חוצות-מערכת — **מחוץ** לסקופ השינוי.
 2. **רקעים/פריטים: תלוי — נגזר מהנתונים.** מה באמת שימושי למודלי-הווידאו? נחתך
    מ**המיפוי המלא** (משימת הכיסוי המלא למטה): אם מודלים צורכים רפרנס-רקע מרובה-זווית
    → סט-זוויות; אם רפרנס יחיד מספיק לרובם → מתחילים ביחיד. החלטה מבוססת-קטלוג, לא ניחוש.
