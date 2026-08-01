@@ -148,6 +148,10 @@ class VoiceEngineClient {
     sample_urls?: string[];
     name: string;
     voice_type?: "rapid" | "pro";
+    // "resemble" (default): rapid→ultra clone, $2/mo while the voice exists.
+    // "minimax": one-time $1.50 clone via fal, no monthly fee, status "ready"
+    // on return (no training poll).
+    provider?: "resemble" | "minimax";
     language?: string;
     clean?: boolean;
   }): Promise<{ voice_id: string; status: string }> {
@@ -158,6 +162,7 @@ class VoiceEngineClient {
       sample_audio_url: params.sample_url ?? undefined,
       voice_name: params.name,
       voice_type: params.voice_type ?? "rapid",
+      provider: params.provider ?? "resemble",
       language: params.language ?? "he",
       // Gentle pre-clone cleanup (high-pass + silence trim + normalize).
       clean: params.clean ?? true,

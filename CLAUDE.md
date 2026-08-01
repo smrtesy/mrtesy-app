@@ -182,6 +182,21 @@ Why this rule exists: a large batch-extraction run and repeated backend LLM
 summaries were triggered without the user approving the spend. Standing
 instruction (2026-07): no money-spending action without explicit cost sign-off.
 
+**Two refinements (user decision, 2026-07-31):**
+
+1. **In-app actions approve themselves.** Spend the USER triggers in the
+   product UI, where the price is visible at the point of action (e.g. the
+   voice-provider picker showing "$1.50 one-time" / "$2/month"), needs NO
+   chat-level approval — the click is the approval. The corollary is a build
+   requirement: any UI action that spends money must show its price at the
+   decision point. Chat approval is only for spend *Claude* initiates.
+2. **Micro-test envelope (≤$3).** Small technical validation runs Claude
+   initiates (a voice-clone test, a model probe, a few TTS lines) are
+   pre-approved up to **$3 cumulative per test**, with the actual spend
+   reported in the summary. Above the cap — explicit approval as before.
+   (Generalizes the video-lab `/expert` micro-experiments envelope of
+   2026-07-30; kept in sync across the three repos.)
+
 ## smrtTask task-ingest mode (trigger-gated)
 
 If the user's first message in the session begins with the phrase
@@ -768,11 +783,22 @@ can't cheaply undo deserves the same four.
 
 ## Migration discipline
 
-When you write SQL DDL (CREATE/ALTER/DROP) or DML that the user wants
-persisted, create a numbered file under `supabase/migrations/` named
-`YYYYMMDDHHMMSS_<slug>.sql` and tell the user to run it via Supabase
-CLI. Do not call `mcp__supabase__apply_migration` on a production
-project without explicit user authorization.
+When you write SQL DDL/DML the user wants persisted, always create a numbered
+file under `supabase/migrations/` named `YYYYMMDDHHMMSS_<slug>.sql` so the
+change is tracked in git.
+
+Whether you apply it to production yourself turns on one question — **does it
+delete or change existing data?**
+
+- **Does NOT delete or modify existing data** (`CREATE TABLE/INDEX`,
+  `ADD COLUMN/CONSTRAINT`, `COMMENT`, a `cron.schedule`, and the like):
+  **apply it yourself** via `mcp__supabase__apply_migration`, then verify.
+  No approval needed.
+- **Deletes or changes existing data** (`DROP`, `DELETE`, `TRUNCATE`, an
+  `UPDATE` that changes rows, `ALTER COLUMN TYPE` / `SET NOT NULL`, or anything
+  else that rewrites or removes existing data): **do not apply.** First run a
+  read-only `SELECT` to show exactly what will change (which rows / how many),
+  present that to the user, and apply only after explicit approval.
 
 ## Planning / design docs — commit and share a GitHub link
 

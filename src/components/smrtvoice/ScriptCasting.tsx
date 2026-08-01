@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
+import { providerForModel, type VoiceProvider } from "@/lib/smrtvoice/providers";
 import { readVoiceCache, writeVoiceCache } from "./voiceCache";
 
 interface Speaker {
@@ -24,6 +25,10 @@ interface Character {
   name: string;
   display_name: string | null;
   resemble_voice_id: string | null;
+  // Which provider this character's voice renders with. The API returns it;
+  // older cached rows may lack it, so it's optional and treated as "resemble"
+  // (the column default) when absent.
+  voice_provider?: VoiceProvider | null;
 }
 interface StockVoice {
   uuid: string;
@@ -43,9 +48,15 @@ interface StockVoice {
  */
 export function ScriptCasting({
   scriptId,
+  selectedModel,
   onSaved,
 }: {
   scriptId: string;
+  // The script's effective model. Its provider (Resemble vs MiniMax) filters the
+  // voice options — a MiniMax voice only renders on a MiniMax model and vice
+  // versa, so the picker shows only the compatible pool. null → org default
+  // (a Resemble model), i.e. the Resemble pool.
+  selectedModel?: string | null;
   onSaved?: () => void;
 }) {
   const t = useTranslations("smrtVoice.casting");
@@ -167,9 +178,23 @@ export function ScriptCasting({
     [t],
   );
 
+  // The provider the selected model belongs to — the voice pool is filtered to
+  // it. A character with no provider yet (older cached row) is treated as the
+  // column default, "resemble".
+  const wantProvider = providerForModel(selectedModel);
+
   // Build the grouped/sorted option lists once, independent of how many
   // speakers there are — every dropdown reuses the same arrays.
   const groups = useMemo(() => {
+    // Only my characters whose voice matches the selected model's provider.
+    const mine = characters.filter((c) => (c.voice_provider ?? "resemble") === wantProvider);
+
+    // Resemble stock/library voices are Resemble-only, so they appear solely
+    // when the selected model is a Resemble model. Under a MiniMax model the
+    // named/rest groups are empty and only my MiniMax characters show.
+    if (wantProvider !== "resemble") {
+      return { mine, named: [] as StockVoice[], rest: [] as StockVoice[] };
+    }
     const myVoiceIds = new Set(characters.map((c) => c.resemble_voice_id).filter(Boolean));
     // Resemble voices that don't already back one of my characters (avoid dupes).
     const resemble = stock.filter((v) => !myVoiceIds.has(v.uuid));
@@ -185,8 +210,8 @@ export function ScriptCasting({
     const rest = resemble
       .filter((v) => !(v.display_name ?? "").trim())
       .sort((a, b) => byLabel(voiceLabel(a), voiceLabel(b)));
-    return { mine: characters, named, rest };
-  }, [characters, stock, voiceLabel]);
+    return { mine, named, rest };
+  }, [characters, stock, voiceLabel, wantProvider]);
 
   // Apply the free-text filter to each group (matches the label the user sees).
   const filtered = useMemo(() => {
@@ -291,7 +316,11 @@ export function ScriptCasting({
               return c ? (c.display_name ?? c.name) : id;
             };
             const addable = characters.filter(
-              (c) => c.resemble_voice_id && c.id !== primaryCharId && !selectedExtras.includes(c.id),
+              (c) =>
+                c.resemble_voice_id &&
+                (c.voice_provider ?? "resemble") === wantProvider &&
+                c.id !== primaryCharId &&
+                !selectedExtras.includes(c.id),
             );
             return (
               <div key={s.speaker_name} className="space-y-1.5">

@@ -43,6 +43,7 @@ const NAV_LABEL_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["/studio/research", "studioResearch"],
   ["/claude", "claude"],
   ["/settings", "settings"],
+  ["/map", "siteMap"],
   ["/transcription-experiment", "transcriptionExperiment"],
   ["/admin", "platformAdmin"],
 ];
@@ -64,6 +65,7 @@ import {
   KeyRound,
   Layers,
   Lightbulb,
+  Map as MapIcon,
   MessageCircle,
   MessageSquare,
   Mic,
@@ -116,6 +118,7 @@ const NAV_ICONS: ReadonlyArray<readonly [string, LucideIcon]> = [
   ["/studio/research", FlaskConical],
   ["/claude", Bot],
   ["/settings", Settings],
+  ["/map", MapIcon],
   ["/transcription-experiment", FlaskConical],
   ["/admin", Shield],
 ];
