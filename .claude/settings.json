@@ -45,6 +45,15 @@
             "command": ".claude/hooks/map-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "WebSearch|WebFetch|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/research-gate.sh"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -73,6 +82,15 @@
           {
             "type": "command",
             "command": ".claude/hooks/longtask-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/research-guard.sh"
           }
         ]
       }
