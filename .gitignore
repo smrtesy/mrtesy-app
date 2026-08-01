@@ -49,3 +49,6 @@ android-app/app/google-services.json
 
 # Claude Code session-scoped identity cache (per-day routing hook)
 .claude/tmp/
+
+# Research-protocol runtime state (active plan, counters, waiver log, archives).
+.claude/research/
