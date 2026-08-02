@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Breadcrumbs, type Crumb } from "@/components/ui/breadcrumbs";
 import { api } from "@/lib/api/client";
+import { useScreenRouter } from "@/lib/panes/nav";
 
 import { VoiceCloneUploader } from "./VoiceCloneUploader";
 import { CharacterFormDialog } from "./CharacterFormDialog";
@@ -31,7 +32,10 @@ interface Character {
 export function CharacterDetails({ characterId }: { characterId: string }) {
   const t = useTranslations("smrtVoice.characters");
   const tf = useTranslations("smrtVoice.characters.form");
-  const router = useRouter();
+  // Pane-aware router: inside a tabs-workspace pane this swaps the pane's
+  // content; as a routed page it is next/navigation. A bare useRouter would
+  // navigate the top window out from under the pane.
+  const router = useScreenRouter();
   const locale = useLocale();
   const [character, setCharacter] = useState<Character | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +74,34 @@ export function CharacterDetails({ characterId }: { characterId: string }) {
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!character) return <p className="text-sm text-muted-foreground">…</p>;
+  // House rule: the hierarchy breadcrumb sits at the top-left of the screen and
+  // is ALWAYS visible — including while the character loads or on error — so
+  // the way back to the list never disappears. Characters › <this character>.
+  const crumbs: Crumb[] = [
+    { label: t("title"), href: `/${locale}/voice/characters` },
+    { label: character?.display_name ?? character?.name ?? "…" },
+  ];
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <Breadcrumbs items={crumbs} />
+        <p className="text-sm text-destructive">{error}</p>
+      </div>
+    );
+  }
+  if (!character) {
+    return (
+      <div className="space-y-6">
+        <Breadcrumbs items={crumbs} />
+        <p className="text-sm text-muted-foreground">…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={crumbs} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{character.display_name ?? character.name}</h1>

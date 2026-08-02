@@ -26,9 +26,11 @@
 
 import { useMemo, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Search, X, Map as MapIcon } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Search, X, Map as MapIcon, Film, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api/client";
 import { SmrtName } from "@/components/icons/SmrtName";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { useAppAccess } from "@/contexts/AppAccessContext";
@@ -95,6 +97,9 @@ export function SiteMap() {
   }, [enabledApps, isAdmin, taskAccess, canManageOrg, query, t]);
 
   const total = sections.reduce((n, s) => n + s.rows.length, 0);
+  // Same needle the static rows are filtered by — passed down so the dynamic
+  // sub-page lists (projects/characters) filter in step with the search box.
+  const needle = query.trim().toLowerCase();
 
   return (
     <div className="space-y-4">
@@ -142,7 +147,13 @@ export function SiteMap() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {sections.map(({ section, rows }) => (
-            <SectionCard key={section.id} section={section} rows={rows} locale={locale} />
+            <SectionCard
+              key={section.id}
+              section={section}
+              rows={rows}
+              locale={locale}
+              needle={needle}
+            />
           ))}
         </div>
       )}
@@ -154,7 +165,8 @@ function SectionCard({
   section,
   rows,
   locale,
-}: ResolvedSection & { locale: string }) {
+  needle,
+}: ResolvedSection & { locale: string; needle: string }) {
   const t = useTranslations();
   const app = section.appSlug ? APPS[section.appSlug] : undefined;
   // Inline color so the arbitrary accent hex from the app registry survives
@@ -211,6 +223,101 @@ function SectionCard({
           </li>
         ))}
       </ul>
+
+      {/* Dynamic sub-pages: the actual projects and characters, listed as deep
+          links so the map indexes real instances, not just the static screens.
+          Only under the smrtStudio section, which is the app that owns them. */}
+      {section.appSlug === "smrtstudio" && <StudioSubpages locale={locale} needle={needle} />}
     </section>
+  );
+}
+
+type StudioProjectRow = { id: string; name_he: string; name_en: string };
+type VoiceCharacterRow = { id: string; name: string; display_name: string | null };
+
+/**
+ * Live sub-pages under the smrtStudio card: each real project (deep-linked via
+ * `?project=<id>`, the same shareable URL the production screen writes) and
+ * each character (`/voice/characters/<id>`). Fetched once and cached; filtered
+ * by the map's search box; entitlement comes for free because this only renders
+ * inside the smrtStudio section, which is already gated by the caller. Any
+ * fetch error / empty result simply renders nothing extra.
+ */
+function StudioSubpages({ locale, needle }: { locale: string; needle: string }) {
+  const t = useTranslations();
+  const { active } = useActiveOrg();
+  // Key by active org so switching orgs doesn't show the previous org's list.
+  const projectsQ = useQuery({
+    queryKey: ["site-map-studio-projects", active?.id ?? "none"],
+    queryFn: () => api<{ projects: StudioProjectRow[] }>("/api/studio/projects"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const charactersQ = useQuery({
+    queryKey: ["site-map-voice-characters", active?.id ?? "none"],
+    queryFn: () => api<{ characters: VoiceCharacterRow[] }>("/api/voice/characters"),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const projects = (projectsQ.data?.projects ?? [])
+    .map((p) => ({
+      id: p.id,
+      label: (locale === "en" ? p.name_en : p.name_he) || p.name_en || p.name_he || p.id,
+      href: `/${locale}/studio/projects?project=${p.id}`,
+    }))
+    .filter((r) => !needle || r.label.toLowerCase().includes(needle));
+
+  const characters = (charactersQ.data?.characters ?? [])
+    .map((c) => ({
+      id: c.id,
+      label: c.display_name ?? c.name,
+      href: `/${locale}/voice/characters/${c.id}`,
+    }))
+    .filter((r) => !needle || r.label.toLowerCase().includes(needle));
+
+  if (projects.length === 0 && characters.length === 0) return null;
+
+  return (
+    <>
+      <SubpageGroup title={t("studioProjects.title")} Icon={Film} rows={projects} />
+      <SubpageGroup title={t("smrtVoice.characters.title")} Icon={User} rows={characters} />
+    </>
+  );
+}
+
+function SubpageGroup({
+  title,
+  Icon,
+  rows,
+}: {
+  title: string;
+  Icon: React.ComponentType<{ className?: string }>;
+  rows: Array<{ id: string; label: string; href: string }>;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-2 border-t pt-2">
+      <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        {title}
+      </div>
+      <ul className="space-y-0.5">
+        {rows.map((r) => (
+          <li key={r.id}>
+            <OpenTabLink
+              href={r.href}
+              label={r.label}
+              title={r.label}
+              beside
+              className={cn(
+                "group flex items-center gap-2 rounded-lg px-2 py-1.5",
+                "transition-colors hover:bg-accent hover:text-accent-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
+              <span className="min-w-0 truncate text-sm">{r.label}</span>
+            </OpenTabLink>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
