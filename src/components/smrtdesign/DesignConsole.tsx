@@ -57,6 +57,19 @@ export function DesignConsole() {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [picks, setPicks] = useState<Partial<Record<Dimension, string>>>({});
+  const [note, setNote] = useState("");
+  const [zoomUrl, setZoomUrl] = useState<string | null>(null);
+
+  // Toggle "take dimension d from option id" — a dimension can come from only one
+  // option, so setting it under a card automatically unchecks it under any other.
+  function togglePick(d: Dimension, optionId: string) {
+    setPicks((prev) => {
+      const next = { ...prev };
+      if (next[d] === optionId) delete next[d];
+      else next[d] = optionId;
+      return next;
+    });
+  }
 
   // Link-existing-conversation (option A) picker
   const [linking, setLinking] = useState(false);
@@ -221,14 +234,18 @@ export function DesignConsole() {
   }
 
   async function remix() {
-    if (!selectedId || Object.keys(picks).length === 0) {
+    if (!selectedId || (Object.keys(picks).length === 0 && !note.trim())) {
       toast.error(t("pickAtLeastOne"));
       return;
     }
     setBusy(true);
     try {
-      await api(`/api/design/projects/${selectedId}/remix`, { method: "POST", body: { picks } });
+      await api(`/api/design/projects/${selectedId}/remix`, {
+        method: "POST",
+        body: { picks, note: note.trim() || undefined },
+      });
       toast.success(t("remixStarted"));
+      setNote("");
       await loadDetail(selectedId);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -382,8 +399,15 @@ export function DesignConsole() {
               {options.map((o) => (
                 <div key={o.id} className="overflow-hidden rounded-lg border border-border">
                   {o.image_signed_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={o.image_signed_url} alt={o.title ?? o.anchor ?? "option"} className="w-full" />
+                    <button
+                      type="button"
+                      onClick={() => setZoomUrl(o.image_signed_url)}
+                      className="block w-full cursor-zoom-in"
+                      title={t("enlarge")}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={o.image_signed_url} alt={o.title ?? o.anchor ?? "option"} className="w-full" />
+                    </button>
                   ) : (
                     <div className="flex h-40 items-center justify-center bg-muted text-xs text-muted-foreground">
                       {t("noRender")}
@@ -404,41 +428,77 @@ export function DesignConsole() {
                     >
                       {o.is_locked ? t("locked") : t("chooseThis")}
                     </Button>
+
+                    {/* Pick-from-each: tick which dimensions to take from THIS design */}
+                    {options.length > 1 && (
+                      <div className="mt-2 border-t border-border pt-2">
+                        <p className="mb-1 text-[11px] font-medium text-muted-foreground">{t("takeFromThis")}</p>
+                        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                          {DIMENSIONS.map((d) => (
+                            <label key={d} className="flex items-center gap-1.5 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={picks[d] === o.id}
+                                onChange={() => togglePick(d, o.id)}
+                              />
+                              {t(`dimension.${d}`)}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Remix: pick each dimension from an option */}
+          {/* Build the combined design: "other" free-text + summary + button */}
           {options.length > 1 && (
             <div className="space-y-3 rounded-lg border border-border p-4">
               <h3 className="text-sm font-semibold">{t("remixTitle")}</h3>
               <p className="text-xs text-muted-foreground">{t("remixHint")}</p>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {DIMENSIONS.map((d) => (
-                  <label key={d} className="flex items-center justify-between gap-2 text-sm">
-                    <span>{t(`dimension.${d}`)}</span>
-                    <select
-                      className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-                      value={picks[d] ?? ""}
-                      onChange={(e) => setPicks((prev) => ({ ...prev, [d]: e.target.value || undefined }))}
-                    >
-                      <option value="">{t("designersChoice")}</option>
-                      {options.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.title ?? o.anchor ?? o.id.slice(0, 6)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
+              {Object.keys(picks).length > 0 && (
+                <ul className="space-y-0.5 text-xs text-muted-foreground">
+                  {DIMENSIONS.filter((d) => picks[d]).map((d) => {
+                    const src = options.find((o) => o.id === picks[d]);
+                    return (
+                      <li key={d}>
+                        {t(`dimension.${d}`)}: <span className="text-foreground">{src?.title ?? src?.anchor ?? "—"}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              <div>
+                <label className="mb-1 block text-xs font-medium">{t("otherNote")}</label>
+                <textarea
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  rows={2}
+                  placeholder={t("otherNotePlaceholder")}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
               </div>
               <Button onClick={remix} disabled={busy}>
                 {t("buildCombined")}
               </Button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Image lightbox */}
+      {zoomUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setZoomUrl(null)}
+          role="button"
+          tabIndex={0}
+          aria-label={t("close")}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={zoomUrl} alt="" className="max-h-full max-w-full rounded-md object-contain" />
         </div>
       )}
     </div>

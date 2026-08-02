@@ -138,12 +138,15 @@ export interface RemixInput {
   picks: Partial<Record<Dimension, string>>;
   /** the full spec_json of each source option, keyed by a stable label */
   sources: Record<string, Record<string, unknown>>;
+  /** free-text "other" — an extra instruction the user typed for the combined design */
+  note?: string | null;
 }
 
 export function buildRemixPrompt(input: RemixInput): string {
   const pickLines = DIMENSIONS.map((d) =>
     input.picks[d] ? `- ${d}: take from "${input.picks[d]}"` : `- ${d}: designer's choice (derive from the anchor)`,
   ).join("\n");
+  const note = input.note?.trim();
   return [
     `You are running a smrtDesign REMIX. Compose ONE combined design by taking`,
     `each of the 7 dimensions from the chosen source option below, then RENDER it`,
@@ -152,6 +155,7 @@ export function buildRemixPrompt(input: RemixInput): string {
     `Take each dimension from:`,
     pickLines,
     ``,
+    ...(note ? [`Additional instruction from the user ("other"):`, note, ``] : []),
     `Source specs (JSON):`,
     "```json",
     JSON.stringify(input.sources, null, 2),
