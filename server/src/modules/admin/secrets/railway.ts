@@ -261,12 +261,19 @@ export async function railwayUpsertVariable(
  * are never returned (only names, via the fingerprint read path).
  */
 export async function railwayInventory(): Promise<InventoryResult> {
-  const read = await railwayReadVariables({ serviceRef: null, environment: "production" });
-  if (!read.fingerprints) {
-    return { provider: "railway", configured: read.configured, hint: read.hint, error: read.error, vars: [] };
+  // Wrap like the Vercel/Supabase connectors: a network error or the fetch timeout
+  // (AbortError) must degrade to an error result, never throw — otherwise it would
+  // propagate through the inventory route and take the other providers down with it.
+  try {
+    const read = await railwayReadVariables({ serviceRef: null, environment: "production" });
+    if (!read.fingerprints) {
+      return { provider: "railway", configured: read.configured, hint: read.hint, error: read.error, vars: [] };
+    }
+    const vars: InventoryVar[] = Object.keys(read.fingerprints)
+      .sort()
+      .map((name) => ({ name, environment: "production" }));
+    return { provider: "railway", configured: true, vars };
+  } catch (e) {
+    return { provider: "railway", configured: true, error: e instanceof Error ? e.message : String(e), vars: [] };
   }
-  const vars: InventoryVar[] = Object.keys(read.fingerprints)
-    .sort()
-    .map((name) => ({ name, environment: "production" }));
-  return { provider: "railway", configured: true, vars };
 }

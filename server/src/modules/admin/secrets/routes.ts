@@ -103,12 +103,30 @@ const ctxKey = (t: TargetRow): string => `${t.target_ref ?? ""}::${t.environment
 // and returns NAMES + metadata only — never a value. Each provider degrades to
 // { configured:false, hint } when its token is unset, so the panel is always safe.
 router.get("/admin/secrets/inventory", async (_req: Request, res: Response) => {
-  const [railway, vercel, supabase] = await Promise.all([
+  // allSettled so one provider throwing can never hang the request or drop the
+  // others — a rejected connector degrades to an error result for that provider.
+  const [railway, vercel, supabase] = await Promise.allSettled([
     railwayInventory(),
     vercelInventory(),
     supabaseInventory(),
   ]);
-  res.json({ railway, vercel, supabase });
+  const pick = (
+    r: PromiseSettledResult<Awaited<ReturnType<typeof railwayInventory>>>,
+    provider: "railway" | "vercel" | "supabase",
+  ) =>
+    r.status === "fulfilled"
+      ? r.value
+      : {
+          provider,
+          configured: true,
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          vars: [],
+        };
+  res.json({
+    railway: pick(railway, "railway"),
+    vercel: pick(vercel, "vercel"),
+    supabase: pick(supabase, "supabase"),
+  });
 });
 
 // ── GET /admin/secrets — the live mirror ────────────────────────────────────────
