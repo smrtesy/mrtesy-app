@@ -25,6 +25,7 @@
 
 import { getAppSecret } from "../../../db";
 import { fingerprint } from "./fingerprint";
+import type { InventoryResult, InventoryVar } from "./provider-util";
 
 const TOKEN_APP_SLUG = "smrttask";
 const SECRET_LOCATION = "/admin/apps/smrttask/secrets";
@@ -252,4 +253,27 @@ export async function railwayUpsertVariable(
   });
   if (!ok || errors) return { ok: false, configured: true, error: gqlError(errors, status) };
   return { ok: true, configured: true };
+}
+
+/**
+ * Inventory: every variable NAME on the default backend service/environment
+ * (auto-resolved, production) — for the "what exists in each service" panel. Values
+ * are never returned (only names, via the fingerprint read path).
+ */
+export async function railwayInventory(): Promise<InventoryResult> {
+  // Wrap like the Vercel/Supabase connectors: a network error or the fetch timeout
+  // (AbortError) must degrade to an error result, never throw — otherwise it would
+  // propagate through the inventory route and take the other providers down with it.
+  try {
+    const read = await railwayReadVariables({ serviceRef: null, environment: "production" });
+    if (!read.fingerprints) {
+      return { provider: "railway", configured: read.configured, hint: read.hint, error: read.error, vars: [] };
+    }
+    const vars: InventoryVar[] = Object.keys(read.fingerprints)
+      .sort()
+      .map((name) => ({ name, environment: "production" }));
+    return { provider: "railway", configured: true, vars };
+  } catch (e) {
+    return { provider: "railway", configured: true, error: e instanceof Error ? e.message : String(e), vars: [] };
+  }
 }
