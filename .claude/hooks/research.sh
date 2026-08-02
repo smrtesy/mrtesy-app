@@ -16,7 +16,16 @@
 #   research.sh start "<slug>"            # scaffold the plan file (phase 1)
 #   research.sh check                     # validate the plan is complete
 #   research.sh answer <i> answered|empirical "<evidence>"   # mark question i (0-based)
+#   research.sh source "<ref>" ["<note>"] # log one source swept (feeds the breadth floor)
+#   research.sh breadth-pass "<note>"     # record the mandatory breadth / completeness pass
 #   research.sh consumer-pass "<note>"    # record the consumer check passed
+#
+# Breadth is enforced mechanically, not by prose (the gap this closes): phase 1
+# commits a min_sources floor; `breadth-pass` and `close` refuse until at least
+# that many DISTINCT sources are on record (from `sources[]` + URLs in every
+# question's evidence), and until the adversarial "what stayed empty?" pass is
+# logged. This is the autonomous-volume guarantee the two-phase protocol lacked:
+# a shallow sweep can no longer close cleanly.
 #
 # Evidence is mandatory (rule 5 in enforcement, not prose): every resolved
 # question carries its source, and a CONTRACT FACT — an endpoint id, field name,
@@ -45,6 +54,29 @@ GUARD_COUNT="$DIR/guard.count"
 mkdir -p "$DIR" 2>/dev/null || true
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# The breadth floor committed in phase 1. Defaults to 6 (four scan channels +
+# multiple candidates); the agent sizes it in the plan and may lower it for a
+# genuinely small space — the value is dated in the archive, so a shrink is
+# auditable, never silent (CLAUDE.md rule 9: everything visible, decision yours).
+min_sources() {
+  local m; m="$(jq -r '.min_sources // 6' "$PLAN" 2>/dev/null || echo 6)"
+  case "$m" in ''|*[!0-9]*) m=6;; esac
+  printf '%s' "$m"
+}
+
+# Distinct sources ON RECORD: explicit `sources[].ref` entries logged during the
+# sweep, UNION every http(s) URL cited in a question's evidence. Deduped. This is
+# what makes "breadth" a fact read from data, not an attestation the agent types.
+count_sources() {
+  local n
+  n="$( { jq -r '.sources[]?.ref // empty' "$PLAN" 2>/dev/null
+          jq -r '.questions[]?.evidence // empty' "$PLAN" 2>/dev/null \
+            | grep -oE 'https?://[^[:space:]"]+' 2>/dev/null
+        } | sed 's/[[:space:]]*$//' | sed '/^$/d' | sort -u | wc -l | tr -d '[:space:]' )"
+  case "$n" in ''|*[!0-9]*) n=0;; esac
+  printf '%s' "$n"
+}
 
 # Validation shared with research-gate.sh: a plan is COMPLETE when every core
 # field is filled (no TODO markers) and there is at least one question, each
@@ -83,6 +115,9 @@ case "$CMD" in
         not_researching:"TODO: מה במפורש לא חוקרים (גבולות)",
         output_path:"TODO: הנתיב המדויק ממפת התוצרים (docs/pipeline.md)",
         stop_condition:"TODO: תנאי עצירה (תקרת מושב/עומק)",
+        min_sources:6,
+        sources:[],
+        breadth_check:"pending",
         consumer_check:"pending",
         created_at:$c, updated_at:$c}' > "$PLAN" 2>/dev/null || { echo "research: כתיבת התוכנית נכשלה"; exit 0; }
     rm -f "$GUARD_COUNT" 2>/dev/null || true
@@ -93,6 +128,10 @@ case "$CMD" in
     echo "חיפושי רשת חסומים עד שהתוכנית מלאה (research-gate)."
     echo "עובדת-חוזה (endpoint / שם-שדה / enum / ברירת-מחדל) → סמן בשאלה contract:true;"
     echo "הסגירה תדרוש שה-evidence שלה יכלול קישור לסכמה מכונה-קריאה (כלל 5)."
+    echo "רוחב (חדש): min_sources=6 כברירת מחדל — כמה מקורות שונים תסרוק לפחות."
+    echo "התאם למרחב (מרחב קטן באמת → הורד ונמק; הערך מתוארך בארכיון). תוך כדי"
+    echo "הסריקה רשום כל מקור: research.sh source \"<קישור/מקור>\" \"<מה כיסה>\","
+    echo "וכשגמרת את הסריקה הרחבה: research.sh breadth-pass \"<איזה ענף/ערוץ נשאר לא-מכוסה ומה נעשה בו>\"."
     ;;
 
   check)
@@ -119,6 +158,47 @@ case "$CMD" in
     TMP="$(jq --argjson i "$IDX" --arg s "$ST" --arg e "$EV" --arg u "$(now_iso)" \
       '.questions[$i].status=$s | .questions[$i].evidence=$e | .updated_at=$u' "$PLAN" 2>/dev/null || true)"
     [ -n "$TMP" ] && printf '%s\n' "$TMP" > "$PLAN" && echo "research: שאלה $IDX סומנה $ST (עם אסמכתא)." || echo "research: עדכון נכשל (אינדקס קיים?)"
+    ;;
+
+  source)
+    REF="${1:-}"; SNOTE="${2:-}"
+    [ -f "$PLAN" ] || { echo "research: אין תוכנית פעילה — הרץ research.sh start תחילה."; exit 0; }
+    if [ -z "$REF" ]; then
+      echo "research: source דורש מקור — קישור, מזהה thread, דף מחיר, מזהה endpoint וכו'."
+      echo "  שימוש: research.sh source \"<קישור/מקור>\" \"<מה המקור כיסה>\""
+      exit 0
+    fi
+    TMP="$(jq --arg r "$REF" --arg n "$SNOTE" --arg u "$(now_iso)" \
+      '.sources = ((.sources // []) + [{ref:$r, note:$n, at:$u}]) | .updated_at=$u' "$PLAN" 2>/dev/null || true)"
+    if [ -n "$TMP" ]; then
+      printf '%s\n' "$TMP" > "$PLAN"
+      echo "research: מקור נרשם. סה\"כ מקורות שונים על הרשומה: $(count_sources) (רצפה: $(min_sources))."
+    else
+      echo "research: רישום המקור נכשל."
+    fi
+    ;;
+
+  breadth-pass)
+    NOTE="${1:-}"
+    [ -f "$PLAN" ] || { echo "research: אין תוכנית פעילה"; exit 0; }
+    # The note IS the adversarial completeness pass (pipeline.md שלב 2, "ביקורת
+    # שלמות עוינת") — not a rubber stamp. Demand a real sentence, not "בדקתי".
+    STRIPPED="$(printf '%s' "$NOTE" | tr -d '[:space:]')"
+    if [ -z "$NOTE" ] || [ "${#STRIPPED}" -lt 12 ]; then
+      echo "research: breadth-pass דורש את מעבר-השלמות העוין במפורש — איזה ענף/ערוץ נשאר לא-מכוסה, ומה נעשה בו (או למה הוא באמת ריק)."
+      echo "  שימוש: research.sh breadth-pass \"<המעבר העוין, משפט אמיתי>\""
+      exit 0
+    fi
+    MIN="$(min_sources)"; HAVE="$(count_sources)"
+    if [ "${HAVE:-0}" -lt "${MIN:-6}" ] 2>/dev/null; then
+      echo "research: רוחב לא מספיק — נסרקו $HAVE מקורות שונים מתוך $MIN שהתחייבת אליהם (min_sources)."
+      echo "  הרחב את הסריקה ורשום מקורות: research.sh source \"<קישור/מקור>\" \"<מה כיסה>\","
+      echo "  או — אם המרחב באמת קטן מזה — הורד את min_sources בתוכנית ביודעין (הערך מתוארך בארכיון)."
+      exit 0
+    fi
+    TMP="$(jq --arg n "$NOTE" --arg u "$(now_iso)" \
+      '.breadth_check="passed" | .breadth_check_note=$n | .updated_at=$u' "$PLAN" 2>/dev/null || true)"
+    [ -n "$TMP" ] && printf '%s\n' "$TMP" > "$PLAN" && echo "research: ביקורת-הרוחב סומנה passed ($HAVE/$MIN מקורות; מעבר-שלמות נרשם)."
     ;;
 
   consumer-pass)
@@ -183,6 +263,20 @@ case "$CMD" in
       echo "CLOSE-FAIL: בדיקת-הצרכן לא בוצעה — פתח את הסקיל/המשימה הצורכים, ודא שהם פועלים מהתוצר בלי לנחש, והרץ: .claude/hooks/research.sh consumer-pass \"<מה נבדק>\""
       FAIL=1
     fi
+    # Breadth (the autonomous-volume gap): the sweep must have covered its
+    # committed floor, and the adversarial completeness pass must be logged.
+    # Re-checks the count defensively at close (sources could have been edited
+    # after breadth-pass), so close never trusts a stale attestation.
+    BC="$(jq -r '.breadth_check // "pending"' "$PLAN" 2>/dev/null)"
+    MINS="$(min_sources)"; HAVES="$(count_sources)"
+    if [ "${HAVES:-0}" -lt "${MINS:-6}" ] 2>/dev/null; then
+      echo "CLOSE-FAIL: רוחב לא מספיק — $HAVES מקורות שונים על הרשומה מתוך $MINS שהתחייבת אליהם (min_sources). הרחב את הסריקה ורשום מקורות (research.sh source), או הורד את min_sources ביודעין אם המרחב באמת קטן."
+      FAIL=1
+    fi
+    if [ "$BC" != "passed" ]; then
+      echo "CLOSE-FAIL: ביקורת-הרוחב לא בוצעה — סרוק את מלוא המרחב (רוחב לפני עומק, ארבעת ערוצי הסריקה), ובצע את מעבר-השלמות העוין: .claude/hooks/research.sh breadth-pass \"<איזה ענף/ערוץ נשאר לא-מכוסה ומה נעשה בו>\""
+      FAIL=1
+    fi
     if [ "$FAIL" -ne 0 ]; then
       echo "research: הסגירה נדחתה — המחקר לא גמור עד שהכל למעלה מתוקן."
       exit 0
@@ -232,7 +326,7 @@ case "$CMD" in
     ;;
 
   *)
-    echo "research: unknown command '${CMD:-}'. Use: start | check | answer | consumer-pass | close | abandon | waive | show"
+    echo "research: unknown command '${CMD:-}'. Use: start | check | answer | source | breadth-pass | consumer-pass | close | abandon | waive | show"
     ;;
 esac
 exit 0
