@@ -4451,6 +4451,19 @@
     }
   },
   "claudeChat": {
+    "interactive": {
+      "picked": "בחרתי: {label}",
+      "other": "אחר / תשובה משלי",
+      "otherPlaceholder": "כתוב תשובה משלך…",
+      "send": "שלח",
+      "sent": "נשלח: {label}",
+      "stepPlaceholder": "תיאור השלב…",
+      "addStep": "הוסף שלב",
+      "deleteStep": "מחק שלב",
+      "planConfirm": "אשר והפעל",
+      "planSent": "התוכנית נשלחה",
+      "planConfirmPreamble": "אישרתי את התוכנית הבאה — בצע אותה שלב אחר שלב:"
+    },
     "placeholder": "תאר משימה או שאל שאלה",
     "send": "שלח",
     "queueSend": "שלח — ייכנס לתור וירוץ כשהתור הנוכחי יסתיים",

@@ -4452,6 +4452,19 @@
     }
   },
   "claudeChat": {
+    "interactive": {
+      "picked": "I chose: {label}",
+      "other": "Other / my own answer",
+      "otherPlaceholder": "Type your own answer…",
+      "send": "Send",
+      "sent": "Sent: {label}",
+      "stepPlaceholder": "Step description…",
+      "addStep": "Add step",
+      "deleteStep": "Delete step",
+      "planConfirm": "Approve & run",
+      "planSent": "Plan sent",
+      "planConfirmPreamble": "I approved the following plan — carry it out step by step:"
+    },
     "placeholder": "Describe a task or ask a question",
     "send": "Send",
     "queueSend": "Send — queues and runs when the current turn finishes",
