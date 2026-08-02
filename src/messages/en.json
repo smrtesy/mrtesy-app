@@ -4552,6 +4552,16 @@
     "rename": "Rename",
     "delete": "Delete",
     "confirmDelete": "Delete this chat and all of its turns?",
+    "dot": {
+      "live": "Running now",
+      "done": "Last turn finished",
+      "failed": "Last turn failed",
+      "idle": "Hasn't run yet"
+    },
+    "handled": {
+      "mark": "Mark as handled",
+      "unmark": "Unmark handled"
+    },
     "settings": "Conversation settings",
     "account": {
       "aria": "Claude account: {name} — click to switch",
