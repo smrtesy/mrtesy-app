@@ -228,10 +228,15 @@ export async function decideApproval(
     `מחדש ואל תשאל שוב; האדם כבר אישר את ה-SQL עצמו.\n\n` +
     `1. ודא שאתה על הענף \`${gitBranch ?? "main"}\` ושהקובץ \`${migrationPath}\` קיים.\n` +
     `2. החל **רק את ה-SQL של הקובץ הזה** על הפרודקשן דרך ה-Management API ` +
-    `(SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_ID כבר מוזרקים):\n` +
-    `   \`curl -sS -X POST "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/database/query" ` +
-    `-H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "content-type: application/json" ` +
-    `-d '{"query": "<ה-SQL של הקובץ כמחרוזת JSON>"}'\`\n` +
+    `(SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_ID כבר מוזרקים). השתמש ב-heredoc כדי ` +
+    `להימנע מבריחת-תווים ידנית של ה-SQL:\n` +
+    "   ```\n" +
+    "   curl -sS -X POST \"https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/database/query\" \\\n" +
+    "     -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"content-type: application/json\" \\\n" +
+    "     --data-binary @- <<'JSON'\n" +
+    "   {\"query\": <ה-SQL המלא של הקובץ, כמחרוזת JSON חוקית>}\n" +
+    "   JSON\n" +
+    "   ```\n" +
     `   **אל תריץ \`supabase db push\`** — הוא היה מריץ מחדש מיגרציות ישנות. קובץ בודד בלבד.\n` +
     `3. אם ההחלה נכשלה — דווח את השגיאה המלאה ואל תנסה לתקן את ה-DB ידנית.\n` +
     `approval_id: ${approvalId}`;

@@ -64,7 +64,13 @@ const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
  * one file's SQL a run passes it, sidestepping that entirely, and needs only the access
  * token (no db password). The ref matches `project_id` in `supabase/config.toml`; it is
  * not a secret, so it is a default here (overridable by a SUPABASE_PROJECT_ID
- * app_secret) rather than required. */
+ * app_secret) rather than required.
+ *
+ * Trade-off of the query endpoint: unlike the MCP's apply_migration, it does NOT stamp
+ * `supabase_migrations.schema_migrations`, so a console-applied migration won't show in
+ * `list_migrations`. Intentional here — the repo's history is disjoint from that table
+ * already (above), so the migration file in git is the record; writing a version row
+ * would invent yet another scheme. Nothing in the codebase reads schema_migrations. */
 const SUPABASE_TOKEN_KEY = "SUPABASE_ACCESS_TOKEN";
 const SUPABASE_PROJECT_ID_KEY = "SUPABASE_PROJECT_ID";
 const SUPABASE_PROJECT_REF_DEFAULT = "exjnlghuzuvqedlltztz";
