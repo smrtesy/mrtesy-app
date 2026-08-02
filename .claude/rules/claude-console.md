@@ -9,10 +9,26 @@ paths:
 The `/claude` screen runs the real Claude Code engine on the Railway backend.
 Frontend: `src/components/claude/` (ClaudeChat, ChatComposer, ProjectPanel,
 PlaybookList, StandingInstructions, RepoPicker, SplitReview, DecomposeReview,
-ClaudeRunsClient, ApprovalsPanel). Server: `server/src/modules/claude/`.
+ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
+(the on-screen interactive blocks — see below). Server:
+`server/src/modules/claude/`.
 
 ## Design decisions (don't re-litigate them by accident)
 
+- **On-screen interactive blocks** (`src/components/claude/interactive/`):
+  Claude can put a live widget in an answer instead of asking in free text.
+  Two reserved fenced blocks, parsed out of the assistant text before the
+  Markdown pass (`blocks.ts` → `AnswerContent.tsx`), rendered as widgets
+  (`AskBlock.tsx` = explained multiple-choice; `PlanBlock.tsx` = editable
+  step list). The convention is taught to the model in the env preamble
+  (`playbooks.ts` composePrompt, "בלוקים אינטראקטיביים"). **No new DB table
+  and no engine change:** answering a block is an ordinary follow-up turn (the
+  session already holds the question), and a block is interactive **only on
+  the thread's last turn** — once the user answers, a newer turn exists, the
+  old turn stops being last, and its blocks re-render read-only. That gate is
+  what prevents a stale answer being offered twice. A malformed block falls
+  back to rendering as a raw code block (lossless). A click on a priced option
+  is the cost approval per the in-app-approval rule (CLAUDE.md).
 - **CLI, not Agent SDK** (`runner.ts` header): the runner spawns
   `claude -p … --output-format stream-json` and stores every stream event in
   `claude_run_events`. The SDK wraps the same engine — swapping later is

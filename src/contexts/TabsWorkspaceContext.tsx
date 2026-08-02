@@ -29,6 +29,15 @@ export type WorkspaceTab = {
   href: string;
   /** Already-translated label shown on the pane header. */
   label: string;
+  /** The pane's CURRENT in-pane location (full locale-prefixed href) after the
+   *  user has drilled INSIDE the tab — e.g. opening the characters list at
+   *  `/he/voice/characters` and clicking a character sets `loc` to
+   *  `/he/voice/characters/<id>`. Undefined means "sitting at `href`". This is
+   *  what makes a drilled-into sub-page survive a reload: the tab identity
+   *  (`id`/`href`) stays the page the user opened, so dedupe and the sidebar
+   *  keep working, while `loc` carries the deep position the pane restores to.
+   *  See PaneHost. */
+  loc?: string;
 };
 
 /** Per-tab pane width as a fraction (0..1) of the workspace. Empty means
@@ -78,6 +87,10 @@ type TabsWorkspaceValue = {
   setWidths: (next: PaneWidths) => void;
   /** Drop all explicit widths and fall back to the automatic layout. */
   resetWidths: () => void;
+  /** Record the pane's current in-pane location so a drilled-into sub-page
+   *  survives a reload (PaneHost calls this on every internal navigation).
+   *  Passing the tab's own base `href` clears `loc`. */
+  setTabLoc: (id: string, href: string) => void;
 };
 
 const STORAGE_KEY = "smrtesy.tabs.v1";
@@ -131,7 +144,15 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         if (Array.isArray(parsed.tabs)) {
           const valid = parsed.tabs
             .filter((t) => t && typeof t.id === "string" && typeof t.href === "string")
-            .map((t) => ({ ...t, id: swap(t.id), href: swap(t.href) }));
+            .map((t) => ({
+              ...t,
+              id: swap(t.id),
+              href: swap(t.href),
+              // `loc` (the drilled-into sub-page) gets the same locale/`?new`
+              // normalization as href, so a reload restores the deep position
+              // in this document's locale.
+              loc: typeof t.loc === "string" ? swap(t.loc) : undefined,
+            }));
           setTabs(valid);
           const openIds = new Set(valid.map((t) => t.id));
           const storedActive = parsed.activeId ? swap(parsed.activeId) : null;
@@ -218,9 +239,12 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
           // Beside: expand the opened pane if it was parked, leave the rest.
           setCollapsedIds((cids) => cids.filter((c) => c !== existing.id));
         }
+        // A new href for an existing tab (openTab carrying a deep link, e.g.
+        // whatsapp?chat_id=X) replaces the pane's position, so any stale drill
+        // `loc` is dropped — the new href is now the location the pane shows.
         return href === existing.href
           ? prev
-          : prev.map((t) => (t.id === existing.id ? { ...t, href } : t));
+          : prev.map((t) => (t.id === existing.id ? { ...t, href, loc: undefined } : t));
       }
       setActiveId(href);
       if (focus) {
@@ -336,7 +360,14 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       // Relocalize the live workspace state; the persist effect writes it to
       // localStorage. Component panes follow the shell locale (below); iframe
       // panes reload because their tab.href changed.
-      setTabs((prev) => prev.map((tab) => ({ ...tab, id: swap(tab.id), href: swap(tab.href) })));
+      setTabs((prev) =>
+        prev.map((tab) => ({
+          ...tab,
+          id: swap(tab.id),
+          href: swap(tab.href),
+          loc: tab.loc ? swap(tab.loc) : undefined,
+        })),
+      );
       setActiveId((cur) => (cur ? swap(cur) : cur));
       setSoloId((cur) => (cur ? swap(cur) : cur));
       setCollapsedIds((prev) => prev.map(swap));
@@ -350,6 +381,18 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   }, [router]);
 
   const setActive = useCallback((id: string) => setActiveId(id), []);
+  // Record where a pane has drilled to (or clear it when it returns to the
+  // tab's base href). Kept minimal: only rewrites when the value actually
+  // changes, so an in-place query update doesn't churn the whole tab list.
+  const setTabLoc = useCallback((id: string, href: string) => {
+    setTabs((prev) => {
+      const tab = prev.find((t) => t.id === id);
+      if (!tab) return prev;
+      const nextLoc = href === tab.href ? undefined : href;
+      if (nextLoc === tab.loc) return prev;
+      return prev.map((t) => (t.id === id ? { ...t, loc: nextLoc } : t));
+    });
+  }, []);
   const setWidths = useCallback((next: PaneWidths) => setWidthsState(next), []);
   const resetWidths = useCallback(() => setWidthsState({}), []);
   const toggleSolo = useCallback((id: string) => {
@@ -398,6 +441,7 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
         setWidths,
         resetWidths,
         toggleSolo,
+        setTabLoc,
       }}
     >
       {children}

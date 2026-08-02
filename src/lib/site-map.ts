@@ -6,11 +6,18 @@
  * Rendered by `src/components/platform/map/SiteMap.tsx` at `/map`.
  *
  * Rules for this file:
- *  - **Linkable screens only.** A dynamic route (`/projects/[id]`,
- *    `/voice/scripts/[id]`, `/admin/users/[id]`, `/bots/[botId]/…`) has no
- *    id to link to and is reached from its list screen, so it is not listed.
- *    Redirect-only routes are skipped too — `/suggestions` redirects to
- *    `/inbox`, so listing both would put the same screen on the map twice.
+ *  - **Static catalog = linkable SCREENS only.** A dynamic route
+ *    (`/projects/[id]`, `/voice/scripts/[id]`, `/admin/users/[id]`,
+ *    `/bots/[botId]/…`) has no fixed id, so the generic screen is not a static
+ *    entry here. Redirect-only routes are skipped too — `/suggestions`
+ *    redirects to `/inbox`, so listing both would put the same screen on the
+ *    map twice.
+ *  - **Live instances ARE surfaced, just not from this file.** The renderer
+ *    (`SiteMap.tsx` → `StudioSubpages`) fetches the real smrtStudio projects
+ *    and characters at runtime and lists them as deep links under the studio
+ *    card. So "a specific project/character" IS on the map; it just comes from
+ *    the API, not from this static catalog. Add a new dynamic instance list
+ *    there, not here.
  *  - `path` is locale-less (the renderer prepends `/{locale}`), matching the
  *    hrefs in the sidebar and in `route-label.ts`.
  *  - `labelKey` / `descKey` are FULL i18n key paths (root namespace), so
