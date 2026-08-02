@@ -1125,7 +1125,10 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
     if (serial) {
       const esc = serial.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // Drop the serial if the model echoed it despite the rule, so it isn't doubled.
-      title = title.replace(new RegExp(`^\\s*${esc}\\s*[·:\\-–—]*\\s*`, "u"), "").trim();
+      // Looped, not a single replace, so even a title that echoed it more than once
+      // ("T1699 T1699 …") is fully stripped before the one clean prefix is added.
+      const lead = new RegExp(`^\\s*${esc}\\s*[·:\\-–—]*\\s*`, "u");
+      while (lead.test(title)) title = title.replace(lead, "").trim();
       title = (title ? `${serial} · ${title}` : serial).slice(0, MAX_TITLE);
     }
     if (!title) return;
