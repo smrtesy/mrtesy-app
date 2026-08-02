@@ -25,9 +25,11 @@ import messagesRouter from "./routes/messages";
 import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
+import { webActionRouter, startIdleSweeper as startWebActionSweeper } from "./modules/web-action";
 import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter, driveCatalogRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
+import smrtdesignRouter from "./modules/smrtdesign";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
@@ -197,6 +199,7 @@ app.use("/api", searchCronRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
+app.use("/api", webActionRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
 app.use("/api", smrtcrmRouter);
@@ -206,6 +209,7 @@ app.use("/api", smrtplanRouter);
 app.use("/api", smrtstudioRouter);
 app.use("/api", smrtvaultRouter);
 app.use("/api", smrtinfoRouter);
+app.use("/api", smrtdesignRouter);
 app.use("/api", claudeRouter);
 // The in-app Claude's machine-to-machine gate (destructive-migration approval),
 // gated by the shared internal secret rather than a JWT — mounted alongside the
@@ -285,6 +289,9 @@ function ensureChromium(): void {
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
   ensureChromium();
+  // web-action: sweep idle browser sessions so a walked-away signup can't hold
+  // a Chromium on the host forever. No-op until a session is created.
+  startWebActionSweeper();
   // Seed the global-search navigation destinations so settings/pages search
   // works immediately after a deploy. Best-effort, non-blocking; skips when
   // already seeded (see ensureDestinationsIndexed).

@@ -86,10 +86,17 @@ the text you address to the user is Hebrew.
 
 **מונחים עבריים טהורים — לא ז'רגון לועזי מתועתק** (החלטת המשתמש, 8/2026;
 מסונכרן בשלושת הריפו). בכל טקסט המופנה למשתמש — צ'אט, מסמכי-תוכנית, תיאורי
-משימות, סקילים — מונח-שיטה נכתב בעברית ולא כתעתיק לועזי: **חקירה קצרה**
-(לא "ספייק") · **בדיקת השוואה** (לא "בייק-אוף") · **אצווה** (לא "batch") ·
-וכן הלאה. אין מקבילה עברית מקובלת — מנסחים במילים פשוטות, לא ממציאים תעתיק.
-חריג: שמות-מוצר, מזהי-קוד/נתיבים, ומונחים טכניים שהם ממשק ממשי (API, token,
+משימות, סקילים — מונח-שיטה נכתב בעברית, לא כתעתיק לועזי. **מילון-התרגום
+הקבוע — תמיד בתוקף; זה המקום להוסיף כל מונח חדש שנקבע:**
+
+| לועזי | עברי (תמיד) |
+|---|---|
+| spike / ספייק | חקירה קצרה |
+| bake-off / בייק-אוף | בדיקת השוואה |
+| batch | הרצה |
+
+אין מקבילה עברית מקובלת — מנסחים במילים פשוטות, לא ממציאים תעתיק. חריג:
+שמות-מוצר, מזהי-קוד/נתיבים, ומונחים טכניים שהם ממשק ממשי (API, token,
 endpoint) נשארים כמות שהם.
 
 ## Timezone — always New York (America/New_York)
@@ -575,6 +582,36 @@ Spawn an `Explore` or `general-purpose` agent with a focused prompt:
 
 Treat any HIGH or MED finding as a blocker. Fix it in the same branch
 before push. LOW is judgment — fix if cheap, ignore if not.
+
+### Step 3b — Browser page-check (propose when a screen changed) — opt-in
+
+Steps 1–3 are all **static** — build, greps, reading the diff. None of them
+opens the screen, so a runtime regression (a JS error on mount, an API call
+that breaks, an element that never renders, a control that doesn't respond)
+sails through. Step 3b closes that gap by driving the changed screen in a real
+browser as a real user.
+
+**This step is a PROPOSAL, not a gate.** When the diff touches a screen
+(`src/app/**` or `src/components/**`), offer to run the page-check on that
+screen and let the user say yes/no — do not block the push on it, and do not
+run it without a "yes". (When the user asks for it directly, just run it.)
+
+How it works — the **`page-check`** skill (`.claude/skills/page-check/`):
+`node scripts/page-check.mjs <path> [--scenario <file>]` boots the CHANGED
+branch locally (`next dev` — the live app runs old `main`, so only a local run
+reflects the change), logs in as the real user via a session the backend mints
+(`GET /api/claude-session/app-access`, reusing `mintSessionCookies` in
+`server/src/modules/claude/app-access.ts`), opens the screen in the
+pre-installed Chromium, runs a **full interaction scenario**
+(`.claude/page-checks/<screen>.mjs` — navigate, click, fill, assert), and
+reports every console error / page error / failed request it saw. Exit 0 =
+pass. Zero paid tokens (browser on the subscription). Full design:
+`docs/browser-page-test-plan.md`.
+
+The mint endpoint is live only after this change is on `main` and deployed to
+Railway; until then `--no-auth` runs a render-only check. Scenarios are
+read-only by default — one that writes to the real DB must clean up after
+itself.
 
 ### Step 4 — Update app status if you touched an app's files
 

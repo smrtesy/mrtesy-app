@@ -15,7 +15,7 @@
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
-import type { WorkspaceTab } from "@/contexts/TabsWorkspaceContext";
+import { useTabsWorkspace, type WorkspaceTab } from "@/contexts/TabsWorkspaceContext";
 import {
   PaneNavProvider,
   parsePaneHref,
@@ -65,16 +65,30 @@ function PaneError({ reset }: { reset: () => void }) {
 
 export function PaneHost({ tab }: { tab: WorkspaceTab }) {
   const locale = useLocale();
-  const [location, setLocation] = useState<PaneLocation>(() => parsePaneHref(tab.href));
+  const { setTabLoc } = useTabsWorkspace();
+  // The pane opens at its drilled-into position (`loc`) if one survived a
+  // reload, otherwise at the tab's base href.
+  const [location, setLocation] = useState<PaneLocation>(() =>
+    parsePaneHref(tab.loc ?? tab.href),
+  );
 
-  // openTab on an already-open page updates the tab's href to carry a deep
-  // link (e.g. whatsapp?chat_id=X) — sync it into the pane location. Internal
-  // pane navigation goes through `push` and doesn't touch tab.href.
+  // Keep the live location in sync with the persisted tab: openTab carrying a
+  // deep link updates tab.href (and clears loc); a restored/normalized loc
+  // updates tab.loc. Either way the pane follows.
   useEffect(() => {
-    setLocation(parsePaneHref(tab.href));
-  }, [tab.href]);
+    setLocation(parsePaneHref(tab.loc ?? tab.href));
+  }, [tab.href, tab.loc]);
 
-  const push = useCallback((href: string) => setLocation(parsePaneHref(href)), []);
+  // Internal pane navigation (PaneLink / useScreenRouter) swaps the pane's
+  // location AND records it on the tab so it survives a reload. tab.id is the
+  // stable identity — never the drilled href — so dedupe/labels are untouched.
+  const push = useCallback(
+    (href: string) => {
+      setLocation(parsePaneHref(href));
+      setTabLoc(tab.id, href);
+    },
+    [setTabLoc, tab.id],
+  );
   const nav = useMemo<PaneNavValue>(
     () => ({ location, push, replace: push }),
     [location, push],

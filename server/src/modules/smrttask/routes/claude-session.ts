@@ -24,6 +24,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { emitEvent } from "../../../lib/platform";
+import { mintSessionCookies } from "../../claude/app-access";
+import { isSuperAdmin } from "../../../middleware";
 
 const router = Router();
 
@@ -189,6 +191,98 @@ router.post("/claude-session/proposal", async (req: Request, res: Response) => {
   });
 
   res.status(201).json({ ok: true, task_id: created.id, action: "created" });
+});
+
+/**
+ * The NEXT_PUBLIC_* config a locally-run copy of the frontend needs to boot and
+ * talk to the SAME Supabase project + backend as production. Every value here is
+ * PUBLIC — it already ships to every browser in the deployed bundle — so
+ * returning it over a secret-gated machine route exposes no secret. Each key
+ * falls back through the server's own env aliases. `missing` names the
+ * load-bearing keys we could not fill (auth/API break without them).
+ */
+function publicFrontendEnv(): { env: Record<string, string>; missing: string[] } {
+  const pick = (...names: string[]): string => {
+    for (const n of names) {
+      const v = (process.env[n] ?? "").trim();
+      if (v) return v;
+    }
+    return "";
+  };
+  const env: Record<string, string> = {
+    NEXT_PUBLIC_SUPABASE_URL: pick("NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_URL"),
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: pick("NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY"),
+    NEXT_PUBLIC_BACKEND_URL: pick("NEXT_PUBLIC_BACKEND_URL", "SMRTESY_PUBLIC_URL", "SMRTESY_BACKEND_URL"),
+    NEXT_PUBLIC_APP_URL: pick("NEXT_PUBLIC_APP_URL", "SMRTESY_APP_URL"),
+    NEXT_PUBLIC_APP_DOMAIN: pick("NEXT_PUBLIC_APP_DOMAIN", "APP_DOMAIN")
+      .replace(/^https?:\/\//, "")
+      .replace(/\/+$/, ""),
+    NEXT_PUBLIC_ADMIN_EMAIL: pick("NEXT_PUBLIC_ADMIN_EMAIL", "ADMIN_EMAIL"),
+  };
+  // Only these three are load-bearing for a working logged-in session; the rest
+  // are best-effort niceties whose absence doesn't break auth or API calls.
+  const required = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "NEXT_PUBLIC_BACKEND_URL"];
+  return { env, missing: required.filter((k) => !env[k]) };
+}
+
+/**
+ * GET /claude-session/app-access?user_id=…  (or ?user_email=…)
+ *
+ * Machine-to-machine (x-cron-secret, no JWT). Returns a freshly-minted,
+ * short-lived REAL session for the user — as browser cookies — plus the public
+ * NEXT_PUBLIC_* config a locally-run frontend needs. This is what lets a Claude
+ * Code dev session boot the CHANGED branch locally (`next dev`) and drive it as
+ * the logged-in user (the page-check harness) — the live app runs old `main`, so
+ * only a local run reflects the change under review. The token is short-lived
+ * (Supabase default ~1h) and self-expires — a single page-check run is well
+ * within that, so this path deliberately does not revoke (unlike the runner's
+ * mintAppAccess/revokeAppAccess pair, which mints one session per chat turn).
+ *
+ * SECURITY: unlike the other x-cron-secret routes here (which only write task/
+ * inbox rows), this returns live session cookies — full impersonation. So the
+ * shared secret alone is NOT sufficient: the TARGET user must also be a
+ * super-admin (the developers who run page-check). That caps a leaked secret at
+ * impersonating a super-admin, never an arbitrary end user.
+ */
+router.get("/claude-session/app-access", async (req: Request, res: Response) => {
+  const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
+  if (!expected || req.headers["x-cron-secret"] !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const userId = await resolveUserId(
+    typeof req.query.user_id === "string" ? req.query.user_id : undefined,
+    typeof req.query.user_email === "string" ? req.query.user_email : undefined,
+  );
+  if (!userId) return res.status(404).json({ error: "user not found" });
+
+  // Second gate: the impersonation target must be a super-admin. Fail closed on
+  // any lookup error (isSuperAdmin returns false → 403).
+  const { data: u } = await db.auth.admin.getUserById(userId);
+  const email = u?.user?.email ?? null;
+  if (!(await isSuperAdmin({ id: userId, email }))) {
+    return res.status(403).json({ error: "app-access is restricted to super-admins" });
+  }
+
+  const session = await mintSessionCookies(userId);
+  if (!session) {
+    // Service-role key / target user missing on the backend, or Supabase mint
+    // failed. Report as a failure — a page-check must never look authed when itʼs not.
+    return res
+      .status(500)
+      .json({ error: "could not mint session (check SUPABASE_SERVICE_ROLE_KEY and the target user on the backend)" });
+  }
+
+  // The bare token + primary org id let a driver call the requireAuth+requireOrg
+  // routes directly (Authorization: Bearer + X-Org-Id) — e.g. the web-action
+  // agent driving a browser session as this user. Same short-lived session the
+  // cookies already carry; org is the user's primary membership.
+  const orgId = await primaryOrgId(userId);
+  // Audit every mint — this route hands out a live super-admin session, so a
+  // leaked secret must leave a trail. Log the target + org, NEVER the token.
+  console.log(`[claude-session] app-access minted for user=${userId} org=${orgId ?? "none"}`);
+  const { env, missing } = publicFrontendEnv();
+  res.json({ ok: true, token: session.token, org_id: orgId, cookies: session.cookies, public_env: env, missing });
 });
 
 /** Resolve the primary org for a user (earliest membership). */

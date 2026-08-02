@@ -25,7 +25,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { db } from "../../db";
+import { db, getAppSecret } from "../../db";
 import { fileLastCommitDate, blobUrl, getGitHubToken, isValidRepo } from "./github";
 import { BROWSER_HELPER_PATH } from "./app-access";
 
@@ -576,6 +576,15 @@ export async function composePrompt(
       (process.env.SMRTESY_PUBLIC_URL || process.env.SMRTESY_BACKEND_URL),
   );
 
+  // Whether a run can actually APPLY a migration. The apply goes through the Supabase
+  // Management API query endpoint (see runner.ts), which needs only the access token —
+  // the runner injects it (from app_secrets, smrttask slug) ONLY when it exists. Mirror
+  // that exact condition here so the preamble never tells a run to "apply it yourself"
+  // when there is no token to apply with — the same honesty rule as gateReachable and
+  // hasGitHub. Read from the same store/key the runner reads, so the two can't drift.
+  const supaToken = await getAppSecret("smrttask", "SUPABASE_ACCESS_TOKEN", "SUPABASE_ACCESS_TOKEN");
+  const migrationsReachable = Boolean(supaToken?.trim());
+
   const envLines = [
     "# איפה אתה רץ",
     "",
@@ -587,7 +596,7 @@ export async function composePrompt(
     envLines.push(
       "- **הריפו כבר אצלך:** אם מחובר ריפו לצ'אט הזה (וכברירת מחדל מחובר הריפו הראשי), " +
         "**המערכת כבר שכפלה אותו לתיקיית העבודה שלך** — אתה יכול לקרוא ולערוך את הקבצים ישירות, בלי פעולה מקדימה.",
-      "- **יש לך מעטפת (shell) מלאה בתוך העותק הזה** — git, npm, בדיקות, בנייה, דחיפה, ו-`supabase` CLI. " +
+      "- **יש לך מעטפת (shell) מלאה בתוך העותק הזה** — git, npm, בדיקות, בנייה, דחיפה, ו-`curl`. " +
         "אתה עובד כמו מפתח בצוות: קורא, עורך, מריץ ומוסר. אל תאמר למשתמש שאין לך גישה להרצת פקודות — יש.",
       "- כדי לעבוד על ריפו **אחר**, בקש מהמשתמש לבחור אותו בהגדרות הצ'אט (כפתור ההגדרות ← בחירת ריפו), " +
         "והמערכת תשכפל אותו עבורך בתור הבא. אל תבקש מהמשתמש כתובת או טוקן — ההרשאה כבר בסביבה.",
@@ -614,8 +623,25 @@ export async function composePrompt(
         "`curl -s https://app.smrtesy.com/api/deploy-info` ובדוק ש-`commit_short` תואם ל-SHA שדחפת. אם הוא " +
         "עדיין תקוע על commit ישן אחרי ~10 דק', אמור זאת למשתמש (ייתכן שהתיקון עלה כ-Preview בלבד וצריך " +
         "'Promote to Production' ב-Vercel).",
-      "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
-        "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` והרץ `supabase db push`.",
+      migrationsReachable
+        ? "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
+          "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` (שם `YYYYMMDDHHMMSS_<slug>.sql`), " +
+          "ואז החל **רק את ה-SQL של הקובץ הזה** על הפרודקשן דרך ה-Management API של Supabase:\n" +
+          "  ```\n" +
+          "  curl -sS -X POST \"https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/database/query\" \\\n" +
+          "    -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"content-type: application/json\" \\\n" +
+          "    --data-binary @- <<'JSON'\n" +
+          "  {\"query\": <ה-SQL המלא של הקובץ, כמחרוזת JSON חוקית>}\n" +
+          "  JSON\n" +
+          "  ```\n" +
+          "  `SUPABASE_ACCESS_TOKEN` ו-`SUPABASE_PROJECT_ID` כבר מוזרקים לך — אל תבקש אותם מהמשתמש. " +
+          "⚠️ **לעולם אל תריץ `supabase db push`** ואל תריץ מיגרציות ישנות: היסטוריית המיגרציות המרוחקת של הריפו " +
+          "מנוהלת בנפרד (דרך ה-Management API), ו-`db push` היה מריץ מחדש מאות מיגרציות ישנות. החל תמיד **קובץ בודד** — " +
+          "רק זה שכתבת עכשיו. אם ה-API מחזיר שגיאה, דווח אותה למשתמש; אל תתקן את ה-DB ידנית."
+        : "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
+          "כתוב את קובץ המיגרציה תחת `supabase/migrations/`, אבל **אינך יכול להחיל אותה** — הסוד " +
+          "`SUPABASE_ACCESS_TOKEN` אינו מוגדר תחת /admin/apps/smrttask/secrets. " +
+          "אמור למשתמש להוסיף אותו שם, או להחיל את הקובץ ידנית.",
       gateReachable
         ? "- **מיגרציה הרסנית** (DROP, DELETE, UPDATE שמשנה נתונים, TRUNCATE, ALTER COLUMN TYPE/SET NOT NULL): " +
           "**אל תחיל בעצמך.** קודם הרץ `SELECT` שקול כדי לראות מה ייפגע (ספירה + דגימה), ואז פתח כרטיס-אישור אנושי:\n" +
@@ -687,6 +713,48 @@ export async function composePrompt(
     "- הנתיב שבהודעת הסימון עובד ישירות בדפדפן: `shot <הנתיב> --attach` מראה לך (ולמשתמש) " +
       "את המסך המדובר בפועל.",
   );
+
+  // Interactive on-screen blocks — the console renders two reserved fenced
+  // blocks as live widgets (src/components/claude/interactive/): an editable
+  // plan and an explained multiple-choice. Emitting one lets the user CLICK
+  // instead of typing; the click comes back as the next message. This is
+  // orientation the model needs on turn one, so it lives in the preamble.
+  envLines.push(
+    "",
+    "## בלוקים אינטראקטיביים על המסך (לחיצה במקום הקלדה)",
+    "",
+    "יש לך שני בלוקים מיוחדים שהקונסולה מרנדרת ככלי אינטראקטיבי במקום כטקסט. השתמש בהם כשהם " +
+      "חוסכים למשתמש הקלדה — הוא לוחץ, והבחירה/התוכנית חוזרת אליך כהודעה הבאה. **הגוף חייב להיות " +
+      "JSON תקין**, ועטוף בדיוק בגדר בשם המצוין (אחרת זה יוצג כטקסט רגיל).",
+    "",
+    "**בחירה מוסברת** — כשיש החלטה עם מספר קטן של אפשרויות ידועות. כל אפשרות נושאת שורת הסבר " +
+      "אחת (`detail`): מה המשמעות, וכולל **מחיר** אם הפעולה בתשלום. לחיצת המשתמש היא גם התשובה " +
+      "**וגם אישור-העלות** (כלל האישור-ב-UI: מחיר גלוי בנקודת הפעולה → הקליק הוא האישור). השאר " +
+      "`allowOther` דלוק (ברירת המחדל) אלא אם באמת אין תשובה פתוחה אפשרית:",
+    "```smrt-ask",
+    '{ "question": "איזה מודל תמונות?",',
+    '  "options": [',
+    '    { "label": "flux-pro", "detail": "הכי איכותי, נאמן לדמות · ~$0.05 לתמונה · איטי יותר" },',
+    '    { "label": "flux-schnell", "detail": "מהיר וזול · ~$0.003 לתמונה · פחות מדויק" }',
+    '  ], "allowOther": true }',
+    "```",
+    "",
+    "**תוכנית עריכה** — כשאתה מציע תוכנית רב-שלבית שהמשתמש אמור לאשר/לעצב. הוא מוחק/עורך/מוסיף " +
+      "שורות ואז מאשר; **התוכנית שערך** (לא המקורית) חוזרת אליך לביצוע שלב-אחר-שלב. אל תתחיל לבצע " +
+      "לפני שהאישור חזר:",
+    "```smrt-plan",
+    '{ "title": "תוכנית הפקת השוט",',
+    '  "steps": ["יצירת דף דמות", "יצירת רקע", "הרכבת השוט", "ליפסינק"] }',
+    "```",
+    "",
+    "**מתי לא להשתמש:** תשובה פתוחה שאי-אפשר למנות ככפתורים (שם, תסריט, קישור, סכום מדויק) — " +
+      "שאל בטקסט רגיל, או הישען על `allowOther` בבלוק בחירה. אל תשים בלוק אינטראקטיבי סתם; רק כשהוא " +
+      "באמת חוסך הקלדה בנקודת החלטה.",
+    "**שני דגשים:** (1) **בלוק אינטראקטיבי אחד לתשובה** — ברגע שהמשתמש עונה על בלוק נפתח תור חדש " +
+      "וכל הבלוקים באותה תשובה הופכים לקריאה-בלבד, אז אל תשים שני בלוקים שמצפים למענה באותה הודעה. " +
+      "(2) **בלי שלושה גרשיים בתוך ה-JSON** (בערכי `detail`/`question`/`steps`) — הם סוגרים את הגדר מוקדם.",
+  );
+
   parts.push(envLines.join("\n"));
 
   const { data: standing, error: sErr } = await db
