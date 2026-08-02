@@ -4451,6 +4451,12 @@
       "notConnected": "אין חיבור לגיטהאב. שמור טוקן גיטהאב עם הרשאת repo בשם {key} במסך {where}."
     }
   },
+  "claudeDrawer": {
+    "title": "קלוד",
+    "openFull": "פתח במסך מלא",
+    "close": "סגור",
+    "loading": "טוען את קלוד…"
+  },
   "claudeChat": {
     "interactive": {
       "picked": "בחרתי: {label}",

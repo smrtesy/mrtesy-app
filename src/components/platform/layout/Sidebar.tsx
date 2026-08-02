@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   Bot,
@@ -34,7 +34,7 @@ import {
   Map as MapIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
@@ -47,6 +47,7 @@ import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
 import { useTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
+import { useClaudeDrawer } from "@/contexts/ClaudeDrawerContext";
 import { isEmbeddedPane } from "@/lib/navigate";
 
 // Per-app items shown below each app section header. Guides moved out —
@@ -145,7 +146,6 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtDesign = enabledApps.includes("smrtdesign");
   const t = useTranslations("nav");
   const pathname = usePathname();
-  const router = useRouter();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
   const [manualTaskOpen, setManualTaskOpen] = useState(false);
   // Compact global-search entry point: collapsed to a magnifying-glass icon
@@ -158,6 +158,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const [openTasksCount, setOpenTasksCount] = useState(0);
   const supabase = createClient();
   const { openTab } = useTabsWorkspace();
+  const { toggleDrawer } = useClaudeDrawer();
   // True when this sidebar is rendered inside a tabs-workspace pane (?embed=1).
   // Set after mount (not a lazy initializer) so the first client render matches
   // the server HTML — then we drop the whole sidebar, so none of its chrome
@@ -541,20 +542,18 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 opens a one-line global search whose results open as a tab. */}
             <div className="flex gap-2">
               {isAdmin ? (
-                <Link
-                  href={`${basePath}/claude`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    // ?new=<timestamp> → ClaudeChat resets to a blank chat. Fresh
-                    // value per click, because openTab dedupes the tab by path and
-                    // only swaps its href — a repeated value would be ignored.
-                    openTab(`${basePath}/claude?new=${Date.now()}`, t("claude"));
-                  }}
-                  className={cn(buttonVariants({ variant: "default" }), "flex-1 gap-2")}
+                // Opens the floating Claude side-drawer (ClaudeDrawerContext) —
+                // the compact console over the current screen. Full screen is one
+                // click away via the drawer's expand button. Reusing this button
+                // is why the drawer has no launcher of its own.
+                <Button
+                  type="button"
+                  onClick={() => toggleDrawer()}
+                  className="flex-1 gap-2"
                 >
                   <Bot className="h-4 w-4" />
                   {t("claude")}
-                </Link>
+                </Button>
               ) : (
                 <Button onClick={() => setTaskInputOpen(true)} className="flex-1 gap-2">
                   <Sparkles className="h-4 w-4" />
@@ -611,8 +610,8 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
         <div className="flex items-center justify-around px-1 py-1">
           {activeMobileItems.map((item) => {
             if (item.key === "claude") {
-              // אדמין → פתיחת צ'אט קלוד חדש (router.push, לא openTab: מרחב
-              // הטאבים קיים רק בדסקטופ). אחרת → תיבת "עדכון" המהירה.
+              // אדמין → פתיחת מגירת קלוד הצפה (ClaudeDrawerContext); מסך מלא
+              // זמין מכפתור ההרחבה שבתוכה. אחרת → תיבת "עדכון" המהירה.
               const ClaudeIcon = isAdmin ? Bot : Sparkles;
               const claudeLabel = isAdmin ? t("claude") : t("update");
               return (
@@ -620,7 +619,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                   key="claude"
                   type="button"
                   onClick={() => {
-                    if (isAdmin) router.push(`${basePath}/claude?new=${Date.now()}`);
+                    if (isAdmin) toggleDrawer();
                     else setTaskInputOpen(true);
                   }}
                   className="flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground"
