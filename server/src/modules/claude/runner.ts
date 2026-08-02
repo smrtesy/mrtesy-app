@@ -31,6 +31,14 @@ import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
 import { buildThreadTranscript } from "./transcript";
 import { mintAppAccess, revokeAppAccess, BROWSER_HELPER_PATH } from "./app-access";
+import {
+  mintDriveToken,
+  mintCanvaToken,
+  buildConnectorMcpConfig,
+  GDRIVE_TOKEN_ENV,
+  CANVA_TOKEN_ENV,
+  type ConnectorName,
+} from "./mcp/connectors";
 
 /**
  * Where the subscription token is stored.
@@ -720,6 +728,36 @@ async function executeRunBody(runId: string): Promise<void> {
     }
   }
 
+  // Connectors (Google Drive + Canva) as MCP servers this turn can call. Each is
+  // fed a fresh access token via env; a server is registered only when its token
+  // was minted, so an unconfigured connector (or a user who never connected
+  // Drive) is silently absent rather than a failing turn. Drive reuses the
+  // launching user's own platform Google grant; Canva is one shared Connect
+  // account. Best-effort and quick — the mints run in parallel.
+  const connectorServers: ConnectorName[] = [];
+  let driveToken: string | null = null;
+  let canvaToken: string | null = null;
+  if (run.created_by) {
+    // Both mints are best-effort — the extra `.catch` guarantees the invariant
+    // "an unconfigured connector is silently absent, never a failed turn" even
+    // if a mint ever rejects (e.g. a Supabase read throwing rather than
+    // resolving `{error}`), so it can't take the whole turn down with it.
+    [driveToken, canvaToken] = await Promise.all([
+      mintDriveToken(run.created_by).catch(() => null),
+      mintCanvaToken().catch(() => null),
+    ]);
+    if (driveToken) {
+      env[GDRIVE_TOKEN_ENV] = driveToken;
+      connectorServers.push("gdrive");
+    }
+    if (canvaToken) {
+      env[CANVA_TOKEN_ENV] = canvaToken;
+      connectorServers.push("canva");
+    }
+  }
+  const connector = connectorServers.length ? buildConnectorMcpConfig(connectorServers) : null;
+  const connectorConfigJson = connector ? JSON.stringify(connector.config) : null;
+
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
   const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
@@ -781,6 +819,16 @@ async function executeRunBody(runId: string): Promise<void> {
     // "full browsing + full research" the operator asked for.
     a.push("--allowedTools", "WebSearch");
     a.push("--allowedTools", "WebFetch");
+    // Connector MCP servers (Google Drive / Canva) minted for this turn. Passed
+    // inline (paths only — the tokens ride in env, never in argv). --mcp-config
+    // MERGES with any project/user servers (no --strict-mcp-config), so we only
+    // ADD ours. Under bypassPermissions the allows are redundant; for plain chat
+    // threads they are what unblock the connector tools, exactly like the
+    // WebSearch/WebFetch allows above.
+    if (connectorConfigJson && connector) {
+      a.push("--mcp-config", connectorConfigJson);
+      for (const rule of connector.allow) a.push("--allowedTools", rule);
+    }
     // Force Hebrew (and New York time) on every turn — see HEBREW_DIRECTIVE.
     a.push("--append-system-prompt", HEBREW_DIRECTIVE);
     a.push(...extra);
@@ -801,10 +849,16 @@ async function executeRunBody(runId: string): Promise<void> {
   // These rows are the permanent transcript, so all of them are replaced with ***
   // before anything is stored. redact is a no-op for a null/empty value, so an
   // unconfigured secret costs nothing here.
+  // Scrub every secret the child holds. The connector access tokens (Drive/
+  // Canva) are added here too, so a run that echoes an env dump or an API error
+  // carrying its bearer token never lands one in the permanent event log.
   const redactSecrets = (s: string): string =>
     redact(
-      redact(redact(redact(s, ghToken), internalSecret || null), token),
-      appAccess?.token ?? null,
+      redact(
+        redact(redact(redact(redact(s, ghToken), internalSecret || null), token), appAccess?.token ?? null),
+        driveToken,
+      ),
+      canvaToken,
     );
 
   const flush = async () => {

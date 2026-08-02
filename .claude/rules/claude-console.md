@@ -71,6 +71,24 @@ ClaudeRunsClient, ApprovalsPanel). Server: `server/src/modules/claude/`.
   service/environment auto-resolved or pinned via `RAILWAY_SERVICE_ID`/
   `RAILWAY_ENVIRONMENT_ID`). Each provider degrades to `configured:false` with a hint
   when its token is unset; the badge is invisible until then.
+- **Connectors — Google Drive + Canva as MCP servers** (`mcp/`, design
+  `docs/claude-console/connectors.md`): the official remote MCP servers for both
+  require interactive browser OAuth (no bearer-token/headless path), so the
+  runner instead launches OUR OWN small stdio MCP servers and feeds each a token
+  per turn. `mcp/stdio-server.ts` is a dependency-free MCP-over-stdio engine
+  (hand-rolled because the SDK is ESM-exports-only and won't type-check under the
+  server's node10 resolution); `mcp/gdrive-server.ts` and `mcp/canva-server.ts`
+  are the two tool servers (full read+write); `mcp/connectors.ts` mints the
+  tokens and builds `--mcp-config`. Drive **reuses the launching user's own
+  platform Google grant** (`getOAuthClient(userId,"drive")`, full `auth/drive`
+  scope) — zero setup, per-user. Canva is one **shared Connect account**: a
+  rotating refresh token in `app_secrets` (slug `smrtstudio`:
+  `CANVA_CLIENT_ID`/`CANVA_CLIENT_SECRET`/`CANVA_REFRESH_TOKEN`), exchanged for a
+  process-cached (~4h) access token. Tokens ride in the child env
+  (`SMRTESY_GDRIVE_TOKEN`/`SMRTESY_CANVA_TOKEN`, scrubbed from stored events); a
+  server is registered only when its token minted, so an unconfigured connector
+  is silently absent, never a failed turn. One-time Canva auth:
+  `server/scripts/canva-connect.mjs`.
 - **App access, two layers** (`app-access.ts`): every turn mints a short-lived
   Supabase session for the launching user — injected (1) as `SMRTESY_API_TOKEN`
   for direct API calls, and (2) as `@supabase/ssr` cookies for a REAL headless

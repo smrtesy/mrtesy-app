@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-07-31.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-02.
 
 ## The three engines
 
@@ -152,7 +152,8 @@ authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations
 ## Deep-dive docs (read on demand)
 
 `docs/router-panes-plan.md` (panes), `docs/claude-console/` (console plan,
-feasibility, standing instructions), `docs/platform-integration.md` +
+feasibility, standing instructions, **connectors.md** = Google Drive + Canva MCP
+connectors), `docs/platform-integration.md` +
 `docs/new-app-guide.md` (adding an app), `docs/tasks-unification-spec.md`,
 `docs/smrtplan-overview.md` + roadmap, `docs/info-center-plan.md`,
 `docs/pre-push-protocol.md`, `docs/claude-knowledge-center-plan.md` (this
