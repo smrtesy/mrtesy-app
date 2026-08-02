@@ -30,8 +30,9 @@ export function AnswerContent({
   answer: string;
   /** True only for the thread's last turn — see file header. */
   interactive: boolean;
-  /** Send a follow-up turn (an answer to a block). */
-  onAction: (message: string) => void;
+  /** Send a follow-up turn (an answer to a block). May return a promise so a
+   *  block can revert its "sent" latch if the turn fails to queue. */
+  onAction: (message: string) => Promise<void> | void;
   className?: string;
 }) {
   const segments = splitInteractive(answer);

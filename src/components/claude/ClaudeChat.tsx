@@ -1062,7 +1062,9 @@ export function ClaudeChat() {
                 t,
                 (id) => setActiveId(id),
                 (id) => void cancelWaiting(id),
-                (message) => void send(message, []),
+                // Returns the send promise so an interactive block can revert its
+                // "sent" latch if the turn fails to queue (send rethrows on error).
+                (message) => send(message, []),
               )}
             </div>
           )}
@@ -1286,10 +1288,20 @@ function renderTurns(
   t: ReturnType<typeof useTranslations>,
   openThread: (id: string) => void,
   onCancelWaiting: (id: string) => void,
-  onAction: (message: string) => void,
+  onAction: (message: string) => Promise<void> | void,
 ): ReactNode[] {
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
+  // The last turn that actually renders (moved turns collapse into a link row,
+  // not a TurnView) — the only turn whose interactive blocks stay live. Using
+  // turns.length-1 would strand a live block behind trailing moved turns.
+  let lastLiveIndex = -1;
+  for (let k = turns.length - 1; k >= 0; k -= 1) {
+    if (!turns[k].moved_to_thread_id) {
+      lastLiveIndex = k;
+      break;
+    }
+  }
   let i = 0;
   // Tracks whether an earlier COMPLETED turn of this thread has been seen. The
   // context-restored banner is gated on it: the runner rebuilds context only from
@@ -1307,7 +1319,7 @@ function renderTurns(
           turn={turn}
           hadPriorDoneTurn={seenPriorDone}
           onCancelWaiting={onCancelWaiting}
-          isLast={i === turns.length - 1}
+          isLast={i === lastLiveIndex}
           onAction={onAction}
         />,
       );
@@ -1435,8 +1447,9 @@ function TurnView({
   /** This is the last turn of the thread — the only turn whose interactive
    *  blocks are still live (older turns render them read-only). */
   isLast: boolean;
-  /** Send a follow-up turn when the user answers an interactive block. */
-  onAction: (message: string) => void;
+  /** Send a follow-up turn when the user answers an interactive block. Returns
+   *  the send promise so a block can revert its latch if the turn fails. */
+  onAction: (message: string) => Promise<void> | void;
 }) {
   const t = useTranslations("claudeChat");
   const [toolsOpen, setToolsOpen] = useState(false);

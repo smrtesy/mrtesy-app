@@ -39,8 +39,9 @@ export function PlanBlock({
 }: {
   block: PlanBlockData;
   interactive: boolean;
-  /** Send the confirmed plan as a follow-up turn. */
-  onSubmit: (message: string) => void;
+  /** Send the confirmed plan as a follow-up turn. May return a promise; a
+   *  rejection reverts the "sent" latch so the user can confirm again. */
+  onSubmit: (message: string) => Promise<void> | void;
 }) {
   const t = useTranslations("claudeChat");
   const [rows, setRows] = useState<Row[]>(() => block.steps.map(makeRow));
@@ -69,9 +70,13 @@ export function PlanBlock({
     if (disabled) return;
     const steps = rows.map((r) => r.text.trim()).filter((s) => s.length > 0);
     if (steps.length === 0) return;
+    // Latch immediately (blocks a double-confirm), but revert on a rejected send
+    // so a failed queue doesn't leave the plan stuck showing "sent".
     setConfirmed(true);
     const numbered = steps.map((s, i) => `${i + 1}. ${s}`).join("\n");
-    onSubmit(`${t("interactive.planConfirmPreamble")}\n\n${numbered}`);
+    Promise.resolve(onSubmit(`${t("interactive.planConfirmPreamble")}\n\n${numbered}`)).catch(() =>
+      setConfirmed(false),
+    );
   }
 
   // Read-only history: the plan as a plain numbered list, no controls.

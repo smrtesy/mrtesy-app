@@ -31,8 +31,9 @@ export function AskBlock({
 }: {
   block: AskBlockData;
   interactive: boolean;
-  /** Send the chosen answer as a follow-up turn. */
-  onSubmit: (message: string) => void;
+  /** Send the chosen answer as a follow-up turn. May return a promise; a
+   *  rejection reverts the "sent" latch so the user can pick again. */
+  onSubmit: (message: string) => Promise<void> | void;
 }) {
   const t = useTranslations("claudeChat");
   // Local latch: once the user picks, disable the whole block immediately so a
@@ -45,8 +46,11 @@ export function AskBlock({
 
   function choose(label: string, message: string) {
     if (disabled) return;
+    // Latch immediately (blocks a double-submit while the turn is in flight),
+    // but revert if the send rejects so a failed queue doesn't leave the block
+    // stuck showing "sent" — send() already surfaces the error via a toast.
     setPicked(label);
-    onSubmit(message);
+    Promise.resolve(onSubmit(message)).catch(() => setPicked(null));
   }
 
   function sendOther() {
