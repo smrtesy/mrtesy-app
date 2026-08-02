@@ -45,7 +45,12 @@ const sessions = new Map<string, WebSession>();
 
 const MAX_SESSIONS_PER_USER = 2; // one user shouldn't hold a fleet
 const MAX_SESSIONS_GLOBAL = 8; // host guard across all users
-const IDLE_TIMEOUT_MS = 10 * 60_000; // auto-close a session left idle 10 min
+// Human-in-the-loop flows (relay an email/SMS code, solve a CAPTCHA, provide a
+// form value) routinely idle for several minutes between agent actions while the
+// user does their part — 10 min was too short and kept closing live signups
+// mid-flow. 30 min comfortably covers a relay without letting a truly abandoned
+// browser linger too long.
+const IDLE_TIMEOUT_MS = 30 * 60_000;
 const NAV_TIMEOUT_MS = 60_000;
 
 /** Raised when a caller is at their session limit — the route maps it to 429. */
