@@ -1,6 +1,23 @@
 # Managed secrets — one place to add a key, live mirror + auto-propagate
 
-**Status:** design / proposal. Not built yet.
+**Status:** phase 1 (Railway loop) **built** — `2026-08-02`, branch
+`claude/wallet-secrets-management-x2f8g7`. Tables + Vault storage + Railway
+read/write connector + the live-mirror screen (`/admin/secrets`, super-admin) +
+the approval-gated sync are in place. Phases 2 (Vercel), 3 (Supabase) and 4
+(Claude-orchestrated authoring) remain. **What it looks like when built:**
+- Migration `supabase/migrations/20260802150000_managed_secrets.sql` — the three
+  tables (`managed_secrets`, `managed_secret_targets`, `secret_sync_log`), RLS on
+  with no policies (service-role only).
+- Server `server/src/modules/admin/secrets/` — `vault.ts` (vault_create/update/read),
+  `fingerprint.ts` (sha256/12), `railway.ts` (the verified `variables` /
+  `variableUpsert` connector), `routes.ts` (the super-admin endpoints), mounted in
+  `modules/admin/index.ts`.
+- Frontend `/admin/secrets` — `ManagedSecretsClient.tsx` + the AdminNav entry.
+- **Provider tokens are NOT managed here** (the "keep master tokens out" rule): the
+  Railway connector reads `RAILWAY_TOKEN` / `RAILWAY_PROJECT_ID` (+ optional
+  `RAILWAY_SERVICE_ID`/`RAILWAY_ENVIRONMENT_ID`/`RAILWAY_TOKEN_KIND`) from
+  `app_secrets` under the `smrttask` slug — set them at `/admin/apps/smrttask/secrets`,
+  same place the deploy-status badge reads them.
 **Origin:** the 2026-08-05 WhatsApp/DualHook migration needed one `dh_live_` key
 set in **two** places (Railway + Vercel), by hand, each with its own redeploy.
 That is the recurring pain this proposes to remove.

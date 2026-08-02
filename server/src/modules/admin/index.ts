@@ -10,6 +10,7 @@ import appsRouter from "./apps/routes";
 import logsRouter from "./logs/routes";
 import domainTrackerRouter from "./domain-tracker";
 import priceTrackerRouter from "./price-tracker";
+import secretsRouter from "./secrets/routes";
 
 const router = Router();
 router.use(usersRouter);
@@ -18,5 +19,6 @@ router.use(appsRouter);
 router.use(logsRouter);
 router.use(domainTrackerRouter);
 router.use(priceTrackerRouter);
+router.use(secretsRouter);
 
 export default router;
