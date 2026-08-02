@@ -28,6 +28,7 @@ import adminRouter from "./modules/admin";
 import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
+import smrtdesignRouter from "./modules/smrtdesign";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
@@ -200,6 +201,7 @@ app.use("/api", smrtplanRouter);
 app.use("/api", smrtstudioRouter);
 app.use("/api", smrtvaultRouter);
 app.use("/api", smrtinfoRouter);
+app.use("/api", smrtdesignRouter);
 app.use("/api", claudeRouter);
 // The in-app Claude's machine-to-machine gate (destructive-migration approval),
 // gated by the shared internal secret rather than a JWT — mounted alongside the

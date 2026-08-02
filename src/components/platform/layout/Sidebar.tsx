@@ -30,6 +30,7 @@ import {
   Send,
   KeyRound,
   Info,
+  Palette,
   Map as MapIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -103,6 +104,10 @@ const smrtStudioItems = [
   { key: "studioResearch",   href: "/studio/research", icon: FlaskConical },
 ] as const;
 
+const smrtDesignItems = [
+  { key: "design", href: "/design", icon: Palette },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 // Every nav href across all apps + the management group. Used by isActive() to
@@ -138,6 +143,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtVault = enabledApps.includes("smrtvault");
   const hasSmrtInfo = enabledApps.includes("smrtinfo");
   const hasSmrtStudio = enabledApps.includes("smrtstudio");
+  const hasSmrtDesign = enabledApps.includes("smrtdesign");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
@@ -181,10 +187,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
           { key: "more",     href: "",          icon: MoreHorizontal },
         ]
       : [
+          // הגדרות ירדו מכאן ל"עוד"; במקומן כפתור קלוד — הדרך המהירה לפתוח
+          // צ'אט חדש בלי ה-FAB שהיה מכסה תוכן. משתמש שאינו אדמין פותח במקום
+          // זה את תיבת "עדכון" המהירה (מסך /claude דורש super-admin → 401).
           { key: "inbox",    href: "/inbox",    icon: Bell           },
           { key: "tasks",    href: "/tasks",    icon: CheckSquare    },
           { key: "whatsapp", href: "/whatsapp", icon: MessageCircle  },
-          { key: "settings", href: "/settings", icon: Settings       },
+          { key: "claude",   href: "",          icon: Bot            },
           { key: "more",     href: "",          icon: MoreHorizontal },
         ];
 
@@ -316,9 +325,15 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const moreSections: Array<{ app?: AppDef; titleKey?: string; items: MobileNavItem[] }> = [];
   // Same order as the desktop nav: smrtTask → smrtPlan → smrtStudio
   // → the rest.
-  if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...visibleSmrtTaskItems] });
+  if (hasSmrtTask) {
+    // "משימה חדשה" (פעולה שפותחת חלון, לא ניווט) עבר לכאן מה-FAB שהוסר.
+    const smrtTaskMoreItems: MobileNavItem[] = [...visibleSmrtTaskItems];
+    if (showTaskExtras) smrtTaskMoreItems.push({ key: "newTask", href: "", icon: ListPlus });
+    moreSections.push({ app: APPS.smrttask, items: smrtTaskMoreItems });
+  }
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtStudio) moreSections.push({ app: APPS.smrtstudio, items: [...smrtStudioItems] });
+  if (hasSmrtDesign) moreSections.push({ app: APPS.smrtdesign, items: [...smrtDesignItems] });
   if (hasSmrtCrm) moreSections.push({ app: APPS.smrtcrm, items: [...smrtCrmItems] });
   if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
@@ -412,6 +427,15 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
           {hasSmrtStudio && (
             <AppNavGroup app={APPS.smrtstudio}>
               {smrtStudioItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </AppNavGroup>
+          )}
+
+          {hasSmrtDesign && (
+            <AppNavGroup app={APPS.smrtdesign}>
+              {smrtDesignItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}
@@ -585,6 +609,26 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
       <nav data-mobile-nav className="fixed bottom-0 inset-x-0 z-50 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         <div className="flex items-center justify-around px-1 py-1">
           {activeMobileItems.map((item) => {
+            if (item.key === "claude") {
+              // אדמין → פתיחת מגירת קלוד הצפה (ClaudeDrawerContext); מסך מלא
+              // זמין מכפתור ההרחבה שבתוכה. אחרת → תיבת "עדכון" המהירה.
+              const ClaudeIcon = isAdmin ? Bot : Sparkles;
+              const claudeLabel = isAdmin ? t("claude") : t("update");
+              return (
+                <button
+                  key="claude"
+                  type="button"
+                  onClick={() => {
+                    if (isAdmin) toggleDrawer();
+                    else setTaskInputOpen(true);
+                  }}
+                  className="flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground"
+                >
+                  <ClaudeIcon className="h-5 w-5 shrink-0" />
+                  <span className="truncate max-w-full">{claudeLabel}</span>
+                </button>
+              );
+            }
             if (item.key === "more") {
               return (
                 <button
@@ -628,48 +672,8 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
         </div>
       </nav>
 
-      {/* FABs — bumped up so they don't sit on top of "More" in the tab bar.
-          Manual "new task" sits above the AI "update" FAB. */}
-      {showTaskExtras && (
-        <>
-          <Button
-            size="icon"
-            variant="secondary"
-            data-task-fab
-            aria-label={t("newTask")}
-            className="fixed bottom-40 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-            onClick={() => setManualTaskOpen(true)}
-          >
-            <ListPlus className="h-6 w-6" />
-          </Button>
-          {/* Same swap as the sidebar button, so phone and desktop agree on what
-              the primary action is. */}
-          {isAdmin ? (
-            // Opens the floating Claude side-drawer, same as the desktop button,
-            // so phone and desktop agree on what the Claude action does.
-            <Button
-              size="icon"
-              type="button"
-              onClick={() => toggleDrawer()}
-              data-task-fab
-              aria-label={t("claude")}
-              className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-            >
-              <Bot className="h-6 w-6" />
-            </Button>
-          ) : (
-            <Button
-              size="icon"
-              data-task-fab
-              aria-label={t("update")}
-              className="fixed bottom-24 end-4 z-50 h-14 w-14 rounded-full shadow-lg md:hidden"
-              onClick={() => setTaskInputOpen(true)}
-            >
-              <Sparkles className="h-6 w-6" />
-            </Button>
-          )}
-        </>
-      )}
+      {/* ה-FABs (קלוד + משימה חדשה) הוסרו מהצד — הם כיסו תוכן. קלוד עבר
+          לסרגל הניווט התחתון; "משימה חדשה" עבר לגיליון "עוד" תחת smrtTask. */}
 
       {/* More sheet — organized by app, with AppSectionHeader on top of each group. */}
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
@@ -690,7 +694,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                     {t(section.titleKey as Parameters<typeof t>[0])}
                   </p>
                 )}
-                <MoreGrid items={section.items} basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} onPick={() => setMoreOpen(false)} />
+                <MoreGrid items={section.items} basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} onPick={() => setMoreOpen(false)} onNewTask={() => setManualTaskOpen(true)} />
               </section>
             ))}
           </div>
@@ -790,6 +794,7 @@ function MoreGrid({
   isActive,
   badgeFor,
   onPick,
+  onNewTask,
 }: {
   items: MobileNavItem[];
   basePath: string;
@@ -797,10 +802,27 @@ function MoreGrid({
   isActive: (href: string) => boolean;
   badgeFor: (key: string) => { count: number; tone: "red" | "blue" } | null;
   onPick: () => void;
+  onNewTask?: () => void;
 }) {
   return (
     <nav className="grid grid-cols-4 gap-1">
       {items.map((item) => {
+        if (item.key === "newTask") {
+          // פעולה שפותחת חלון יצירת משימה — כפתור, לא קישור.
+          return (
+            <button
+              key="newTask"
+              type="button"
+              onClick={() => { onNewTask?.(); onPick(); }}
+              className="flex flex-col items-center gap-1.5 rounded-xl p-3 text-center text-[11px] text-muted-foreground hover:bg-accent"
+            >
+              <div className="relative">
+                <item.icon className="h-6 w-6" />
+              </div>
+              <span className="leading-tight">{t("newTask")}</span>
+            </button>
+          );
+        }
         const badge = badgeFor(item.key);
         return (
           <Link

@@ -71,13 +71,19 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
 - **Autonomy gate** (`actions.ts`, `actions-routes.ts`, `sqlClassify.ts`;
   design `docs/claude-console/autonomy-safety-gate.md`): repo runs get FULL shell
   (`--permission-mode bypassPermissions` in `runner.ts`) — reversible work (merge to
-  main after a green build, additive `supabase db push`) is autonomous. The one
-  irreversible action, a DESTRUCTIVE migration, routes through a human: the run calls
-  the m2m `POST /claude-action/request-approval` (internal-secret gated; env injected
-  by the runner), `sqlClassify.ts` classifies the SQL in code (allowlist, fail-closed),
-  and a destructive verdict lands a `claude_action_approvals` row the operator approves
-  from `ApprovalsPanel` (which enqueues the apply run). All run secrets — GitHub token,
-  internal secret, OAuth token, app-access token — are scrubbed from stored events by
+  main after a green build, an additive migration applied by the run itself) is
+  autonomous. Migrations apply the ONE new file's SQL via the Supabase Management API
+  query endpoint (`POST /v1/projects/{ref}/database/query`, `SUPABASE_ACCESS_TOKEN`
+  injected by `runner.ts`) — deliberately NOT `supabase db push`, because the repo's
+  local `supabase/migrations/` filenames are disjoint from the remote
+  `schema_migrations` history (~9 of 260 overlap), so a push would fail or mass-re-run
+  historical migrations. The one irreversible action, a DESTRUCTIVE migration, routes
+  through a human: the run calls the m2m `POST /claude-action/request-approval`
+  (internal-secret gated; env injected by the runner), `sqlClassify.ts` classifies the
+  SQL in code (allowlist, fail-closed), and a destructive verdict lands a
+  `claude_action_approvals` row the operator approves from `ApprovalsPanel` (which
+  enqueues the apply run). All run secrets — GitHub token, internal secret, OAuth token,
+  app-access token, Supabase access token — are scrubbed from stored events by
   `redactSecrets` in `runner.ts`.
 - **Deploy status** (`deploy-status.ts`, route `GET /claude/deploy-status`,
   `DeployStatusBadge`): Vercel (frontend) + Railway (backend) production build state
