@@ -752,27 +752,40 @@ async function executeRunBody(runId: string): Promise<void> {
   // opens knowing its topic. Prepended (not appended) so it reads as background the
   // message then acts on. Written back to the row too, so the stored prompt matches
   // what actually ran.
-  if (seedContext && !resumeSession) {
+  //
+  // The startsWith guard makes this idempotent across a re-execution: the recoverer
+  // re-runs an orphaned turn from the SAME row, whose prompt already carries the
+  // seed from the first attempt — without the guard each resume would prepend it
+  // again, stacking `# רקע...` blocks and inflating the argv.
+  if (seedContext && !resumeSession && !promptText.startsWith("# רקע מהשיחה הקודמת")) {
     promptText = `# רקע מהשיחה הקודמת\n\n${seedContext}\n\n---\n\n${promptText}`;
     const { error: sErr } = await db.from("claude_runs").update({ prompt: promptText }).eq("id", runId);
     if (sErr) console.error("[claude/runner] seed prompt update failed:", sErr.message);
   }
   if (cwd) {
+    // Always re-materialize: a resumed run gets a fresh workspace, so the files must
+    // be re-downloaded to disk even though the prompt already names them.
     const { paths, failures } = await materializeAttachments(runId, cwd);
-    if (paths.length > 0) {
-      promptText += `\n\n# קבצים מצורפים\n${paths.map((p) => `- ${p}`).join("\n")}`;
-    }
-    // Surfaced in the prompt rather than swallowed: the turn should know a file it
-    // was told about is missing, instead of concluding the user sent nothing.
-    if (failures.length > 0) {
-      promptText += `\n\n(קבצים שלא נטענו: ${failures.join("; ")})`;
-    }
-    if (paths.length > 0 || failures.length > 0) {
-      const { error: pErr } = await db
-        .from("claude_runs")
-        .update({ prompt: promptText })
-        .eq("id", runId);
-      if (pErr) console.error("[claude/runner] prompt update failed:", pErr.message);
+    // But add the prompt SECTION only once — on a re-execution it is already there
+    // (written back on the first attempt), and re-appending would duplicate it.
+    const alreadyListed =
+      promptText.includes("# קבצים מצורפים") || promptText.includes("(קבצים שלא נטענו:");
+    if (!alreadyListed) {
+      if (paths.length > 0) {
+        promptText += `\n\n# קבצים מצורפים\n${paths.map((p) => `- ${p}`).join("\n")}`;
+      }
+      // Surfaced in the prompt rather than swallowed: the turn should know a file it
+      // was told about is missing, instead of concluding the user sent nothing.
+      if (failures.length > 0) {
+        promptText += `\n\n(קבצים שלא נטענו: ${failures.join("; ")})`;
+      }
+      if (paths.length > 0 || failures.length > 0) {
+        const { error: pErr } = await db
+          .from("claude_runs")
+          .update({ prompt: promptText })
+          .eq("id", runId);
+        if (pErr) console.error("[claude/runner] prompt update failed:", pErr.message);
+      }
     }
   }
 
