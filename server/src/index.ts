@@ -36,7 +36,7 @@ import smrtstudioRouter, { jobsRouter as smrtstudioJobsRouter } from "./modules/
 import correctionsJobsRouter from "./modules/smrttask/corrections/jobs";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
-import claudeRouter, { claudeActionM2MRouter } from "./modules/claude";
+import claudeRouter, { claudeActionM2MRouter, startClaudeRunRecovery } from "./modules/claude";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -293,6 +293,11 @@ app.listen(PORT, HOST, () => {
   void initBaileysConnections().catch((e) =>
     console.error("[startup] initBaileysConnections failed:", e),
   );
+  // Continue Claude console turns whose in-process child died with a restarted
+  // container: find runs stuck 'running'/'queued' with no live process and
+  // re-execute them (context rebuilt from our DB). Runs on the subscription — no
+  // paid tokens. Assumes a single replica, same as the Baileys note above.
+  startClaudeRunRecovery();
 });
 
 // Surface unhandled errors so Railway logs show them instead of a silent crash
