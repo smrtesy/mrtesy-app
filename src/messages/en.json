@@ -1768,7 +1768,13 @@
     "logEmpty": "No log entries yet",
     "delete": "Unmanage",
     "deleteConfirm": "Remove this secret from management? The provider env vars won't change; only the config here is deleted.",
-    "deleted": "Unmanaged"
+    "deleted": "Unmanaged",
+    "inventoryToggle": "What's in each service",
+    "inventorySearch": "Search a variable name…",
+    "varsCount": "{n} variables",
+    "inMultipleServices": "exists in {n} services",
+    "inventoryEmpty": "No variables found",
+    "inventoryNote": "Names only — values are never read here. The ×N badge marks a variable that exists in more than one service."
   },
   "adminUsers": {
     "serviceRoleMissing": "Supabase service-role key is not configured. Email addresses will not show until SUPABASE_SERVICE_ROLE_KEY is set in Vercel."

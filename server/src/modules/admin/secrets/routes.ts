@@ -17,9 +17,12 @@ import { fingerprint } from "./fingerprint";
 import {
   railwayReadVariables,
   railwayUpsertVariable,
+  railwayInventory,
   type RailwayReadResult,
   type RailwayTargetSpec,
 } from "./railway";
+import { vercelInventory } from "./vercel";
+import { supabaseInventory } from "./supabase";
 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
@@ -94,6 +97,19 @@ const specOf = (t: TargetRow): RailwayTargetSpec => ({
   environment: t.environment,
 });
 const ctxKey = (t: TargetRow): string => `${t.target_ref ?? ""}::${t.environment}`;
+
+// ── GET /admin/secrets/inventory — every variable NAME in each service ──────────
+// The "what exists in each service" panel. Reads all three providers in parallel
+// and returns NAMES + metadata only — never a value. Each provider degrades to
+// { configured:false, hint } when its token is unset, so the panel is always safe.
+router.get("/admin/secrets/inventory", async (_req: Request, res: Response) => {
+  const [railway, vercel, supabase] = await Promise.all([
+    railwayInventory(),
+    vercelInventory(),
+    supabaseInventory(),
+  ]);
+  res.json({ railway, vercel, supabase });
+});
 
 // ── GET /admin/secrets — the live mirror ────────────────────────────────────────
 router.get("/admin/secrets", async (_req: Request, res: Response) => {

@@ -1768,7 +1768,13 @@
     "logEmpty": "אין עדיין רשומות ביומן",
     "delete": "הסר מהניהול",
     "deleteConfirm": "להסיר את הסוד הזה מהניהול? משתני-הסביבה בספקים לא ישתנו; רק ההגדרה כאן תימחק.",
-    "deleted": "הוסר מהניהול"
+    "deleted": "הוסר מהניהול",
+    "inventoryToggle": "מה קיים בכל שירות",
+    "inventorySearch": "חפש שם משתנה…",
+    "varsCount": "{n} משתנים",
+    "inMultipleServices": "קיים ב-{n} שירותים",
+    "inventoryEmpty": "לא נמצאו משתנים",
+    "inventoryNote": "מוצגים שמות המשתנים בלבד — הערכים לעולם לא נקראים לכאן. תג ×N מסמן משתנה שקיים ביותר משירות אחד."
   },
   "adminUsers": {
     "serviceRoleMissing": "מפתח Supabase service-role לא מוגדר ב-environment. הכתובות לא יוצגו עד שיוגדר SUPABASE_SERVICE_ROLE_KEY ב-Vercel."

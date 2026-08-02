@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
+import { SecretsInventoryPanel } from "./SecretsInventoryPanel";
 
 interface Target {
   id: string;
@@ -139,6 +140,9 @@ export function ManagedSecretsClient() {
           </Button>
         </div>
       </div>
+
+      {/* Inventory: what actually exists in each service, right now. Collapsed. */}
+      <SecretsInventoryPanel />
 
       {adding && (
         <AddSecretForm
