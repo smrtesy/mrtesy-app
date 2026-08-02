@@ -19,9 +19,12 @@
  *     `supabase db push` is ephemeral per-run, so the apply has to be its own run).
  *
  * Why the apply is a new run and not done here: the backend host (Railway) has the
- * compiled server, NOT a repo checkout with the migrations folder, and no Supabase
- * CLI. `supabase db push` can only run where those live — a cloned checkout during a
- * run — so approval hands the apply back to the runner rather than doing it inline.
+ * compiled server but NOT a repo checkout with the migrations folder. `supabase db
+ * push` can only run where that checkout lives — a cloned workspace during a run — so
+ * approval hands the apply back to the runner rather than doing it inline. (The CLI
+ * itself IS on the host now — added to server/nixpacks.toml — and the run env carries
+ * the Supabase credentials, injected in runner.ts; both were the missing plumbing that
+ * previously let a run write a migration but never apply it.)
  */
 
 import { db } from "../../db";
@@ -222,7 +225,8 @@ export async function decideApproval(
     `אישור אנושי התקבל להחלת המיגרציה ההרסנית הבאה. הרץ אותה עכשיו — אל תסווג ` +
     `מחדש ואל תשאל שוב; האדם כבר אישר את ה-SQL עצמו.\n\n` +
     `1. ודא שאתה על הענף \`${gitBranch ?? "main"}\` ושהקובץ \`${migrationPath}\` קיים.\n` +
-    `2. הרץ \`supabase db push\` (או \`supabase migration up --linked\`) כדי להחיל את המיגרציה על הפרודקשן.\n` +
+    `2. החל על הפרודקשן (משתני SUPABASE_ACCESS_TOKEN/SUPABASE_DB_PASSWORD/SUPABASE_PROJECT_ID כבר מוזרקים):\n` +
+    `   \`supabase link --project-ref "$SUPABASE_PROJECT_ID"\` ואז \`supabase db push\`.\n` +
     `3. אם ההחלה נכשלה — דווח את השגיאה המלאה ואל תנסה לתקן את ה-DB ידנית.\n` +
     `approval_id: ${approvalId}`;
 

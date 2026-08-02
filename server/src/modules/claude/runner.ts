@@ -49,6 +49,21 @@ const TOKEN_APP_SLUG = "smrttask";
 const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
+ * Supabase migration credentials — what makes `supabase db push` actually connect
+ * to production from inside a run (the additive path a repo run applies itself, and
+ * the destructive-apply run enqueued after human approval). These are read from
+ * app_secrets under the smrttask slug, the same store as every other run secret, and
+ * injected into the child env below. The Supabase CLI's non-interactive contract is
+ * exactly these three (verified against the official CI/CD example): the access token,
+ * the project's db password, and the project ref. The ref matches `project_id` in the
+ * repo's `supabase/config.toml`; it is not a secret, so it is a default here rather
+ * than a required app_secret (overridable by a SUPABASE_PROJECT_ID app_secret). */
+const SUPABASE_TOKEN_KEY = "SUPABASE_ACCESS_TOKEN";
+const SUPABASE_DB_PASSWORD_KEY = "SUPABASE_DB_PASSWORD";
+const SUPABASE_PROJECT_ID_KEY = "SUPABASE_PROJECT_ID";
+const SUPABASE_PROJECT_REF_DEFAULT = "exjnlghuzuvqedlltztz";
+
+/**
  * A SECOND, independent Claude subscription account, dedicated to automated
  * background work.
  *
@@ -646,6 +661,30 @@ async function executeRunBody(runId: string): Promise<void> {
     if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
   }
 
+  // Supabase migration credentials. Without these, `supabase db push` from a run
+  // authenticates against nothing and hangs on a password prompt (the -p print mode
+  // can't answer it, so it just fails) — this is the missing plumbing that made the
+  // in-app Claude able to WRITE a migration but never APPLY it. Injected only when BOTH
+  // the access token and the db password exist, so a project that hasn't set them
+  // degrades to "can't push, ask the user" (the preamble in composePrompt phrases that
+  // honestly via the same check) rather than a half-authenticated push. Both values are
+  // added to redactSecrets below so a run's `env`/`curl -v`/stack trace can't leak them
+  // into the stored transcript. The apply run enqueued after a destructive approval runs
+  // through this same path, so it is covered by one injection point.
+  const [supabaseToken, supabaseDbPassword] = await Promise.all([
+    getAppSecret(TOKEN_APP_SLUG, SUPABASE_TOKEN_KEY, SUPABASE_TOKEN_KEY),
+    getAppSecret(TOKEN_APP_SLUG, SUPABASE_DB_PASSWORD_KEY, SUPABASE_DB_PASSWORD_KEY),
+  ]);
+  const supabaseTokenClean = supabaseToken?.trim() || null;
+  const supabaseDbPasswordClean = supabaseDbPassword?.trim() || null;
+  if (supabaseTokenClean && supabaseDbPasswordClean) {
+    env.SUPABASE_ACCESS_TOKEN = supabaseTokenClean;
+    env.SUPABASE_DB_PASSWORD = supabaseDbPasswordClean;
+    env.SUPABASE_PROJECT_ID =
+      (await getAppSecret(TOKEN_APP_SLUG, SUPABASE_PROJECT_ID_KEY, SUPABASE_PROJECT_ID_KEY))?.trim() ||
+      SUPABASE_PROJECT_REF_DEFAULT;
+  }
+
   // App access — a real short-lived session for the launching user, minted fresh
   // per turn, so the run can call the platform's own API the way the frontend does
   // (the env preamble in composePrompt tells it how). Minted every turn for every
@@ -796,15 +835,19 @@ async function executeRunBody(runId: string): Promise<void> {
 
   // Scrub EVERY secret this run's child holds — not just the GitHub token. The child
   // env also carries the shared internal secret (approval-gate callback), the
-  // subscription OAuth token, and the minted app-access session token, and a run with
-  // full shell can echo any of them (an accidental `env`, a curl -v, a stack trace).
-  // These rows are the permanent transcript, so all of them are replaced with ***
-  // before anything is stored. redact is a no-op for a null/empty value, so an
-  // unconfigured secret costs nothing here.
+  // subscription OAuth token, the minted app-access session token, and — for migration
+  // runs — the Supabase access token and db password. A run with full shell can echo
+  // any of them (an accidental `env`, a curl -v, a stack trace, git printing a
+  // tokenised URL). These rows are the permanent transcript, so all of them are
+  // replaced with *** before anything is stored. redact is a no-op for a null/empty
+  // value, so an unconfigured secret costs nothing here.
   const redactSecrets = (s: string): string =>
     redact(
-      redact(redact(redact(s, ghToken), internalSecret || null), token),
-      appAccess?.token ?? null,
+      redact(
+        redact(redact(redact(redact(s, ghToken), internalSecret || null), token), appAccess?.token ?? null),
+        supabaseTokenClean,
+      ),
+      supabaseDbPasswordClean,
     );
 
   const flush = async () => {

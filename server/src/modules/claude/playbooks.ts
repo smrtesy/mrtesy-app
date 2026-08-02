@@ -25,7 +25,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { db } from "../../db";
+import { db, getAppSecret } from "../../db";
 import { fileLastCommitDate, blobUrl, getGitHubToken, isValidRepo } from "./github";
 import { BROWSER_HELPER_PATH } from "./app-access";
 
@@ -576,6 +576,18 @@ export async function composePrompt(
       (process.env.SMRTESY_PUBLIC_URL || process.env.SMRTESY_BACKEND_URL),
   );
 
+  // Whether `supabase db push` from a run will actually connect. The runner injects the
+  // Supabase access token + db password (from app_secrets, smrttask slug) into the child
+  // ONLY when both exist; mirror that exact condition here so the preamble never tells a
+  // run to "apply it yourself" when the push would fail for lack of credentials — the
+  // same honesty rule as gateReachable and hasGitHub. Read from the same store the
+  // runner reads, so the two can't drift.
+  const [supaToken, supaDbPassword] = await Promise.all([
+    getAppSecret("smrttask", "SUPABASE_ACCESS_TOKEN", "SUPABASE_ACCESS_TOKEN"),
+    getAppSecret("smrttask", "SUPABASE_DB_PASSWORD", "SUPABASE_DB_PASSWORD"),
+  ]);
+  const migrationsReachable = Boolean(supaToken?.trim() && supaDbPassword?.trim());
+
   const envLines = [
     "# איפה אתה רץ",
     "",
@@ -614,8 +626,19 @@ export async function composePrompt(
         "`curl -s https://app.smrtesy.com/api/deploy-info` ובדוק ש-`commit_short` תואם ל-SHA שדחפת. אם הוא " +
         "עדיין תקוע על commit ישן אחרי ~10 דק', אמור זאת למשתמש (ייתכן שהתיקון עלה כ-Preview בלבד וצריך " +
         "'Promote to Production' ב-Vercel).",
-      "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
-        "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` והרץ `supabase db push`.",
+      migrationsReachable
+        ? "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
+          "**החל בעצמך** — כתוב את קובץ המיגרציה תחת `supabase/migrations/` (שם `YYYYMMDDHHMMSS_<slug>.sql`), ואז החל על הפרודקשן:\n" +
+          "  ```\n" +
+          "  supabase link --project-ref \"$SUPABASE_PROJECT_ID\"   # אידמפוטנטי; מדלג אם כבר מקושר\n" +
+          "  supabase db push\n" +
+          "  ```\n" +
+          "  שלושת משתני-הסביבה שה-CLI צריך (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD`, `SUPABASE_PROJECT_ID`) " +
+          "כבר מוזרקים לך — אל תבקש אותם מהמשתמש. אם `db push` מדווח שאין מיגרציות חדשות, המיגרציה כבר הוחלה — זה תקין."
+        : "- **מיגרציה תוספתית/הפיכה** (ADD COLUMN, CREATE TABLE, CREATE INDEX, ADD CONSTRAINT, COMMENT): " +
+          "כתוב את קובץ המיגרציה תחת `supabase/migrations/`, אבל **אינך יכול להחיל אותה** — סודות ה-Supabase " +
+          "(`SUPABASE_ACCESS_TOKEN` + `SUPABASE_DB_PASSWORD`) אינם מוגדרים תחת /admin/apps/smrttask/secrets. " +
+          "אמור למשתמש להוסיף אותם שם, או להחיל את הקובץ ידנית.",
       gateReachable
         ? "- **מיגרציה הרסנית** (DROP, DELETE, UPDATE שמשנה נתונים, TRUNCATE, ALTER COLUMN TYPE/SET NOT NULL): " +
           "**אל תחיל בעצמך.** קודם הרץ `SELECT` שקול כדי לראות מה ייפגע (ספירה + דגימה), ואז פתח כרטיס-אישור אנושי:\n" +
