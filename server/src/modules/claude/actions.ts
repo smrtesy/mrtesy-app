@@ -15,13 +15,17 @@
  *     the caller is told to go ahead and apply. Destructive → a pending approval row
  *     is recorded and the caller must stop and wait for a human.
  *   listApprovals / decideApproval — the screen. Approving a destructive migration
- *     enqueues a fresh run that applies it (the checkout+CLI that can run
- *     `supabase db push` is ephemeral per-run, so the apply has to be its own run).
+ *     enqueues a fresh run that applies it (the run carries the checkout with the
+ *     migration file plus the injected Supabase access token, so the apply is its own run).
  *
- * Why the apply is a new run and not done here: the backend host (Railway) has the
- * compiled server, NOT a repo checkout with the migrations folder, and no Supabase
- * CLI. `supabase db push` can only run where those live — a cloned checkout during a
- * run — so approval hands the apply back to the runner rather than doing it inline.
+ * How the apply actually runs: the run POSTs the ONE approved migration file's SQL to
+ * the Supabase Management API query endpoint (`/v1/projects/{ref}/database/query`) with
+ * the access token injected in runner.ts — the same endpoint the platform already uses
+ * to run migrations (the Supabase MCP). It is deliberately NOT `supabase db push`: this
+ * repo's local migration filenames are disjoint from the remote `schema_migrations`
+ * history, so a push would fail or mass-re-run hundreds of historical (often
+ * destructive) migrations. The access token is the plumbing that previously was missing
+ * — a run could write a migration file but had nothing to apply it with.
  */
 
 import { db } from "../../db";
@@ -148,8 +152,9 @@ export interface DecideResult {
  * A human's decision on a pending approval.
  *
  * reject → recorded, nothing runs.
- * approve → enqueue a fresh run that applies the migration in a clean checkout via
- *   `supabase db push`, and record its id on the approval so the screen can follow it.
+ * approve → enqueue a fresh run that applies the migration by POSTing the one approved
+ *   file's SQL to the Supabase Management API query endpoint, and record its id on the
+ *   approval so the screen can follow it.
  *
  * Guarded so only a PENDING row can be decided: a double-click, or two admins acting
  * at once, cannot enqueue the apply twice or overturn a decision already made. The
@@ -222,7 +227,17 @@ export async function decideApproval(
     `אישור אנושי התקבל להחלת המיגרציה ההרסנית הבאה. הרץ אותה עכשיו — אל תסווג ` +
     `מחדש ואל תשאל שוב; האדם כבר אישר את ה-SQL עצמו.\n\n` +
     `1. ודא שאתה על הענף \`${gitBranch ?? "main"}\` ושהקובץ \`${migrationPath}\` קיים.\n` +
-    `2. הרץ \`supabase db push\` (או \`supabase migration up --linked\`) כדי להחיל את המיגרציה על הפרודקשן.\n` +
+    `2. החל **רק את ה-SQL של הקובץ הזה** על הפרודקשן דרך ה-Management API ` +
+    `(SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_ID כבר מוזרקים). השתמש ב-heredoc כדי ` +
+    `להימנע מבריחת-תווים ידנית של ה-SQL:\n` +
+    "   ```\n" +
+    "   curl -sS -X POST \"https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/database/query\" \\\n" +
+    "     -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"content-type: application/json\" \\\n" +
+    "     --data-binary @- <<'JSON'\n" +
+    "   {\"query\": <ה-SQL המלא של הקובץ, כמחרוזת JSON חוקית>}\n" +
+    "   JSON\n" +
+    "   ```\n" +
+    `   **אל תריץ \`supabase db push\`** — הוא היה מריץ מחדש מיגרציות ישנות. קובץ בודד בלבד.\n` +
     `3. אם ההחלה נכשלה — דווח את השגיאה המלאה ואל תנסה לתקן את ה-DB ידנית.\n` +
     `approval_id: ${approvalId}`;
 
