@@ -278,6 +278,9 @@ router.get("/claude-session/app-access", async (req: Request, res: Response) => 
   // agent driving a browser session as this user. Same short-lived session the
   // cookies already carry; org is the user's primary membership.
   const orgId = await primaryOrgId(userId);
+  // Audit every mint — this route hands out a live super-admin session, so a
+  // leaked secret must leave a trail. Log the target + org, NEVER the token.
+  console.log(`[claude-session] app-access minted for user=${userId} org=${orgId ?? "none"}`);
   const { env, missing } = publicFrontendEnv();
   res.json({ ok: true, token: session.token, org_id: orgId, cookies: session.cookies, public_env: env, missing });
 });

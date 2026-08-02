@@ -10,7 +10,7 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { requireAuth, requireOrg } from "../../middleware";
+import { requireAuth, requireOrg, requireSuperAdmin } from "../../middleware";
 import * as bs from "./browser-session";
 import { latestSmsCode, latestEmailCode } from "./code-extract";
 import { storeSecret } from "./vault-store";
@@ -22,8 +22,10 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-// Powerful capability — same auth as the rest of the app, never public.
-router.use("/web-action", requireAuth, requireOrg);
+// Powerful capability (drives a real browser as the user, reads their OTPs,
+// writes to their vault) — restricted to super-admins, org-scoped. Sessions are
+// additionally owner+org-scoped inside browser-session.ts.
+router.use("/web-action", requireAuth, requireOrg, requireSuperAdmin);
 
 /** POST /web-action/sessions — launch a fresh browser session. */
 router.post("/web-action/sessions", async (req: Request, res: Response) => {
@@ -31,6 +33,7 @@ router.post("/web-action/sessions", async (req: Request, res: Response) => {
     const session = await bs.createSession(req.user!.id, req.org!.id);
     res.status(201).json({ session });
   } catch (e) {
+    if (e instanceof bs.SessionLimitError) return res.status(429).json({ error: e.message });
     res.status(500).json({ error: msg(e) });
   }
 });
@@ -42,7 +45,7 @@ router.get("/web-action/sessions", async (req: Request, res: Response) => {
 
 /** POST /web-action/sessions/:id/navigate  Body: { url } */
 router.post("/web-action/sessions/:id/navigate", async (req: Request, res: Response) => {
-  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  const s = bs.getOwnedSession(req.params.id, req.user!.id, req.org!.id);
   if (!s) return res.status(404).json({ error: "session not found" });
   try {
     res.json({ session: await bs.navigate(s, String((req.body ?? {}).url ?? "")) });
@@ -53,7 +56,7 @@ router.post("/web-action/sessions/:id/navigate", async (req: Request, res: Respo
 
 /** POST /web-action/sessions/:id/act  Body: { type, selector?, text?, key? } */
 router.post("/web-action/sessions/:id/act", async (req: Request, res: Response) => {
-  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  const s = bs.getOwnedSession(req.params.id, req.user!.id, req.org!.id);
   if (!s) return res.status(404).json({ error: "session not found" });
   try {
     res.json({ session: await bs.act(s, (req.body ?? {}) as bs.Action) });
@@ -64,7 +67,7 @@ router.post("/web-action/sessions/:id/act", async (req: Request, res: Response) 
 
 /** GET /web-action/sessions/:id/screenshot[?full=1] — base64 PNG of the page. */
 router.get("/web-action/sessions/:id/screenshot", async (req: Request, res: Response) => {
-  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  const s = bs.getOwnedSession(req.params.id, req.user!.id, req.org!.id);
   if (!s) return res.status(404).json({ error: "session not found" });
   try {
     res.json({ image: await bs.screenshotDataUrl(s, req.query.full === "1") });
@@ -83,7 +86,7 @@ router.delete("/web-action/sessions/:id", async (req: Request, res: Response) =>
 
 /** GET /web-action/sessions/:id/stream — SSE stream of base64 JPEG frames. */
 router.get("/web-action/sessions/:id/stream", async (req: Request, res: Response) => {
-  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  const s = bs.getOwnedSession(req.params.id, req.user!.id, req.org!.id);
   if (!s) return res.status(404).json({ error: "session not found" });
 
   res.set({
@@ -110,7 +113,7 @@ router.get("/web-action/sessions/:id/stream", async (req: Request, res: Response
 
 /** POST /web-action/sessions/:id/input — relay one user mouse/key/scroll event. */
 router.post("/web-action/sessions/:id/input", async (req: Request, res: Response) => {
-  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  const s = bs.getOwnedSession(req.params.id, req.user!.id, req.org!.id);
   if (!s) return res.status(404).json({ error: "session not found" });
   try {
     await dispatchInput(s, (req.body ?? {}) as InputEvent);

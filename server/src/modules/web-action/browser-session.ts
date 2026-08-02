@@ -43,9 +43,15 @@ export async function getCdp(s: WebSession): Promise<CDPSession> {
 
 const sessions = new Map<string, WebSession>();
 
-const MAX_SESSIONS = 4; // host guard — a few concurrent signups, not a fleet
+const MAX_SESSIONS_PER_USER = 2; // one user shouldn't hold a fleet
+const MAX_SESSIONS_GLOBAL = 8; // host guard across all users
 const IDLE_TIMEOUT_MS = 10 * 60_000; // auto-close a session left idle 10 min
 const NAV_TIMEOUT_MS = 60_000;
+
+/** Raised when a caller is at their session limit — the route maps it to 429. */
+export class SessionLimitError extends Error {
+  readonly code = "SESSION_LIMIT";
+}
 
 // Same arg set the domain-tracker / browser-helper prove works in the Railway
 // container. SMRTESY_CHROMIUM_PATH overrides the binary where it is preinstalled.
@@ -61,24 +67,16 @@ const LAUNCH_ARGS = [
 ];
 
 /**
- * A server-side browser is an SSRF surface: left open it could be pointed at
+ * A server-side browser is an SSRF surface: it could be pointed at
  * `http://169.254.169.254/…` (cloud metadata) or the backend's own internal
- * services. We allow only http(s) to a PUBLIC host — literal-blocking loopback,
- * private, link-local and metadata addresses, plus `localhost`/`*.local`. (This
- * catches the common cases; it does not defeat DNS-rebinding, which a future
- * hardening can address by pinning the resolved IP.)
+ * services — directly OR via a redirect / in-page navigation. We literal-block
+ * loopback, private, link-local and metadata hosts. (Catches the common cases;
+ * does not defeat DNS-rebinding — a hostname that resolves to a private IP —
+ * which a future hardening can close by pinning the resolved IP.)
  */
-function isSafePublicUrl(raw: string): URL | null {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (!["http:", "https:"].includes(u.protocol)) return null;
-  const host = u.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return null;
-  // IPv4 literal ranges
+function isPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return true;
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
     const [a, b] = [Number(m[1]), Number(m[2])];
@@ -90,11 +88,43 @@ function isSafePublicUrl(raw: string): URL | null {
       (a === 169 && b === 254) || // link-local + cloud metadata
       a === 0
     )
-      return null;
+      return true;
   }
-  // IPv6 loopback / link-local / unique-local
-  if (host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return null;
-  return u;
+  if (host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return true;
+  return false;
+}
+
+/** Only http(s) to a PUBLIC host is a valid navigate target. */
+function isSafePublicUrl(raw: string): URL | null {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:"].includes(u.protocol)) return null;
+  return isPrivateHost(u.hostname) ? null : u;
+}
+
+/**
+ * Install a request filter that ABORTS any http(s) request to a private host —
+ * on the initial nav AND on every redirect, subresource, XHR, and JS
+ * navigation. This is the real SSRF enforcement point (gating only the first
+ * URL is bypassable via a 302 to an internal address). Non-http schemes
+ * (about:, data:, blob:) pass through untouched so the page still works.
+ */
+async function installSsrfGuard(context: BrowserContext): Promise<void> {
+  await context.route("**", (route) => {
+    let privateTarget = false;
+    try {
+      const u = new URL(route.request().url());
+      privateTarget = ["http:", "https:"].includes(u.protocol) && isPrivateHost(u.hostname);
+    } catch {
+      /* non-URL request — let it through */
+    }
+    if (privateTarget) return route.abort("blockedbyclient");
+    return route.continue();
+  });
 }
 
 async function launchBrowser(): Promise<Browser> {
@@ -107,10 +137,12 @@ async function launchBrowser(): Promise<Browser> {
 }
 
 /** Owner-scoped lookup — the ONLY way a route reaches a live session. Returns
- *  null when the id is unknown OR belongs to a different user (never leak). */
-export function getOwnedSession(id: string, userId: string): WebSession | null {
+ *  null when the id is unknown OR belongs to a different user/org (never leak,
+ *  and never let a multi-org user drive a session — or bank its extracted secret
+ *  — under a different active org than the one it was created in). */
+export function getOwnedSession(id: string, userId: string, orgId: string): WebSession | null {
   const s = sessions.get(id);
-  if (!s || s.userId !== userId) return null;
+  if (!s || s.userId !== userId || s.orgId !== orgId) return null;
   s.lastUsedAt = Date.now();
   return s;
 }
@@ -133,14 +165,37 @@ async function info(s: WebSession): Promise<SessionInfo> {
   };
 }
 
-export async function createSession(userId: string, orgId: string): Promise<SessionInfo> {
-  // Reap the oldest idle session first if we're at the cap.
-  if (sessions.size >= MAX_SESSIONS) {
-    const oldest = [...sessions.values()].sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
-    if (oldest) await closeSession(oldest.id, oldest.userId);
+/** Reap the caller's OWN oldest idle session, or throw if they're at the cap
+ *  with nothing idle. NEVER evicts another user's session (that was a DoS + a
+ *  way to kill a stranger's in-progress signup). */
+function enforceCaps(userId: string): Promise<void> | void {
+  const now = Date.now();
+  const reapOwnIdle = async (): Promise<boolean> => {
+    const idle = [...sessions.values()]
+      .filter((s) => s.userId === userId && now - s.lastUsedAt > IDLE_TIMEOUT_MS)
+      .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+    if (!idle) return false;
+    await closeSession(idle.id, idle.userId);
+    return true;
+  };
+  const mine = [...sessions.values()].filter((s) => s.userId === userId).length;
+  if (mine >= MAX_SESSIONS_PER_USER) {
+    return reapOwnIdle().then((freed) => {
+      if (!freed) throw new SessionLimitError("session limit reached — close an existing session first");
+    });
   }
+  if (sessions.size >= MAX_SESSIONS_GLOBAL) {
+    return reapOwnIdle().then((freed) => {
+      if (!freed) throw new SessionLimitError("host is at capacity — try again shortly");
+    });
+  }
+}
+
+export async function createSession(userId: string, orgId: string): Promise<SessionInfo> {
+  await enforceCaps(userId);
   const browser = await launchBrowser();
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await installSsrfGuard(context);
   const page = await context.newPage();
   const s: WebSession = {
     id: randomUUID(),
