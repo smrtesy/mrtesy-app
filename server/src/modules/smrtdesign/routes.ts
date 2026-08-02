@@ -559,6 +559,7 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
   const orgId = req.org!.id;
   const body = req.body ?? {};
   const picksIn = body.picks && typeof body.picks === "object" ? body.picks : {};
+  const note = str(body.note, 1000) || null;
 
   const { data: project, error } = await db
     .from("smrtdesign_projects")
@@ -571,7 +572,9 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
 
   // Resolve the picked source options and build { label -> spec } + { dim -> label }.
   const optionIds = [...new Set(Object.values(picksIn).filter((v): v is string => typeof v === "string"))];
-  if (optionIds.length === 0) return res.status(400).json({ error: "picks are required" });
+  // Need SOMETHING to combine from: at least one dimension pick, or a free-text
+  // "other" instruction (all-designer's-choice + a custom note is a valid remix).
+  if (optionIds.length === 0 && !note) return res.status(400).json({ error: "pick at least one, or add a note" });
 
   const { data: sourceOptions, error: sErr } = await db
     .from("smrtdesign_options")
@@ -600,7 +603,7 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
     .single();
   if (selInsErr) console.error("[smrtdesign] selection insert failed:", selInsErr.message);
 
-  const prompt = buildRemixPrompt({ picks, sources });
+  const prompt = buildRemixPrompt({ picks, sources, note });
   // startAutoRun posts the combined option (is_combined=true) into the gallery.
   void selection; // selection row created; combined_option_id linkage is a v2+ enhancement
   return startAutoRun(req, res, project.id, project.thread_id, prompt, `smrtDesign remix — ${project.name}`);
