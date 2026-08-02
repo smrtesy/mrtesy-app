@@ -831,7 +831,7 @@ export function ClaudeChat() {
               className="group flex min-w-0 flex-1 items-center gap-1.5 text-start"
               title={thread ? t("rename") : undefined}
             >
-              <span className="truncate text-sm font-medium" dir="auto">
+              <span className="line-clamp-2 break-words text-sm font-medium" dir="auto">
                 {title}
               </span>
               {thread && (
@@ -1211,7 +1211,7 @@ function ThreadRow({
         active && "bg-muted",
       )}
     >
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 truncate text-start text-xs" dir="auto">
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 line-clamp-2 break-words text-start text-xs" dir="auto">
         {thread.title?.trim() || t("untitled")}
       </button>
       <button

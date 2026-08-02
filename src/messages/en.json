@@ -4452,6 +4452,12 @@
       "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
   },
+  "claudeDrawer": {
+    "title": "Claude",
+    "openFull": "Open full screen",
+    "close": "Close",
+    "loading": "Loading Claude…"
+  },
   "claudeChat": {
     "interactive": {
       "picked": "I chose: {label}",
@@ -4886,5 +4892,18 @@
       "signature": "Signature",
       "voice": "Voice"
     }
+  },
+  "webAction": {
+    "title": "Web action agent",
+    "subtitle": "Opens accounts and acts on sites for you, with a live view and take-control when needed.",
+    "hint": "Start a session, navigate, and watch. On a CAPTCHA press \"Take control\" and solve it yourself.",
+    "start": "Start session",
+    "go": "Go",
+    "takeControl": "Take control",
+    "releaseControl": "Release control",
+    "close": "Close",
+    "waiting": "Waiting for the first frame…",
+    "noSession": "No active session",
+    "noAuth": "Could not authenticate the session"
   }
 }
