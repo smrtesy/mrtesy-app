@@ -273,8 +273,13 @@ router.get("/claude-session/app-access", async (req: Request, res: Response) => 
       .json({ error: "could not mint session (check SUPABASE_SERVICE_ROLE_KEY and the target user on the backend)" });
   }
 
+  // The bare token + primary org id let a driver call the requireAuth+requireOrg
+  // routes directly (Authorization: Bearer + X-Org-Id) — e.g. the web-action
+  // agent driving a browser session as this user. Same short-lived session the
+  // cookies already carry; org is the user's primary membership.
+  const orgId = await primaryOrgId(userId);
   const { env, missing } = publicFrontendEnv();
-  res.json({ ok: true, cookies: session.cookies, public_env: env, missing });
+  res.json({ ok: true, token: session.token, org_id: orgId, cookies: session.cookies, public_env: env, missing });
 });
 
 /** Resolve the primary org for a user (earliest membership). */
