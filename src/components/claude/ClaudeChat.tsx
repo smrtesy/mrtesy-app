@@ -46,7 +46,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { api, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
-import { Markdown } from "@/components/common/Markdown";
+import { AnswerContent } from "./interactive/AnswerContent";
 import { CopyButton } from "@/components/common/CopyButton";
 import { ChatComposer } from "./ChatComposer";
 import { PlaybookList } from "./PlaybookList";
@@ -1056,7 +1056,16 @@ export function ClaudeChat() {
             <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
           ) : (
             <div className="mx-auto flex max-w-3xl flex-col gap-3">
-              {renderTurns(turns, children, t, (id) => setActiveId(id), (id) => void cancelWaiting(id))}
+              {renderTurns(
+                turns,
+                children,
+                t,
+                (id) => setActiveId(id),
+                (id) => void cancelWaiting(id),
+                // Returns the send promise so an interactive block can revert its
+                // "sent" latch if the turn fails to queue (send rethrows on error).
+                (message) => send(message, []),
+              )}
             </div>
           )}
           <div ref={bottomRef} />
@@ -1279,9 +1288,20 @@ function renderTurns(
   t: ReturnType<typeof useTranslations>,
   openThread: (id: string) => void,
   onCancelWaiting: (id: string) => void,
+  onAction: (message: string) => Promise<void> | void,
 ): ReactNode[] {
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
+  // The last turn that actually renders (moved turns collapse into a link row,
+  // not a TurnView) — the only turn whose interactive blocks stay live. Using
+  // turns.length-1 would strand a live block behind trailing moved turns.
+  let lastLiveIndex = -1;
+  for (let k = turns.length - 1; k >= 0; k -= 1) {
+    if (!turns[k].moved_to_thread_id) {
+      lastLiveIndex = k;
+      break;
+    }
+  }
   let i = 0;
   // Tracks whether an earlier COMPLETED turn of this thread has been seen. The
   // context-restored banner is gated on it: the runner rebuilds context only from
@@ -1299,6 +1319,8 @@ function renderTurns(
           turn={turn}
           hadPriorDoneTurn={seenPriorDone}
           onCancelWaiting={onCancelWaiting}
+          isLast={i === lastLiveIndex}
+          onAction={onAction}
         />,
       );
       if (turn.status === "done") seenPriorDone = true;
@@ -1416,10 +1438,18 @@ function TurnView({
   turn,
   hadPriorDoneTurn,
   onCancelWaiting,
+  isLast,
+  onAction,
 }: {
   turn: Turn;
   hadPriorDoneTurn: boolean;
   onCancelWaiting: (id: string) => void;
+  /** This is the last turn of the thread — the only turn whose interactive
+   *  blocks are still live (older turns render them read-only). */
+  isLast: boolean;
+  /** Send a follow-up turn when the user answers an interactive block. Returns
+   *  the send promise so a block can revert its latch if the turn fails. */
+  onAction: (message: string) => Promise<void> | void;
 }) {
   const t = useTranslations("claudeChat");
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -1533,10 +1563,17 @@ function TurnView({
           {showAnswer && (
             <div className="group/msg flex items-start gap-1">
               {/* Rich rendering, chat density: headings, lists, tables and code
-                  the same way the .md docs render, tightened to a bubble. */}
-              <Markdown density="chat" className="min-w-0 flex-1">
-                {answer}
-              </Markdown>
+                  the same way the .md docs render, tightened to a bubble.
+                  AnswerContent additionally turns any embedded smrt-ask /
+                  smrt-plan block into a live widget (interactive only on the
+                  last turn); a plain answer takes the single-Markdown fast
+                  path so nothing changes for ordinary replies. */}
+              <AnswerContent
+                answer={answer}
+                interactive={isLast && turn.status === "done"}
+                onAction={onAction}
+                className="min-w-0 flex-1"
+              />
               <CopyButton
                 text={answer}
                 label={t("copyMessage")}
