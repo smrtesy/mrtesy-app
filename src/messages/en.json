@@ -4498,6 +4498,18 @@
     },
     "empty": "Write a message to begin",
     "thinking": "Thinking…",
+    "live": {
+      "starting": "Starting…",
+      "working": "Working…",
+      "writing": "Writing reply…",
+      "reading": "Processing result…",
+      "tool": "Running · {name}",
+      "toolWith": "Running · {name} · {detail}",
+      "steps": "{n} steps",
+      "resumed": "resumed after a restart",
+      "noOutput": "No response for {d} — may be stuck",
+      "stopHint": "Stop and resend"
+    },
     "toolCount": "{count} tool calls",
     "effortDefault": "Effort: default",
     "effort": {

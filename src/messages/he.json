@@ -4497,6 +4497,18 @@
     },
     "empty": "כתוב הודעה כדי להתחיל",
     "thinking": "חושב…",
+    "live": {
+      "starting": "מתחיל…",
+      "working": "עובד…",
+      "writing": "כותב תשובה…",
+      "reading": "מעבד תוצאה…",
+      "tool": "מפעיל כלי · {name}",
+      "toolWith": "מפעיל כלי · {name} · {detail}",
+      "steps": "{n} פעולות",
+      "resumed": "שוחזר אחרי ריסטארט",
+      "noOutput": "אין תגובה כבר {d} — ייתכן שנתקע",
+      "stopHint": "עצור ושלח שוב"
+    },
     "toolCount": "{count} פעולות כלים",
     "effortDefault": "חוזק: ברירת מחדל",
     "effort": {
