@@ -4452,7 +4452,6 @@
     }
   },
   "claudeDrawer": {
-    "launch": "Ask Claude",
     "title": "Claude",
     "openFull": "Open full screen",
     "close": "Close",
