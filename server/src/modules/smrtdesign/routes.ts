@@ -5,7 +5,17 @@ import { db } from "../../db";
 import { emitEvent, notifyError } from "../../lib/platform";
 import { composePrompt } from "../claude/playbooks";
 import { executeRun } from "../claude/runner";
-import { buildGenerationPrompt, buildRemixPrompt, DIMENSIONS, type Dimension } from "./prompt";
+import {
+  buildGenerationPrompt,
+  buildRemixPrompt,
+  buildOpenConversationPrompt,
+  buildLinkThreadPrompt,
+  DIMENSIONS,
+  type Dimension,
+} from "./prompt";
+
+// UUID shape guard for thread ids the client passes to link-thread.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const router = Router();
 
@@ -37,7 +47,7 @@ async function withSignedUrls(
 router.get("/design/projects", requireAuth, requireOrg, requireApp("smrtdesign"), async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("smrtdesign_projects")
-    .select("id, name, subject, languages, status, option_count, created_at, updated_at")
+    .select("id, name, subject, languages, status, option_count, mode, created_at, updated_at")
     .eq("org_id", req.org!.id)
     .order("created_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
@@ -91,10 +101,13 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
   if (error) return res.status(500).json({ error: error.message });
   if (!project) return res.status(404).json({ error: "project not found" });
 
-  // Lazy poll: if a generation/remix run is driving this project, reflect its
-  // terminal state. `thread_id` holds the driving claude_threads id; the run is
-  // the latest turn of that thread (a repo run must belong to a thread — runner.ts).
-  if (project.status === "generating" && project.thread_id) {
+  // Lazy poll — ONLY for auto mode (the v1 blind run): reflect the driving run's
+  // terminal state. In conversation mode a single ended turn is NOT terminal (the
+  // chat continues in the console and more renders can arrive), so we never flip it
+  // to failed/options_ready here — it rests at 'generating' (=active) until the
+  // user locks an option. `thread_id` holds the claude_threads id; the run is the
+  // latest turn of that thread (a repo run must belong to a thread — runner.ts).
+  if (project.mode === "auto" && project.status === "generating" && project.thread_id) {
     const { data: run, error: runErr } = await db
       .from("claude_runs")
       .select("id, error, ended_at, started_at")
@@ -118,6 +131,33 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
         .eq("id", project.id);
       if (updErr) console.error("[smrtdesign] status sync failed:", updErr.message);
       else project.status = next;
+    }
+  } else if (project.mode === "conversation" && project.status === "generating" && project.thread_id) {
+    // Conversation mode never fails on a single ended turn — EXCEPT the opening
+    // turn: if the latest turn errored and the project has produced NO options at
+    // all, the chat never really started (e.g. the seed turn hit a runtime error),
+    // and resting at 'generating' forever is indistinguishable from an active chat.
+    const { data: run } = await db
+      .from("claude_runs")
+      .select("error, ended_at")
+      .eq("org_id", orgId)
+      .eq("thread_id", project.thread_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (run?.ended_at && run.error) {
+      const { count } = await db
+        .from("smrtdesign_options")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", project.id);
+      if ((count ?? 0) === 0) {
+        const { error: updErr } = await db
+          .from("smrtdesign_projects")
+          .update({ status: "failed" })
+          .eq("id", project.id);
+        if (updErr) console.error("[smrtdesign] status sync failed:", updErr.message);
+        else project.status = "failed";
+      }
     }
   }
 
@@ -143,61 +183,11 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
   });
 });
 
-/** Get the project's driving Claude thread, creating it once if needed. A repo run
- *  MUST belong to a thread — the runner needs a stable per-thread working directory
- *  to clone the repo into and to resume the session across generate→remix turns
- *  (runner.ts). The thread is created `archived_at`=now so it stays out of the
- *  /claude console thread list (that list filters `archived_at is null`), while its
- *  runs still work normally. Returns the thread id, or null on failure. */
-async function ensureProjectThread(
-  orgId: string,
-  userId: string,
-  projectId: string,
-  currentThreadId: string | null,
-  title: string,
-): Promise<string | null> {
-  if (currentThreadId) {
-    const { data: t } = await db
-      .from("claude_threads")
-      .select("id")
-      .eq("id", currentThreadId)
-      .eq("org_id", orgId)
-      .maybeSingle();
-    if (t) return t.id; // real thread — reuse it (remix resumes the same session)
-    // else: legacy value (a run id from before this fix) — fall through and make one
-  }
-  const { data: thread, error } = await db
-    .from("claude_threads")
-    .insert({
-      org_id: orgId,
-      created_by: userId,
-      title,
-      repo: REPO,
-      archived_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
-  if (error) {
-    console.error("[smrtdesign] thread create failed:", error.message);
-    return null;
-  }
-  await db.from("smrtdesign_projects").update({ thread_id: thread.id }).eq("id", projectId);
-  return thread.id;
-}
-
-/** Kick a generation/remix run: compose the method-primed prompt, tell the run
- *  to POST each option back here, and fire it as a new turn of the project's
- *  Claude thread. Returns the run id. */
-async function startRun(
-  req: Request,
-  res: Response,
-  projectId: string,
-  currentThreadId: string | null,
-  basePrompt: string,
-  title: string,
-) {
-  const orgId = req.org!.id;
-  const callback = [
+/** The "post each render back to the gallery" instruction, appended to every
+ *  prompt smrtDesign sends its thread. $SMRTESY_* are injected into the run env by
+ *  the console's app-access layer (app-access.ts). */
+function ingestCallback(projectId: string): string {
+  return [
     ``,
     `After rendering an option and emitting its \`smrtdesign-option\` block, POST it`,
     `to smrtDesign so it appears in the gallery — one POST per option:`,
@@ -210,63 +200,173 @@ async function startRun(
     `The image_base64 is the screenshot you rendered (raw base64, no data: prefix).`,
     `$SMRTESY_API_URL, $SMRTESY_API_TOKEN and $SMRTESY_ORG_ID are already in your env.`,
   ].join("\n");
+}
 
-  const composed = await composePrompt(orgId, `${basePrompt}\n${callback}`, null);
-
-  const threadId = await ensureProjectThread(orgId, req.user!.id, projectId, currentThreadId, title);
-  if (!threadId) {
-    await notifyError(orgId, "smrtdesign", { title: "Design run could not start", body: "thread create failed" });
-    return res.status(500).json({ error: "could not start run" });
+/** Get the project's driving Claude thread, creating it once if needed. A repo run
+ *  MUST belong to a thread — the runner needs a stable per-thread working directory
+ *  to clone the repo into and to resume the session across turns (runner.ts).
+ *  `visible=false` (auto mode) archives the thread so it stays out of the /claude
+ *  console list (that list filters `archived_at is null`); `visible=true`
+ *  (conversation mode) leaves it visible so the user can chat in the console.
+ *  Returns the thread id, or null on failure. */
+async function ensureProjectThread(
+  orgId: string,
+  userId: string,
+  projectId: string,
+  currentThreadId: string | null,
+  title: string,
+  visible: boolean,
+): Promise<string | null> {
+  if (currentThreadId) {
+    const { data: t } = await db
+      .from("claude_threads")
+      .select("id, archived_at")
+      .eq("id", currentThreadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (t) {
+      // Reusing an archived (auto) thread for a conversation: un-archive it so it
+      // shows in the /claude console list the user is about to be sent to.
+      if (visible && t.archived_at) {
+        const { error: unErr } = await db.from("claude_threads").update({ archived_at: null }).eq("id", t.id);
+        if (unErr) console.error("[smrtdesign] un-archive failed:", unErr.message);
+      }
+      return t.id; // real thread — reuse it (turns resume the same session)
+    }
+    // else: legacy value (a run id from before the thread fix) — make a real one
   }
+  const { data: thread, error } = await db
+    .from("claude_threads")
+    .insert({
+      org_id: orgId,
+      created_by: userId,
+      title,
+      repo: REPO,
+      archived_at: visible ? null : new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error) {
+    console.error("[smrtdesign] thread create failed:", error.message);
+    return null;
+  }
+  // Fail the start if we can't link the thread to the project: otherwise thread_id
+  // stays null, the poll's resolver never runs, and the project sticks at generating.
+  const { error: linkErr } = await db
+    .from("smrtdesign_projects")
+    .update({ thread_id: thread.id })
+    .eq("id", projectId);
+  if (linkErr) {
+    console.error("[smrtdesign] project thread link failed:", linkErr.message);
+    return null;
+  }
+  return thread.id;
+}
 
-  // One live run at a time per project — a repo run resumes the thread's single
-  // session, so two at once would race the same workspace.
+/** Enqueue one turn on a design thread and fire it. Composes (method + standing
+ *  instructions) only on the thread's FIRST turn — later turns resume the session
+ *  which already holds them (mirrors the console, threads.ts). Returns the run id,
+ *  or an error string ("already generating" when a turn is live). */
+async function enqueueTurn(
+  orgId: string,
+  userId: string,
+  threadId: string,
+  promptText: string,
+  title: string,
+): Promise<{ runId?: string; error?: string }> {
   const { data: live } = await db
     .from("claude_runs")
     .select("id")
     .eq("thread_id", threadId)
     .in("status", ["queued", "running", "waiting"])
     .limit(1);
-  if (live && live.length > 0) {
-    return res.status(409).json({ error: "already generating" });
-  }
+  if (live && live.length > 0) return { error: "already generating" };
 
-  // Next turn index (uniq_claude_runs_thread_turn is on thread_id+turn_index).
   const { count: prior } = await db
     .from("claude_runs")
     .select("id", { count: "exact", head: true })
     .eq("thread_id", threadId);
   const turnIndex = (prior ?? 0) + 1;
 
+  // Inherit the thread's execution settings so the runner resumes with the right
+  // account token / model — critical for a LINKED console conversation that is
+  // pinned to a specific account (threads.ts:735 copies these onto every turn).
+  // For our own threads repo=REPO and the rest are null, so this is a no-op there.
+  const { data: thread } = await db
+    .from("claude_threads")
+    .select("repo, model, effort, claude_account, git_branch")
+    .eq("id", threadId)
+    .maybeSingle();
+
+  // First turn carries the method + standing instructions; later turns don't
+  // (the resumed session still holds them) — same rule as the console.
+  const prompt = turnIndex === 1 ? (await composePrompt(orgId, promptText, null)).prompt : promptText;
+
   const { data: run, error } = await db
     .from("claude_runs")
     .insert({
       org_id: orgId,
-      created_by: req.user!.id,
+      created_by: userId,
       thread_id: threadId,
       turn_index: turnIndex,
       title,
-      prompt: composed.prompt,
-      user_prompt: basePrompt,
-      repo: REPO,
+      prompt,
+      user_prompt: promptText,
+      repo: thread?.repo ?? null,
+      model: thread?.model ?? null,
+      effort: thread?.effort ?? null,
+      claude_account: thread?.claude_account ?? null,
+      git_branch: thread?.git_branch ?? null,
       status: "queued",
     })
     .select("id")
     .single();
   if (error) {
-    await notifyError(orgId, "smrtdesign", { title: "Design run could not start", body: error.message });
+    if (error.code === "23505") return { error: "already generating" }; // turn-index race
+    return { error: error.message };
+  }
+
+  void executeRun(run.id).catch((e) =>
+    console.error("[smrtdesign] executeRun threw:", e instanceof Error ? e.message : e),
+  );
+  return { runId: run.id };
+}
+
+/** Auto mode (v1): fire a blind generation/remix run as a turn of an archived
+ *  thread, then respond. Sets mode='auto' so the GET poll flips terminal state. */
+async function startAutoRun(
+  req: Request,
+  res: Response,
+  projectId: string,
+  currentThreadId: string | null,
+  basePrompt: string,
+  title: string,
+) {
+  const orgId = req.org!.id;
+  const threadId = await ensureProjectThread(orgId, req.user!.id, projectId, currentThreadId, title, false);
+  if (!threadId) {
+    await notifyError(orgId, "smrtdesign", { title: "Design run could not start", body: "thread create failed" });
+    return res.status(500).json({ error: "could not start run" });
+  }
+
+  const { runId, error } = await enqueueTurn(
+    orgId,
+    req.user!.id,
+    threadId,
+    `${basePrompt}\n${ingestCallback(projectId)}`,
+    title,
+  );
+  if (error === "already generating") return res.status(409).json({ error });
+  if (error || !runId) {
+    await notifyError(orgId, "smrtdesign", { title: "Design run could not start", body: error ?? "unknown" });
     return res.status(500).json({ error: "could not start run" });
   }
 
   await db
     .from("smrtdesign_projects")
-    .update({ status: "generating" })
+    .update({ status: "generating", mode: "auto" })
     .eq("id", projectId);
-
-  void executeRun(run.id).catch((e) =>
-    console.error("[smrtdesign] executeRun threw:", e instanceof Error ? e.message : e),
-  );
-  return res.status(202).json({ run_id: run.id, status: "generating" });
+  return res.status(202).json({ run_id: runId, status: "generating" });
 }
 
 // ─── GENERATE ────────────────────────────────────────────────
@@ -286,7 +386,111 @@ router.post("/design/projects/:id/generate", requireAuth, requireOrg, requireApp
     languages: project.languages ?? ["he"],
     optionCount: project.option_count ?? 4,
   });
-  return startRun(req, res, project.id, project.thread_id, prompt, `smrtDesign — ${project.name}`);
+  return startAutoRun(req, res, project.id, project.thread_id, prompt, `smrtDesign — ${project.name}`);
+});
+
+// ─── OPEN (interactive conversation — the primary v2 flow) ───
+// Creates/reuses a VISIBLE Claude thread, posts a seeded opening turn (method +
+// brief + ingest callback + "refine first, render on go"), and returns the thread
+// id so the client can open /claude?thread=<id>. Renders posted from that chat
+// land in this project's gallery.
+router.post("/design/projects/:id/open", requireAuth, requireOrg, requireApp("smrtdesign"), async (req: Request, res: Response) => {
+  const { data: project, error } = await db
+    .from("smrtdesign_projects")
+    .select("id, name, subject, audience, languages, option_count, thread_id")
+    .eq("org_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  const threadId = await ensureProjectThread(
+    req.org!.id,
+    req.user!.id,
+    project.id,
+    project.thread_id,
+    `smrtDesign — ${project.name}`,
+    true,
+  );
+  if (!threadId) return res.status(500).json({ error: "could not open conversation" });
+
+  // Seed the opening turn only if the thread has none yet — reopening an existing
+  // conversation just returns its id (the chat is already going).
+  const { count: prior } = await db
+    .from("claude_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("thread_id", threadId);
+  if ((prior ?? 0) === 0) {
+    const opening = buildOpenConversationPrompt({
+      subject: project.subject,
+      audience: project.audience,
+      languages: project.languages ?? ["he"],
+      optionCount: project.option_count ?? 4,
+    });
+    const { error: turnErr } = await enqueueTurn(
+      req.org!.id,
+      req.user!.id,
+      threadId,
+      `${opening}\n${ingestCallback(project.id)}`,
+      `smrtDesign — ${project.name}`,
+    );
+    if (turnErr && turnErr !== "already generating") {
+      await notifyError(req.org!.id, "smrtdesign", { title: "Could not open design conversation", body: turnErr });
+      return res.status(500).json({ error: "could not open conversation" });
+    }
+  }
+
+  await db
+    .from("smrtdesign_projects")
+    .update({ status: "generating", mode: "conversation" })
+    .eq("id", project.id);
+
+  res.status(202).json({ thread_id: threadId, console_path: `/claude?thread=${threadId}` });
+});
+
+// ─── LINK an existing console conversation to this project (option A) ───
+router.post("/design/projects/:id/link-thread", requireAuth, requireOrg, requireApp("smrtdesign"), async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  const threadId = str(req.body?.thread_id, 64);
+  if (!UUID_RE.test(threadId)) return res.status(400).json({ error: "invalid thread_id" });
+
+  const { data: project, error } = await db
+    .from("smrtdesign_projects")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!project) return res.status(404).json({ error: "project not found" });
+
+  // The thread must belong to this org — never link across tenants.
+  const { data: thread, error: tErr } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("id", threadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (tErr) return res.status(500).json({ error: tErr.message });
+  if (!thread) return res.status(404).json({ error: "thread not found" });
+
+  const { error: updErr } = await db
+    .from("smrtdesign_projects")
+    .update({ thread_id: threadId, status: "generating", mode: "conversation" })
+    .eq("id", project.id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+
+  // Tell the linked conversation to post its future renders here.
+  const { error: turnErr } = await enqueueTurn(
+    orgId,
+    req.user!.id,
+    threadId,
+    `${buildLinkThreadPrompt()}\n${ingestCallback(project.id)}`,
+    "smrtDesign — link",
+  );
+  if (turnErr && turnErr !== "already generating") {
+    return res.status(500).json({ error: turnErr });
+  }
+  res.status(202).json({ thread_id: threadId, console_path: `/claude?thread=${threadId}` });
 });
 
 // ─── INGEST AN OPTION (called by the generation/remix run) ───
@@ -397,9 +601,9 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
   if (selInsErr) console.error("[smrtdesign] selection insert failed:", selInsErr.message);
 
   const prompt = buildRemixPrompt({ picks, sources });
-  // startRun sets status=generating; the run posts the combined option (is_combined=true).
+  // startAutoRun posts the combined option (is_combined=true) into the gallery.
   void selection; // selection row created; combined_option_id linkage is a v2+ enhancement
-  return startRun(req, res, project.id, project.thread_id, prompt, `smrtDesign remix — ${project.name}`);
+  return startAutoRun(req, res, project.id, project.thread_id, prompt, `smrtDesign remix — ${project.name}`);
 });
 
 // ─── LOCK an option as the project's chosen design ───────────

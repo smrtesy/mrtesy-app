@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
+import { useOpenTab } from "@/components/platform/layout/OpenTabLink";
 
 const DIMENSIONS = [
   "typography",
@@ -24,6 +25,7 @@ interface ProjectRow {
   languages: string[];
   status: string;
   option_count: number;
+  mode?: string;
 }
 interface OptionRow {
   id: string;
@@ -36,18 +38,30 @@ interface OptionRow {
   image_signed_url: string | null;
 }
 interface ProjectDetail {
-  project: ProjectRow & { audience: string | null };
+  project: ProjectRow & { audience: string | null; thread_id: string | null };
   options: OptionRow[];
+}
+
+interface ThreadLite {
+  id: string;
+  title: string | null;
 }
 
 export function DesignConsole() {
   const t = useTranslations("smrtDesign");
+  const locale = useLocale();
+  const openTab = useOpenTab();
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [picks, setPicks] = useState<Partial<Record<Dimension, string>>>({});
+
+  // Link-existing-conversation (option A) picker
+  const [linking, setLinking] = useState(false);
+  const [threads, setThreads] = useState<ThreadLite[] | null>(null);
+  const [linkThreadId, setLinkThreadId] = useState("");
 
   // New-project form
   const [name, setName] = useState("");
@@ -84,11 +98,13 @@ export function DesignConsole() {
     else setDetail(null);
   }, [selectedId, loadDetail]);
 
-  // Poll while a run is generating.
+  // Poll while a run is generating OR a conversation is active — new renders can
+  // arrive at any time from the console chat (conversation mode keeps status at
+  // 'generating' until an option is locked).
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (detail?.project.status === "generating" && selectedId) {
-      pollRef.current = setInterval(() => void loadDetail(selectedId), 6000);
+      pollRef.current = setInterval(() => void loadDetail(selectedId), 7000);
       return () => {
         if (pollRef.current) clearInterval(pollRef.current);
       };
@@ -121,13 +137,71 @@ export function DesignConsole() {
     }
   }
 
-  async function generate() {
+  /** Primary flow: open (or continue) the interactive design conversation in the
+   *  built-in Claude console. Renders made there land in this gallery. */
+  async function openConversation() {
+    if (!selectedId) return;
+    setBusy(true);
+    try {
+      const { console_path } = await api<{ thread_id: string; console_path: string }>(
+        `/api/design/projects/${selectedId}/open`,
+        { method: "POST" },
+      );
+      await loadDetail(selectedId);
+      openTab(`/${locale}${console_path}`, t("conversationTab"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Secondary flow: fire N options automatically in one background run. */
+  async function generateAuto() {
     if (!selectedId) return;
     setBusy(true);
     try {
       await api(`/api/design/projects/${selectedId}/generate`, { method: "POST" });
       toast.success(t("generationStarted"));
       await loadDetail(selectedId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Option A: load the org's recent Claude conversations to link one. Best-effort
+   *  — the console list requires admin; if it 403s we just fall back to a paste box. */
+  async function toggleLinking() {
+    const next = !linking;
+    setLinking(next);
+    if (next && threads === null) {
+      try {
+        const { threads } = await api<{ threads: ThreadLite[] }>("/api/claude/threads");
+        setThreads(threads);
+      } catch {
+        setThreads([]);
+      }
+    }
+  }
+
+  async function linkThread() {
+    if (!selectedId || !linkThreadId) {
+      toast.error(t("pickThread"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const { console_path } = await api<{ thread_id: string; console_path: string }>(
+        `/api/design/projects/${selectedId}/link-thread`,
+        { method: "POST", body: { thread_id: linkThreadId } },
+      );
+      toast.success(t("linked"));
+      setLinking(false);
+      setLinkThreadId("");
+      await loadDetail(selectedId);
+      openTab(`/${locale}${console_path}`, t("conversationTab"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -164,6 +238,8 @@ export function DesignConsole() {
   }
 
   const options = detail?.options ?? [];
+  const hasThread = Boolean(detail?.project.thread_id);
+  const isConversation = detail?.project.mode !== "auto"; // default/unset = conversation
 
   return (
     <div className="space-y-6">
@@ -236,23 +312,68 @@ export function DesignConsole() {
       {/* Selected project */}
       {detail && (
         <div className="space-y-5">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold">{detail.project.name}</h2>
               <p className="text-sm text-muted-foreground">{detail.project.subject}</p>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">{t(`status.${detail.project.status}`)}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {isConversation && detail.project.status === "generating"
+                  ? t("statusActiveConversation")
+                  : t(`status.${detail.project.status}`)}
+              </span>
+              {/* Primary: open/continue the interactive conversation */}
+              <Button onClick={openConversation} disabled={busy}>
+                {hasThread ? t("continueConversation") : t("openConversation")}
+              </Button>
+              {/* Secondary: auto-generate N options in one run */}
               {detail.project.status !== "generating" && (
-                <Button onClick={generate} disabled={busy}>
-                  {options.length ? t("regenerate") : t("generate")}
+                <Button variant="outline" onClick={generateAuto} disabled={busy}>
+                  {options.length ? t("regenerateAuto") : t("generateAuto")}
                 </Button>
               )}
+              <Button variant="ghost" size="sm" onClick={toggleLinking}>
+                {t("linkExisting")}
+              </Button>
             </div>
           </div>
 
-          {detail.project.status === "generating" && (
-            <p className="text-sm text-muted-foreground">{t("generatingHint")}</p>
+          <p className="text-sm text-muted-foreground">
+            {isConversation ? t("conversationHint") : t("generatingHint")}
+          </p>
+
+          {/* Link an existing conversation (option A) */}
+          {linking && (
+            <div className="space-y-2 rounded-lg border border-border p-4">
+              <h3 className="text-sm font-semibold">{t("linkExistingTitle")}</h3>
+              {threads === null ? (
+                <p className="text-xs text-muted-foreground">{t("loading")}</p>
+              ) : threads.length === 0 ? (
+                <input
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  placeholder={t("threadIdPlaceholder")}
+                  value={linkThreadId}
+                  onChange={(e) => setLinkThreadId(e.target.value.trim())}
+                />
+              ) : (
+                <select
+                  className="w-full rounded-md border border-border bg-background px-2 py-2 text-sm"
+                  value={linkThreadId}
+                  onChange={(e) => setLinkThreadId(e.target.value)}
+                >
+                  <option value="">{t("pickThread")}</option>
+                  {threads.map((th) => (
+                    <option key={th.id} value={th.id}>
+                      {th.title?.trim() || th.id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <Button size="sm" onClick={linkThread} disabled={busy || !linkThreadId}>
+                {t("linkAndOpen")}
+              </Button>
+            </div>
           )}
 
           {/* Gallery */}
