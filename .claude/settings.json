@@ -54,6 +54,26 @@
             "command": ".claude/hooks/research-gate.sh"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/tool-progress-start.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/tool-progress.sh"
+          }
+        ]
       }
     ],
     "SessionStart": [

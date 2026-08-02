@@ -511,13 +511,39 @@ rather than on the product's AI calls. That section was written, and the code
 checks it demands were built, *during the same session that produced the seven
 partial fixes*. Shipping the rule is not following it.
 
-### Step 1 — Real build (not just tsc)
+### Step 1 — Scoped build (build only what the diff can break)
+
+**First scope the build to the diff — do NOT run the full build reflexively.**
+Run:
+
+```
+.claude/hooks/pre-push-scope.sh
+```
+
+It classifies the branch's changed files vs `origin/main` and prints exactly
+which build(s) are needed:
+
+- **`SCOPE: none`** — the diff is only docs / `.claude` / `supabase/migrations`
+  / assets. These physically **cannot** break the Next.js build or the server
+  `tsc` build, so **skip the build entirely** — go straight to the greps/review
+  that apply and then commit + push. (This is the common case for hooks, docs,
+  migrations, and skill edits, and it is why a full `npm install && npm run
+  build` on every push was pure wasted wall-clock — the failure that made web
+  sessions feel stuck.)
+- **`SCOPE: … frontend`** — a file under `src/**` or a build config changed. Run
+  the frontend build below.
+- **`SCOPE: … server`** — a file under `server/**` changed. Run
+  `cd server && npm install --no-audit --no-fund && npm run build`.
+- **`SCOPE: … edge`** — `supabase/functions/**` changed. No local build; the
+  GitHub Action deploys it. Just confirm `npm:`/`jsr:` imports (never `esm.sh`).
+
+Only when the scope includes **frontend**, run:
 
 ```
 npm install --no-audit --no-fund && npm run build
 ```
 
-**`npm run build` is the only authoritative check.** It runs the
+**When it runs, `npm run build` is the only authoritative check.** It runs the
 Next.js production build which combines TypeScript checking, ESLint
 (with `react-hooks/exhaustive-deps`, `@typescript-eslint/no-unused-vars`,
 etc. — rules that catch what tsc alone misses), and JSX/MDX compilation.
@@ -853,7 +879,8 @@ a design spec, an investigation write-up — **commit it to the repo and
 push**, then give the user the GitHub link to the file (on the branch you
 pushed to, e.g. `https://github.com/smrtesy/mrtesy-app/blob/<branch>/docs/<file>.md`).
 A docs-only commit doesn't need the full pre-push build protocol (it
-touches no code) — just commit and push. Do this by default for any plan
+touches no code — `pre-push-scope.sh` reports `SCOPE: none`) — just commit
+and push. Do this by default for any plan
 you write for approval, so the user can read it comfortably before saying
 go.
 
