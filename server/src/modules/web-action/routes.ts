@@ -12,6 +12,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { requireAuth, requireOrg } from "../../middleware";
 import * as bs from "./browser-session";
+import { latestSmsCode, latestEmailCode } from "./code-extract";
+import { storeSecret } from "./vault-store";
 
 const router = Router();
 
@@ -74,6 +76,57 @@ router.get("/web-action/sessions/:id/screenshot", async (req: Request, res: Resp
 router.delete("/web-action/sessions/:id", async (req: Request, res: Response) => {
   const ok = await bs.closeSession(req.params.id, req.user!.id);
   res.json({ ok });
+});
+
+// ── verification-code extraction (email + SMS both land in the platform) ──────
+
+/** GET /web-action/verification/sms[?from=&to=&sinceMs=] — latest inbound SMS code. */
+router.get("/web-action/verification/sms", async (req: Request, res: Response) => {
+  try {
+    const result = await latestSmsCode(req.user!.id, {
+      fromPhone: typeof req.query.from === "string" ? req.query.from : undefined,
+      toPhone: typeof req.query.to === "string" ? req.query.to : undefined,
+      sinceMs: req.query.sinceMs ? Number(req.query.sinceMs) : undefined,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: msg(e) });
+  }
+});
+
+/** GET /web-action/verification/email[?from=&subject=&sinceMinutes=] — latest email code + link. */
+router.get("/web-action/verification/email", async (req: Request, res: Response) => {
+  try {
+    const result = await latestEmailCode(req.user!.id, {
+      fromContains: typeof req.query.from === "string" ? req.query.from : undefined,
+      subjectContains: typeof req.query.subject === "string" ? req.query.subject : undefined,
+      sinceMinutes: req.query.sinceMinutes ? Number(req.query.sinceMinutes) : undefined,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: msg(e) });
+  }
+});
+
+// ── store an extracted key/secret into smrtVault ─────────────────────────────
+
+/** POST /web-action/vault/api-key  Body: { label, secret, url?, username?, notes? } */
+router.post("/web-action/vault/api-key", async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const credential = await storeSecret({
+      userId: req.user!.id,
+      orgId: req.org!.id,
+      label: String(body.label ?? ""),
+      secret: String(body.secret ?? ""),
+      url: typeof body.url === "string" ? body.url : null,
+      username: typeof body.username === "string" ? body.username : null,
+      notes: typeof body.notes === "string" ? body.notes : null,
+    });
+    res.status(201).json({ credential });
+  } catch (e) {
+    res.status(400).json({ error: msg(e) });
+  }
 });
 
 export default router;
