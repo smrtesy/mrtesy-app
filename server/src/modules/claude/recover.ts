@@ -47,6 +47,7 @@
 
 import { db } from "../../db";
 import { executeRun, isRunLive, RUN_TIMEOUT_MS } from "./runner";
+import { dispatchNextWaiting } from "./threads";
 
 /** A run untouched this long with no in-process child is treated as orphaned. Well
  *  above the runner's 20s heartbeat (so a healthy run never trips it) and above a
@@ -72,7 +73,7 @@ async function recoverOrphanedRuns(): Promise<void> {
 
   const { data: candidates, error } = await db
     .from("claude_runs")
-    .select("id, resume_attempts")
+    .select("id, resume_attempts, thread_id, org_id")
     .in("status", ["running", "queued"])
     .lt("updated_at", cutoff)
     .order("updated_at", { ascending: true })
@@ -138,16 +139,28 @@ async function recoverOrphanedRuns(): Promise<void> {
     // one would be dropped. Clear it. The continuation rebuilds context from the DB
     // (the runner's resume-miss path), not from these rows, so nothing is lost.
     const { error: dErr } = await db.from("claude_run_events").delete().eq("run_id", run.id);
-    if (dErr) console.error("[claude/recover] could not clear stale events:", dErr.message);
+    if (dErr) {
+      // Don't re-execute over a surviving partial stream: the re-run's seq 1..N would
+      // collide with it on UNIQUE(run_id, seq) and the whole event batch would be
+      // dropped. The run is already back to 'queued' with a fresh updated_at, so the
+      // next scan retries the delete once it goes stale again (bounded by the attempt
+      // cap). A transient delete error thus costs a cycle, not the turn.
+      console.error("[claude/recover] could not clear stale events, skipping re-exec:", dErr.message);
+      continue;
+    }
 
     console.warn(
       `[claude/recover] resuming orphaned run ${run.id} (attempt ${attempts + 1}/${MAX_RESUME_ATTEMPTS})`,
     );
     // Fire-and-forget: executeRun owns the row's terminal state and never throws at
-    // the caller. A throw here would only be the launch itself failing.
-    void executeRun(run.id).catch((e) =>
-      console.error("[claude/recover] executeRun threw:", e instanceof Error ? e.message : e),
-    );
+    // the caller. Chain the same waiting-queue dispatch the normal launch path uses
+    // (threads.ts) so a turn queued behind this orphaned one runs when it finishes,
+    // instead of waiting for someone to reopen the thread (the GET self-heal).
+    void executeRun(run.id)
+      .then(() => (run.thread_id ? dispatchNextWaiting(run.thread_id, run.org_id) : undefined))
+      .catch((e) =>
+        console.error("[claude/recover] resume/dispatch threw:", e instanceof Error ? e.message : e),
+      );
   }
 }
 
