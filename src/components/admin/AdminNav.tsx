@@ -15,6 +15,7 @@ import {
   DollarSign,
   Globe,
   ShoppingCart,
+  KeyRound,
   Bot,
 } from "lucide-react";
 
@@ -33,6 +34,9 @@ const items = [
   { key: "docs",         href: "docs",           labelKey: "docs",         icon: BookOpen },
   { key: "domain-tracker", href: "domain-tracker", labelKey: "domainTracker", icon: Globe },
   { key: "price-tracker",  href: "price-tracker",  labelKey: "priceTracker",  icon: ShoppingCart },
+  // Managed secrets — one place to add a key, live mirror + propagate to
+  // Railway/Vercel/Supabase. Super-admin only, like the rest of /admin.
+  { key: "secrets",        href: "secrets",        labelKey: "secrets",       icon: KeyRound },
   // Claude runs launched from inside the app (docs/claude-console/plan.md). Lives
   // here rather than in the app sidebar because it is platform-level and gated by
   // the same super-admin check as the rest of /admin, matching the Express

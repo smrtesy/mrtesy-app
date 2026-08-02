@@ -25,7 +25,10 @@ Shared: **Supabase** = Postgres DB + auth. Migrations in `supabase/migrations/`
 (forward-only, 250+ files). Secrets exist **twice** — Railway env for `server/`,
 Supabase secrets for edge functions; rotating a key means updating both. Some
 runtime secrets also live in the DB (`app_secrets`, edited at
-`/admin/apps/<slug>/secrets`, env-var fallback).
+`/admin/apps/<slug>/secrets`, env-var fallback). A separate **managed-secrets**
+registry (`/admin/secrets`, server `modules/admin/secrets/`) is the "add once,
+mirror + propagate to Railway/Vercel/Supabase" tool — design
+`docs/managed-secrets-plan.md`, phase 1 wires Railway.
 
 ## The apps
 
@@ -128,6 +131,10 @@ project: voice/image/video/character/background/storyboard/…, referencing the
 per-type detail row) + `studio_artifact_sources` (the derivation DAG, role-typed
 edges). A trigger projects `experiment_runs` (image/video) into the spine; voice
 projection + DAG population are staged. Design: `docs/studio-production-pipeline.md`.
+Managed secrets: `managed_secrets` (logical key → Vault value id + fingerprint),
+`managed_secret_targets` (one destination per row — provider + env var + drift
+bookkeeping), `secret_sync_log` (append-only audit, never a value) —
+`server/src/modules/admin/secrets/`, design `docs/managed-secrets-plan.md`.
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`
