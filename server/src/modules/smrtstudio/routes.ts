@@ -63,19 +63,19 @@ router.get("/studio/overview", async (req: Request, res: Response) => {
     db
       .from("studio_items")
       .select(
-        "stage_slug,group_key,group_order,group_note_en,position,title_en,status,desc_en,link_url,link_label",
+        "id,stage_slug,group_key,group_order,group_note_en,position,title_en,status,desc_en,link_url,link_label",
       )
       .eq("org_id", orgId)
       .order("group_order")
       .order("position"),
     db
       .from("studio_challenges")
-      .select("stage_slug,position,title_en,solved,detail_en")
+      .select("id,stage_slug,kind,position,title_en,solved,detail_en")
       .eq("org_id", orgId)
       .order("position"),
     db
       .from("studio_outputs")
-      .select("stage_slug,position,out_kind,label_en,meta_en,link_url")
+      .select("id,stage_slug,position,out_kind,label_en,meta_en,link_url")
       .eq("org_id", orgId)
       .order("position"),
     db
@@ -127,6 +127,7 @@ router.get("/studio/overview", async (req: Request, res: Response) => {
         smrtplan_url: s.smrtplan_url,
       },
       items: items.map((it) => ({
+        id: it.id,
         group_key: it.group_key,
         group_order: it.group_order,
         group_note: it.group_note_en,
@@ -137,14 +138,20 @@ router.get("/studio/overview", async (req: Request, res: Response) => {
         link_label: it.link_label,
       })),
       challenges: (chalByStage.get(slug) ?? []).map((c) => ({
+        id: c.id,
+        kind: c.kind,
         problem: c.title_en,
         // `solved` is the authoritative flag from the column — the client must
         // not re-derive it from whether `solution` text happens to be present,
-        // or a solved-but-undocumented challenge would read as unsolved.
+        // or a solved-but-undocumented challenge would read as unsolved. The
+        // editor needs the raw detail even when unsolved, so it is exposed as
+        // `detail`; the read-only view keeps showing `solution` (solved-only).
         solved: !!c.solved,
         solution: c.solved ? c.detail_en : null,
+        detail: c.detail_en,
       })),
       outputs: (outByStage.get(slug) ?? []).map((o) => ({
+        id: o.id,
         kind: o.out_kind,
         label: o.label_en,
         meta: o.meta_en,
@@ -1633,6 +1640,485 @@ router.patch("/studio/projects/:id", async (req: Request, res: Response) => {
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "project not found" });
   res.json({ project: data });
+});
+
+/* ── Operator-console editing (stages / items / challenges / outputs) ────────
+ *
+ * The console at GET /studio/overview is otherwise read-only. These write
+ * endpoints let an org owner/admin (or a super-admin) edit every stage, every
+ * task line, its challenges and outputs, and the ORDER of lines within a stage.
+ *
+ * Every write is org-scoped (the service-role `db` bypasses RLS, so the
+ * `org_id` predicate is explicit on every query) and destructures `{ error }`.
+ * Ordering respects the tables' unique keys — studio_items is unique on
+ * (org_id, stage_slug, group_key, position); studio_challenges on
+ * (org_id, stage_slug, kind, position); studio_outputs on
+ * (org_id, stage_slug, position) — so a reorder is done in two passes (park all
+ * rows at collision-free temporary positions, then write the final positions)
+ * to avoid tripping a unique violation mid-swap.
+ */
+
+const ITEM_STATUS = new Set(["done", "now", "todo"]);
+const STAGE_KIND = new Set(["research", "build"]);
+const OUT_KIND = new Set(["image", "video", "audio", "text", "tool"]);
+const CHAL_KIND = new Set(["expected", "hit"]);
+
+/** owner/admin of the active org, or a platform super-admin. */
+async function canEditConsole(req: Request): Promise<boolean> {
+  if (req.member && (req.member.role === "owner" || req.member.role === "admin")) return true;
+  return isSuperAdmin(req.user!);
+}
+
+/** Trim a string field off the body only when the caller actually sent a
+ *  string — leaves the column untouched otherwise (partial update). */
+function takeString(body: Row, key: string, patch: Row, col = key): void {
+  if (typeof body?.[key] === "string") patch[col] = (body[key] as string).trim();
+}
+
+/** Park every row in `ordered` at a temporary, globally-distinct position, then
+ *  write each row's final ordering fields. Two passes so no intermediate state
+ *  collides with the table's unique (…, position) key. `ordered` MUST be the
+ *  complete set of rows for the scope being reordered. Returns an error or null. */
+async function reorderRows(
+  table: string,
+  orgId: string,
+  ordered: { id: string; patch: Row }[],
+): Promise<{ message: string } | null> {
+  const PARK = 900000;
+  for (let i = 0; i < ordered.length; i++) {
+    const { error } = await db
+      .from(table)
+      .update({ position: PARK + i })
+      .eq("org_id", orgId)
+      .eq("id", ordered[i].id);
+    if (error) return error;
+  }
+  for (const row of ordered) {
+    const { error } = await db
+      .from(table)
+      .update(row.patch)
+      .eq("org_id", orgId)
+      .eq("id", row.id);
+    if (error) return error;
+  }
+  return null;
+}
+
+/* -- stages ---------------------------------------------------------------- */
+
+router.post("/studio/stages", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const slug = typeof req.body?.slug === "string" ? req.body.slug.trim() : "";
+  const nameEn = typeof req.body?.name_en === "string" ? req.body.name_en.trim() : "";
+  if (!slug || !nameEn) return res.status(400).json({ error: "slug and name_en are required" });
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug)) {
+    return res.status(400).json({ error: "slug must be lowercase letters/digits/-/_" });
+  }
+  const kind = STAGE_KIND.has(req.body?.kind) ? req.body.kind : "research";
+  // position: append to the end of the org's stage list.
+  const { data: last, error: posErr } = await db
+    .from("studio_stages")
+    .select("position")
+    .eq("org_id", orgId)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (posErr) return res.status(500).json({ error: posErr.message });
+  const row: Row = {
+    org_id: orgId,
+    slug,
+    position: (last?.position as number | undefined ?? 0) + 1,
+    name_en: nameEn,
+    // he columns are NOT NULL; the console is English-only, so mirror en → he
+    // unless a Hebrew value was explicitly supplied.
+    name_he: typeof req.body?.name_he === "string" && req.body.name_he.trim()
+      ? req.body.name_he.trim()
+      : nameEn,
+    blurb_en: typeof req.body?.blurb_en === "string" ? req.body.blurb_en.trim() : "",
+    blurb_he: typeof req.body?.blurb_he === "string" ? req.body.blurb_he.trim() : "",
+    hue: Number.isFinite(req.body?.hue) ? Math.trunc(req.body.hue) : 210,
+    kind,
+    plan_desc_en: typeof req.body?.plan_desc_en === "string" ? req.body.plan_desc_en.trim() : "",
+    plan_general: ITEM_STATUS.has(req.body?.plan_general) ? req.body.plan_general : "todo",
+    plan_detail: ITEM_STATUS.has(req.body?.plan_detail) ? req.body.plan_detail : "todo",
+    plan_verify: ITEM_STATUS.has(req.body?.plan_verify) ? req.body.plan_verify : "todo",
+    smrtplan_url: typeof req.body?.smrtplan_url === "string" ? req.body.smrtplan_url.trim() : "",
+  };
+  if (!row.blurb_he) row.blurb_he = row.blurb_en;
+  const { data, error } = await db.from("studio_stages").insert(row).select("*").maybeSingle();
+  if (error) {
+    // 23505 = unique_violation on (org_id, slug)
+    if ((error as { code?: string }).code === "23505") {
+      return res.status(409).json({ error: `a stage with slug "${slug}" already exists` });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  res.status(201).json({ stage: data });
+});
+
+router.patch("/studio/stages/:slug", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const patch: Row = {};
+  takeString(req.body, "name_en", patch);
+  takeString(req.body, "name_he", patch);
+  takeString(req.body, "blurb_en", patch);
+  takeString(req.body, "blurb_he", patch);
+  takeString(req.body, "plan_desc_en", patch);
+  takeString(req.body, "smrtplan_url", patch);
+  // An all-whitespace rename is dropped, never written as "" (name_en/he are
+  // NOT NULL and a nameless stage would render blank in the left rail).
+  if (patch.name_en === "") delete patch.name_en;
+  if (patch.name_he === "") delete patch.name_he;
+  if (STAGE_KIND.has(req.body?.kind)) patch.kind = req.body.kind;
+  if (ITEM_STATUS.has(req.body?.plan_general)) patch.plan_general = req.body.plan_general;
+  if (ITEM_STATUS.has(req.body?.plan_detail)) patch.plan_detail = req.body.plan_detail;
+  if (ITEM_STATUS.has(req.body?.plan_verify)) patch.plan_verify = req.body.plan_verify;
+  if (Number.isFinite(req.body?.hue)) patch.hue = Math.trunc(req.body.hue);
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("studio_stages")
+    .update(patch)
+    .eq("org_id", orgId)
+    .eq("slug", req.params.slug)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "stage not found" });
+  res.json({ stage: data });
+});
+
+router.delete("/studio/stages/:slug", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const slug = req.params.slug;
+  // Children key off stage_slug (there is no FK cascade between them), so remove
+  // items/challenges/outputs first, then the stage row itself.
+  for (const table of ["studio_items", "studio_challenges", "studio_outputs"]) {
+    const { error } = await db.from(table).delete().eq("org_id", orgId).eq("stage_slug", slug);
+    if (error) return res.status(500).json({ error: error.message });
+  }
+  const { data, error } = await db
+    .from("studio_stages")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("slug", slug)
+    .select("slug")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "stage not found" });
+  res.json({ ok: true });
+});
+
+/** POST /studio/stages/reorder — body { slugs: string[] } sets each stage's
+ *  position to its index in the array. `position` has no unique constraint on
+ *  studio_stages, so a single pass is safe. */
+router.post("/studio/stages/reorder", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const slugs = Array.isArray(req.body?.slugs) ? req.body.slugs : null;
+  if (!slugs || slugs.some((s: unknown) => typeof s !== "string")) {
+    return res.status(400).json({ error: "slugs: string[] required" });
+  }
+  for (let i = 0; i < slugs.length; i++) {
+    const { error } = await db
+      .from("studio_stages")
+      .update({ position: i + 1 })
+      .eq("org_id", orgId)
+      .eq("slug", slugs[i]);
+    if (error) return res.status(500).json({ error: error.message });
+  }
+  res.json({ ok: true });
+});
+
+/* -- items (task lines) ---------------------------------------------------- */
+
+router.post("/studio/items", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const stageSlug = typeof req.body?.stage_slug === "string" ? req.body.stage_slug.trim() : "";
+  const groupKey = typeof req.body?.group_key === "string" ? req.body.group_key.trim() : "";
+  const titleEn = typeof req.body?.title_en === "string" ? req.body.title_en.trim() : "";
+  if (!stageSlug || !groupKey || !titleEn) {
+    return res.status(400).json({ error: "stage_slug, group_key and title_en are required" });
+  }
+  // Append within the (stage, group): last position + 1.
+  const { data: last, error: posErr } = await db
+    .from("studio_items")
+    .select("position,group_order,group_note_en")
+    .eq("org_id", orgId)
+    .eq("stage_slug", stageSlug)
+    .eq("group_key", groupKey)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (posErr) return res.status(500).json({ error: posErr.message });
+  const row: Row = {
+    org_id: orgId,
+    stage_slug: stageSlug,
+    group_key: groupKey,
+    // Keep the new line in its group's existing lane; a brand-new group starts
+    // after the current groups (caller may override group_order explicitly).
+    group_order: Number.isFinite(req.body?.group_order)
+      ? Math.trunc(req.body.group_order)
+      : (last?.group_order as number | undefined ?? 0),
+    group_note_en: typeof req.body?.group_note_en === "string"
+      ? req.body.group_note_en.trim()
+      : (last?.group_note_en as string | undefined ?? ""),
+    position: (last?.position as number | undefined ?? -1) + 1,
+    title_en: titleEn,
+    status: ITEM_STATUS.has(req.body?.status) ? req.body.status : "todo",
+    desc_en: typeof req.body?.desc_en === "string" ? req.body.desc_en.trim() : "",
+    link_url: typeof req.body?.link_url === "string" ? req.body.link_url.trim() : "",
+    link_label: typeof req.body?.link_label === "string" ? req.body.link_label.trim() : "",
+  };
+  const { data, error } = await db.from("studio_items").insert(row).select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ item: data });
+});
+
+router.patch("/studio/items/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const patch: Row = {};
+  takeString(req.body, "title_en", patch);
+  takeString(req.body, "desc_en", patch);
+  takeString(req.body, "link_url", patch);
+  takeString(req.body, "link_label", patch);
+  takeString(req.body, "group_note_en", patch);
+  if (patch.title_en === "") delete patch.title_en; // title_en is NOT NULL
+  if (ITEM_STATUS.has(req.body?.status)) patch.status = req.body.status;
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("studio_items")
+    .update(patch)
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "item not found" });
+  res.json({ item: data });
+});
+
+router.delete("/studio/items/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const { data, error } = await db
+    .from("studio_items")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "item not found" });
+  res.json({ ok: true });
+});
+
+/** POST /studio/items/reorder — body { items: [{id, group_key, group_order,
+ *  group_note_en, position}] }. MUST carry the full set of item rows for the
+ *  stage being reordered (the client rebuilds it from the loaded overview). */
+router.post("/studio/items/reorder", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const items = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!items) return res.status(400).json({ error: "items[] required" });
+  const ordered: { id: string; patch: Row }[] = [];
+  for (const it of items) {
+    if (typeof it?.id !== "string") return res.status(400).json({ error: "each item needs an id" });
+    const patch: Row = {};
+    if (typeof it.group_key === "string") patch.group_key = it.group_key.trim();
+    if (Number.isFinite(it.group_order)) patch.group_order = Math.trunc(it.group_order);
+    if (typeof it.group_note_en === "string") patch.group_note_en = it.group_note_en.trim();
+    if (Number.isFinite(it.position)) patch.position = Math.trunc(it.position);
+    ordered.push({ id: it.id, patch });
+  }
+  const err = await reorderRows("studio_items", orgId, ordered);
+  if (err) return res.status(500).json({ error: err.message });
+  res.json({ ok: true });
+});
+
+/* -- challenges ------------------------------------------------------------ */
+
+router.post("/studio/challenges", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const stageSlug = typeof req.body?.stage_slug === "string" ? req.body.stage_slug.trim() : "";
+  const titleEn = typeof req.body?.title_en === "string" ? req.body.title_en.trim() : "";
+  if (!stageSlug || !titleEn) {
+    return res.status(400).json({ error: "stage_slug and title_en are required" });
+  }
+  const kind = CHAL_KIND.has(req.body?.kind) ? req.body.kind : "expected";
+  const { data: last, error: posErr } = await db
+    .from("studio_challenges")
+    .select("position")
+    .eq("org_id", orgId)
+    .eq("stage_slug", stageSlug)
+    .eq("kind", kind)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (posErr) return res.status(500).json({ error: posErr.message });
+  const solved = req.body?.solved === true;
+  const detailEn = typeof req.body?.detail_en === "string" ? req.body.detail_en.trim() : "";
+  const row: Row = {
+    org_id: orgId,
+    stage_slug: stageSlug,
+    kind,
+    position: (last?.position as number | undefined ?? -1) + 1,
+    title_en: titleEn,
+    // title_he is NOT NULL — mirror en unless a Hebrew value was supplied.
+    title_he: typeof req.body?.title_he === "string" && req.body.title_he.trim()
+      ? req.body.title_he.trim()
+      : titleEn,
+    solved,
+    detail_en: detailEn,
+    detail_he: typeof req.body?.detail_he === "string" ? req.body.detail_he.trim() : detailEn,
+  };
+  const { data, error } = await db.from("studio_challenges").insert(row).select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ challenge: data });
+});
+
+router.patch("/studio/challenges/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const patch: Row = {};
+  takeString(req.body, "title_en", patch);
+  takeString(req.body, "title_he", patch);
+  takeString(req.body, "detail_en", patch);
+  takeString(req.body, "detail_he", patch);
+  if (patch.title_en === "") delete patch.title_en; // NOT NULL
+  if (patch.title_he === "") delete patch.title_he;
+  if (typeof req.body?.solved === "boolean") patch.solved = req.body.solved;
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("studio_challenges")
+    .update(patch)
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "challenge not found" });
+  res.json({ challenge: data });
+});
+
+router.delete("/studio/challenges/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const { data, error } = await db
+    .from("studio_challenges")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "challenge not found" });
+  res.json({ ok: true });
+});
+
+/** POST /studio/challenges/reorder — body { ids: string[] } within one kind.
+ *  Full set for the scope; two-pass to dodge the (…, kind, position) unique. */
+router.post("/studio/challenges/reorder", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+  if (!ids || ids.some((s: unknown) => typeof s !== "string")) {
+    return res.status(400).json({ error: "ids: string[] required" });
+  }
+  const ordered = ids.map((id: string, i: number) => ({ id, patch: { position: i } as Row }));
+  const err = await reorderRows("studio_challenges", orgId, ordered);
+  if (err) return res.status(500).json({ error: err.message });
+  res.json({ ok: true });
+});
+
+/* -- outputs --------------------------------------------------------------- */
+
+router.post("/studio/outputs", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const stageSlug = typeof req.body?.stage_slug === "string" ? req.body.stage_slug.trim() : "";
+  const labelEn = typeof req.body?.label_en === "string" ? req.body.label_en.trim() : "";
+  if (!stageSlug || !labelEn) {
+    return res.status(400).json({ error: "stage_slug and label_en are required" });
+  }
+  const { data: last, error: posErr } = await db
+    .from("studio_outputs")
+    .select("position")
+    .eq("org_id", orgId)
+    .eq("stage_slug", stageSlug)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (posErr) return res.status(500).json({ error: posErr.message });
+  const row: Row = {
+    org_id: orgId,
+    stage_slug: stageSlug,
+    position: (last?.position as number | undefined ?? -1) + 1,
+    out_kind: OUT_KIND.has(req.body?.out_kind) ? req.body.out_kind : "text",
+    label_en: labelEn,
+    meta_en: typeof req.body?.meta_en === "string" ? req.body.meta_en.trim() : "",
+    link_url: typeof req.body?.link_url === "string" ? req.body.link_url.trim() : "",
+  };
+  const { data, error } = await db.from("studio_outputs").insert(row).select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ output: data });
+});
+
+router.patch("/studio/outputs/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const patch: Row = {};
+  takeString(req.body, "label_en", patch);
+  takeString(req.body, "meta_en", patch);
+  takeString(req.body, "link_url", patch);
+  if (patch.label_en === "") delete patch.label_en; // NOT NULL
+  if (OUT_KIND.has(req.body?.out_kind)) patch.out_kind = req.body.out_kind;
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "nothing to update" });
+  const { data, error } = await db
+    .from("studio_outputs")
+    .update(patch)
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("*")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "output not found" });
+  res.json({ output: data });
+});
+
+router.delete("/studio/outputs/:id", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const { data, error } = await db
+    .from("studio_outputs")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("id", req.params.id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "output not found" });
+  res.json({ ok: true });
+});
+
+/** POST /studio/outputs/reorder — body { ids: string[] } for one stage.
+ *  Full set; two-pass to dodge the (…, position) unique. */
+router.post("/studio/outputs/reorder", async (req: Request, res: Response) => {
+  const orgId = req.org!.id;
+  if (!(await canEditConsole(req))) return res.status(403).json({ error: "forbidden" });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+  if (!ids || ids.some((s: unknown) => typeof s !== "string")) {
+    return res.status(400).json({ error: "ids: string[] required" });
+  }
+  const ordered = ids.map((id: string, i: number) => ({ id, patch: { position: i } as Row }));
+  const err = await reorderRows("studio_outputs", orgId, ordered);
+  if (err) return res.status(500).json({ error: err.message });
+  res.json({ ok: true });
 });
 
 export default router;

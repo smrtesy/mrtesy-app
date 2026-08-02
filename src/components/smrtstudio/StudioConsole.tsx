@@ -23,9 +23,11 @@ import { api } from "@/lib/api/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { useOptionalPaneNav } from "@/lib/panes/nav";
+import { useAppAccess } from "@/contexts/AppAccessContext";
 
 import type {
   StudioItem,
+  StudioOutput,
   StudioOverview,
   StudioStage,
   StudioStatus,
@@ -80,6 +82,14 @@ const ICON: Record<string, string> = {
   flask: '<path d="M9 3h6M10 3v6l-5.2 9A2 2 0 0 0 6.6 21h10.8a2 2 0 0 0 1.8-3L14 9V3"/><path d="M7 15h10"/>',
   coin:
     '<circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M14.6 9.3c-.6-.8-1.6-1.3-2.6-1.3-1.5 0-2.6 1-2.6 2.1s1.1 1.8 2.6 2.1 2.6 1 2.6 2.1-1.1 2.1-2.6 2.1c-1 0-2-.5-2.6-1.3"/>',
+  pencil:
+    '<path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l3 3"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  trash:
+    '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>',
+  up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
 
 const ST_META: Record<StudioStatus, { ic: string; tag: string }> = {
@@ -364,11 +374,41 @@ const CSS = `
   .ss-tab.active{transform:none}
 }
 @media (prefers-reduced-motion:reduce){.ss-app *{transition:none!important}}
+
+/* ── edit mode ───────────────────────────────────────────────────────────── */
+.ss-editbtn{display:inline-flex;align-items:center;gap:7px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);font:inherit;font-size:12.5px;font-weight:650;border-radius:999px;padding:7px 13px;box-shadow:var(--shadow)}
+.ss-editbtn:hover{border-color:hsl(var(--h) var(--sat) var(--lit));color:var(--ink)}
+.ss-editbtn svg{width:15px;height:15px}
+.ss-editbtn.on{background:hsl(var(--h) var(--sat) var(--lit));border-color:hsl(var(--h) var(--sat) var(--lit));color:#fff}
+.ss-editbanner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:9px 13px;border-radius:var(--radius-sm);background:var(--warn-wash);border:1px solid color-mix(in srgb,var(--warn) 34%,var(--line));color:var(--ink);font-size:12px}
+.ss-editbanner .er{color:var(--crit);font-weight:700}
+.ss-editbanner .sp{margin-inline-start:auto;color:var(--muted);font-family:var(--mono);font-size:11px}
+.ss-inp,.ss-ta,.ss-sel{width:100%;font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:7px 9px}
+.ss-inp:focus,.ss-ta:focus,.ss-sel:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+.ss-ta{resize:vertical;min-height:52px;line-height:1.5}
+.ss-sel{cursor:pointer}
+.ss-fld{display:grid;gap:4px;margin-top:9px}
+.ss-fld>label{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.ss-fld-row{display:flex;gap:10px;flex-wrap:wrap}
+.ss-fld-row>.ss-fld{flex:1;min-width:120px}
+.ss-erow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;padding:10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-top:8px}
+.ss-erow .ss-erow-b{min-width:0;display:grid;gap:7px}
+.ss-tools{display:flex;flex-direction:column;gap:4px}
+.ss-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:7px;padding:0}
+.ss-ic:hover{border-color:hsl(var(--h) var(--sat) var(--lit));color:var(--ink)}
+.ss-ic:disabled{opacity:.35;cursor:not-allowed}
+.ss-ic svg{width:15px;height:15px}
+.ss-ic.del:hover{border-color:var(--crit);color:var(--crit)}
+.ss-add{display:inline-flex;align-items:center;gap:6px;cursor:pointer;border:1px dashed var(--line-strong);background:transparent;color:var(--accent-ink);font:inherit;font-size:12px;font-weight:650;border-radius:8px;padding:7px 11px;margin-top:8px}
+.ss-add:hover{border-color:var(--accent);background:var(--accent-wash)}
+.ss-add svg{width:14px;height:14px}
+.ss-navtools{display:flex;gap:4px;padding:4px 0 2px}
+.ss-app .ss-inp[dir],.ss-app .ss-ta[dir]{direction:ltr}
 `;
 
 /* ── small building blocks ───────────────────────────────────────────────── */
 
-function Svg({ paths, className }: { paths: string; className?: string }) {
+function Svg({ paths, className, style }: { paths: string; className?: string; style?: CSSProperties }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -378,6 +418,7 @@ function Svg({ paths, className }: { paths: string; className?: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
+      style={style}
       aria-hidden="true"
       dangerouslySetInnerHTML={{ __html: paths }}
     />
@@ -656,6 +697,539 @@ function FocusView({
   );
 }
 
+/* ── edit mode ───────────────────────────────────────────────────────────── */
+
+/** A mutation runner shared by every editor: `run(fn)` fires the API call, then
+ *  reloads the overview so ids/positions stay authoritative. `busy` disables the
+ *  reorder/add/delete buttons while a write is in flight. */
+type EditApi = { busy: boolean; run: (fn: () => Promise<unknown>) => void };
+
+const RESEARCH_GROUPS: { key: string; order: number; label: string }[] = [
+  { key: "research", order: 1, label: "Research" },
+  { key: "tests", order: 2, label: "Tests" },
+  { key: "decisions", order: 3, label: "Decisions" },
+];
+
+function IconBtn({
+  icon,
+  title,
+  onClick,
+  disabled,
+  danger,
+}: {
+  icon: string;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`ss-ic${danger ? " del" : ""}`}
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <Svg paths={ICON[icon]} />
+    </button>
+  );
+}
+
+/** Text/area field that commits on blur only when the value actually changed —
+ *  so a reload after another edit never fires a redundant PATCH. */
+function Field({
+  label,
+  value,
+  onCommit,
+  textarea,
+  placeholder,
+}: {
+  label?: string;
+  value: string;
+  onCommit: (v: string) => void;
+  textarea?: boolean;
+  placeholder?: string;
+}) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const commit = () => {
+    if (v !== value) onCommit(v);
+  };
+  const inner = textarea ? (
+    <textarea
+      className="ss-ta"
+      dir="ltr"
+      value={v}
+      placeholder={placeholder}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+    />
+  ) : (
+    <input
+      className="ss-inp"
+      dir="ltr"
+      value={v}
+      placeholder={placeholder}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+    />
+  );
+  if (!label) return inner;
+  return (
+    <div className="ss-fld">
+      <label>{label}</label>
+      {inner}
+    </div>
+  );
+}
+
+function StatusSelect({ value, onChange }: { value: StudioStatus; onChange: (v: StudioStatus) => void }) {
+  return (
+    <select className="ss-sel" value={value} onChange={(e) => onChange(e.target.value as StudioStatus)}>
+      <option value="todo">Not started</option>
+      <option value="now">In progress</option>
+      <option value="done">Done</option>
+    </select>
+  );
+}
+
+/** One task line in edit mode: title, description, status, link, reorder, delete. */
+function ItemEditor({
+  item,
+  edit,
+  canUp,
+  canDown,
+  onMove,
+  onPatch,
+  onDelete,
+}: {
+  item: StudioItem;
+  edit: EditApi;
+  canUp: boolean;
+  canDown: boolean;
+  onMove: (dir: "up" | "down") => void;
+  onPatch: (patch: Record<string, unknown>) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="ss-erow">
+      <div className="ss-erow-b">
+        <Field value={item.title} onCommit={(v) => onPatch({ title_en: v })} placeholder="Task title" />
+        <Field
+          value={item.desc}
+          onCommit={(v) => onPatch({ desc_en: v })}
+          textarea
+          placeholder="Description"
+        />
+        <div className="ss-fld-row">
+          <div className="ss-fld" style={{ flex: "0 0 150px" }}>
+            <label>Status</label>
+            <StatusSelect value={item.status} onChange={(v) => onPatch({ status: v })} />
+          </div>
+          <Field label="Link URL" value={item.link_url} onCommit={(v) => onPatch({ link_url: v })} />
+          <Field label="Link label" value={item.link_label} onCommit={(v) => onPatch({ link_label: v })} />
+        </div>
+      </div>
+      <div className="ss-tools">
+        <IconBtn icon="up" title="Move up" disabled={edit.busy || !canUp} onClick={() => onMove("up")} />
+        <IconBtn icon="down" title="Move down" disabled={edit.busy || !canDown} onClick={() => onMove("down")} />
+        <IconBtn icon="trash" title="Delete task" danger disabled={edit.busy} onClick={onDelete} />
+      </div>
+    </div>
+  );
+}
+
+/** The whole focus view, editable: stage header + plan + tasks (grouped, with
+ *  per-line reordering) + challenges + outputs. */
+function StageEditor({
+  stage,
+  index,
+  edit,
+  onBack,
+  onDeleteStage,
+}: {
+  stage: StudioStage;
+  index: number;
+  edit: EditApi;
+  onBack: () => void;
+  onDeleteStage: () => void;
+}) {
+  const slug = stage.slug;
+  const isBuild = stage.kind === "build";
+
+  const patchStage = (patch: Record<string, unknown>) =>
+    edit.run(() => api(`/api/studio/stages/${slug}`, { method: "PATCH", body: patch }));
+
+  const patchItem = (id: string, patch: Record<string, unknown>) =>
+    edit.run(() => api(`/api/studio/items/${id}`, { method: "PATCH", body: patch }));
+  const deleteItem = (id: string) =>
+    edit.run(() => api(`/api/studio/items/${id}`, { method: "DELETE" }));
+  const addItem = (group_key: string, group_order: number, group_note_en: string) =>
+    edit.run(() =>
+      api(`/api/studio/items`, {
+        method: "POST",
+        body: { stage_slug: slug, group_key, group_order, group_note_en, title_en: "New task" },
+      }),
+    );
+
+  // Reorder: recompute position (index within group) for EVERY item so the
+  // payload is the full, self-consistent set the endpoint expects.
+  const sendItemOrder = (items: StudioItem[]) => {
+    const posByGroup = new Map<string, number>();
+    const payload = items.map((it) => {
+      const n = posByGroup.get(it.group_key) ?? 0;
+      posByGroup.set(it.group_key, n + 1);
+      return {
+        id: it.id,
+        group_key: it.group_key,
+        group_order: it.group_order,
+        group_note_en: it.group_note,
+        position: n,
+      };
+    });
+    edit.run(() => api(`/api/studio/items/reorder`, { method: "POST", body: { items: payload } }));
+  };
+
+  const moveItem = (groupKey: string, id: string, dir: "up" | "down") => {
+    // Work on a flat copy; swap the item with its same-group neighbour, keeping
+    // every other row where it is, then re-send the whole stage's ordering.
+    const flat = [...stage.items];
+    const gk = groupKey.toLowerCase();
+    const groupIdx = flat
+      .map((it, i) => (it.group_key.toLowerCase() === gk ? i : -1))
+      .filter((i) => i >= 0);
+    const at = groupIdx.findIndex((i) => flat[i].id === id);
+    const swapWith = dir === "up" ? at - 1 : at + 1;
+    if (swapWith < 0 || swapWith >= groupIdx.length) return;
+    const a = groupIdx[at];
+    const b = groupIdx[swapWith];
+    [flat[a], flat[b]] = [flat[b], flat[a]];
+    sendItemOrder(flat);
+  };
+
+  // Groups to render. Research stages always show the three fixed phases (so an
+  // empty phase can still receive a task); build stages show their own groups.
+  const groups = isBuild
+    ? groupItems(stage.items).map((g) => ({
+        key: g.key,
+        order: g.order,
+        note: g.note,
+        label: g.key,
+        items: g.items,
+      }))
+    : RESEARCH_GROUPS.map((p) => ({
+        key: p.key,
+        order: p.order,
+        note: "",
+        label: p.label,
+        items: stage.items.filter((it) => it.group_key.toLowerCase() === p.key),
+      }));
+
+  return (
+    <>
+      <div className="ss-backrow">
+        <button className="ss-back" type="button" onClick={onBack}>
+          <Svg paths={ICON.back} /> Back to dashboard
+        </button>
+      </div>
+      <div className="ss-panel-head">
+        <div className="kick">Editing · Stage {String(index).padStart(2, "0")}</div>
+        <Field value={stage.name} onCommit={(v) => patchStage({ name_en: v })} placeholder="Stage name" />
+        <div className="ss-fld-row" style={{ marginTop: 9 }}>
+          <div className="ss-fld" style={{ flex: "0 0 160px" }}>
+            <label>Type</label>
+            <select
+              className="ss-sel"
+              value={stage.kind}
+              onChange={(e) => patchStage({ kind: e.target.value })}
+            >
+              <option value="research">Research</option>
+              <option value="build">Build</option>
+            </select>
+          </div>
+          <div className="ss-fld" style={{ flex: "0 0 120px" }}>
+            <label>Hue (0–360)</label>
+            <input
+              key={slug}
+              className="ss-inp"
+              type="number"
+              min={0}
+              max={360}
+              defaultValue={stage.hue}
+              onBlur={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n) && n !== stage.hue) patchStage({ hue: n });
+              }}
+            />
+          </div>
+          <div className="ss-fld" style={{ flex: "0 0 auto", alignSelf: "end" }}>
+            <IconBtn icon="trash" title="Delete this stage" danger disabled={edit.busy} onClick={onDeleteStage} />
+          </div>
+        </div>
+        <div style={{ marginTop: 9 }}>
+          <Field
+            value={stage.blurb}
+            onCommit={(v) => patchStage({ blurb_en: v })}
+            textarea
+            placeholder="Stage blurb"
+          />
+        </div>
+      </div>
+
+      <div className="ss-focus">
+        {/* Plan charter */}
+        <section className="ss-section">
+          <header>
+            <span className="h">
+              <span className="dot" />
+              Plan
+            </span>
+          </header>
+          <div style={{ padding: "12px 14px" }}>
+            <Field
+              value={stage.plan.desc}
+              onCommit={(v) => patchStage({ plan_desc_en: v })}
+              textarea
+              placeholder="What this stage's plan covers"
+            />
+            <div className="ss-fld-row" style={{ marginTop: 9 }}>
+              <div className="ss-fld">
+                <label>General draft</label>
+                <StatusSelect value={stage.plan.general} onChange={(v) => patchStage({ plan_general: v })} />
+              </div>
+              <div className="ss-fld">
+                <label>Detail</label>
+                <StatusSelect value={stage.plan.detail} onChange={(v) => patchStage({ plan_detail: v })} />
+              </div>
+              <div className="ss-fld">
+                <label>Verify ×2</label>
+                <StatusSelect value={stage.plan.verify} onChange={(v) => patchStage({ plan_verify: v })} />
+              </div>
+            </div>
+            <Field
+              label="smrtPlan URL"
+              value={stage.plan.smrtplan_url}
+              onCommit={(v) => patchStage({ smrtplan_url: v })}
+            />
+          </div>
+        </section>
+
+        {/* Tasks & status */}
+        <section className="ss-section">
+          <header>
+            <span className="h">
+              <span className="dot" />
+              Tasks &amp; status
+            </span>
+            <span className="meta">reorder lines with ↑ ↓</span>
+          </header>
+          <div className="ss-groups">
+            {groups.map((g) => (
+              <div className="ss-group" key={g.key}>
+                <div className="g-head">
+                  <span className="g-title">{g.label}</span>
+                  <span className="g-meta">{g.items.length}</span>
+                </div>
+                {isBuild ? (
+                  <div style={{ padding: "0 4px 6px" }}>
+                    <Field
+                      value={g.note}
+                      onCommit={(v) => {
+                        // Rename the group note across all its rows.
+                        for (const it of g.items) patchItem(it.id, { group_note_en: v });
+                      }}
+                      placeholder="Group note (optional)"
+                    />
+                  </div>
+                ) : null}
+                {g.items.map((it, i) => (
+                  <ItemEditor
+                    key={it.id}
+                    item={it}
+                    edit={edit}
+                    canUp={i > 0}
+                    canDown={i < g.items.length - 1}
+                    onMove={(dir) => moveItem(g.key, it.id, dir)}
+                    onPatch={(patch) => patchItem(it.id, patch)}
+                    onDelete={() => deleteItem(it.id)}
+                  />
+                ))}
+                <button
+                  type="button"
+                  className="ss-add"
+                  disabled={edit.busy}
+                  onClick={() => addItem(g.key, g.order, g.note)}
+                >
+                  <Svg paths={ICON.plus} /> Add task
+                </button>
+              </div>
+            ))}
+            {isBuild ? (
+              <button
+                type="button"
+                className="ss-add"
+                disabled={edit.busy}
+                onClick={() => addItem(`Group ${groups.length + 1}`, groups.length + 1, "")}
+              >
+                <Svg paths={ICON.plus} /> Add group
+              </button>
+            ) : null}
+          </div>
+        </section>
+
+        {/* Challenges */}
+        <ChallengesEditor stage={stage} edit={edit} />
+
+        {/* Outputs */}
+        <OutputsEditor stage={stage} edit={edit} />
+      </div>
+    </>
+  );
+}
+
+function ChallengesEditor({ stage, edit }: { stage: StudioStage; edit: EditApi }) {
+  const slug = stage.slug;
+  const list = stage.challenges;
+  const patch = (id: string, body: Record<string, unknown>) =>
+    edit.run(() => api(`/api/studio/challenges/${id}`, { method: "PATCH", body }));
+  const del = (id: string) => edit.run(() => api(`/api/studio/challenges/${id}`, { method: "DELETE" }));
+  const add = () =>
+    edit.run(() =>
+      api(`/api/studio/challenges`, {
+        method: "POST",
+        body: { stage_slug: slug, title_en: "New challenge" },
+      }),
+    );
+  const move = (i: number, dir: "up" | "down") => {
+    const j = dir === "up" ? i - 1 : i + 1;
+    if (j < 0 || j >= list.length) return;
+    const ids = list.map((c) => c.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    edit.run(() => api(`/api/studio/challenges/reorder`, { method: "POST", body: { ids } }));
+  };
+  return (
+    <section className="ss-section">
+      <header>
+        <span className="h">
+          <span className="dot" />
+          Expected challenges
+        </span>
+      </header>
+      <div className="ss-chals">
+        {list.map((c, i) => (
+          <div className="ss-erow" key={c.id}>
+            <div className="ss-erow-b">
+              <Field value={c.problem} onCommit={(v) => patch(c.id, { title_en: v })} placeholder="Challenge" />
+              <div className="ss-fld-row">
+                <div className="ss-fld" style={{ flex: "0 0 150px" }}>
+                  <label>Solved?</label>
+                  <select
+                    className="ss-sel"
+                    value={c.solved ? "1" : "0"}
+                    onChange={(e) => patch(c.id, { solved: e.target.value === "1" })}
+                  >
+                    <option value="0">Open</option>
+                    <option value="1">Solved</option>
+                  </select>
+                </div>
+                <Field label="How it was solved" value={c.detail} onCommit={(v) => patch(c.id, { detail_en: v })} />
+              </div>
+            </div>
+            <div className="ss-tools">
+              <IconBtn icon="up" title="Move up" disabled={edit.busy || i === 0} onClick={() => move(i, "up")} />
+              <IconBtn
+                icon="down"
+                title="Move down"
+                disabled={edit.busy || i === list.length - 1}
+                onClick={() => move(i, "down")}
+              />
+              <IconBtn icon="trash" title="Delete" danger disabled={edit.busy} onClick={() => del(c.id)} />
+            </div>
+          </div>
+        ))}
+        <button type="button" className="ss-add" disabled={edit.busy} onClick={add}>
+          <Svg paths={ICON.plus} /> Add challenge
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function OutputsEditor({ stage, edit }: { stage: StudioStage; edit: EditApi }) {
+  const slug = stage.slug;
+  const list = stage.outputs;
+  const patch = (id: string, body: Record<string, unknown>) =>
+    edit.run(() => api(`/api/studio/outputs/${id}`, { method: "PATCH", body }));
+  const del = (id: string) => edit.run(() => api(`/api/studio/outputs/${id}`, { method: "DELETE" }));
+  const add = () =>
+    edit.run(() =>
+      api(`/api/studio/outputs`, {
+        method: "POST",
+        body: { stage_slug: slug, label_en: "New output", out_kind: "text" },
+      }),
+    );
+  const move = (i: number, dir: "up" | "down") => {
+    const j = dir === "up" ? i - 1 : i + 1;
+    if (j < 0 || j >= list.length) return;
+    const ids = list.map((o) => o.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    edit.run(() => api(`/api/studio/outputs/reorder`, { method: "POST", body: { ids } }));
+  };
+  const kinds: StudioOutput["kind"][] = ["image", "video", "audio", "text", "tool"];
+  return (
+    <section className="ss-section">
+      <header>
+        <span className="h">
+          <span className="dot" />
+          Outputs
+        </span>
+      </header>
+      <div className="ss-chals">
+        {list.map((o, i) => (
+          <div className="ss-erow" key={o.id}>
+            <div className="ss-erow-b">
+              <Field value={o.label} onCommit={(v) => patch(o.id, { label_en: v })} placeholder="Output label" />
+              <div className="ss-fld-row">
+                <div className="ss-fld" style={{ flex: "0 0 130px" }}>
+                  <label>Kind</label>
+                  <select
+                    className="ss-sel"
+                    value={o.kind}
+                    onChange={(e) => patch(o.id, { out_kind: e.target.value })}
+                  >
+                    {kinds.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Field label="Meta" value={o.meta} onCommit={(v) => patch(o.id, { meta_en: v })} />
+                <Field label="Link URL" value={o.link_url} onCommit={(v) => patch(o.id, { link_url: v })} />
+              </div>
+            </div>
+            <div className="ss-tools">
+              <IconBtn icon="up" title="Move up" disabled={edit.busy || i === 0} onClick={() => move(i, "up")} />
+              <IconBtn
+                icon="down"
+                title="Move down"
+                disabled={edit.busy || i === list.length - 1}
+                onClick={() => move(i, "down")}
+              />
+              <IconBtn icon="trash" title="Delete" danger disabled={edit.busy} onClick={() => del(o.id)} />
+            </div>
+          </div>
+        ))}
+        <button type="button" className="ss-add" disabled={edit.busy} onClick={add}>
+          <Svg paths={ICON.plus} /> Add output
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function Dashboard({ overview }: { overview: StudioOverview }) {
   // Headline numbers for the Smart Studio dashboard, per the approved spec
   // (docs/smart-studio-dashboard-stats.md): one flat grid, two conceptual
@@ -815,6 +1389,13 @@ export function StudioConsole() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
+  // Editing is gated to platform admins (same flag the sidebar uses). `busy`
+  // disables reorder/add/delete while a write is in flight; `editError` shows a
+  // small inline banner without tearing down the whole console.
+  const { isAdmin } = useAppAccess();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   // This console forces dir="ltr", but the pane's floating grip follows the
   // pane (app) direction — so in Hebrew it lands over the LTR title (start) and
   // in English over the progress chip (end). Reserve on both inline sides of the
@@ -837,6 +1418,20 @@ export function StudioConsole() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Run one edit mutation, then reload so ids/positions stay authoritative.
+  const run = useCallback(
+    (fn: () => Promise<unknown>) => {
+      setBusy(true);
+      setEditError(null);
+      fn()
+        .then(() => load())
+        .catch((e) => setEditError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setBusy(false));
+    },
+    [load],
+  );
+  const edit: EditApi = { busy, run };
 
   if (loading && !overview) {
     return (
@@ -892,6 +1487,20 @@ export function StudioConsole() {
           </div>
         </div>
         <div className="ss-top-right">
+          {isAdmin ? (
+            <button
+              type="button"
+              className={`ss-editbtn${editing ? " on" : ""}`}
+              onClick={() => {
+                setEditError(null);
+                setEditing((v) => !v);
+              }}
+              title={editing ? "Finish editing" : "Edit stages, tasks and order"}
+            >
+              <Svg paths={editing ? ICON.check : ICON.pencil} />
+              {editing ? "Done" : "Edit"}
+            </button>
+          ) : null}
           <div className="ss-overallchip" title="Overall build progress">
             <span className="lab">Overall progress</span>
             <span className="ss-ring" style={vars({ "--p": overallPct })}>
@@ -901,6 +1510,17 @@ export function StudioConsole() {
         </div>
       </div>
 
+      {editing ? (
+        <div className="ss-editbanner">
+          <Svg paths={ICON.pencil} style={{ width: 15, height: 15 }} />
+          <span>
+            Edit mode — text saves when you click away; use ↑ ↓ to reorder lines. Changes are live.
+          </span>
+          {editError ? <span className="er">· {editError}</span> : null}
+          {busy ? <span className="sp">saving…</span> : null}
+        </div>
+      ) : null}
+
       <div className="ss-shell">
         <nav className="ss-nav" aria-label="Build stages">
           <div className="ss-nav-head">
@@ -909,6 +1529,13 @@ export function StudioConsole() {
           </div>
           {stages.map((st, i) => {
             const isActive = st.slug === selected;
+            const moveStage = (dir: "up" | "down") => {
+              const j = dir === "up" ? i - 1 : i + 1;
+              if (j < 0 || j >= stages.length) return;
+              const slugs = stages.map((s) => s.slug);
+              [slugs[i], slugs[j]] = [slugs[j], slugs[i]];
+              run(() => api("/api/studio/stages/reorder", { method: "POST", body: { slugs } }));
+            };
             return (
               <div
                 key={st.slug}
@@ -942,9 +1569,49 @@ export function StudioConsole() {
                     </span>
                   </span>
                 </button>
+                {editing ? (
+                  <div className="ss-navtools">
+                    <IconBtn
+                      icon="up"
+                      title="Move stage up"
+                      disabled={busy || i === 0}
+                      onClick={() => moveStage("up")}
+                    />
+                    <IconBtn
+                      icon="down"
+                      title="Move stage down"
+                      disabled={busy || i === stages.length - 1}
+                      onClick={() => moveStage("down")}
+                    />
+                  </div>
+                ) : null}
               </div>
             );
           })}
+          {editing ? (
+            <button
+              type="button"
+              className="ss-add"
+              disabled={busy}
+              onClick={() => {
+                const slug = window.prompt(
+                  "New stage slug (lowercase, e.g. sound-design):",
+                  "",
+                );
+                if (!slug) return;
+                const clean = slug.trim().toLowerCase();
+                run(async () => {
+                  const r = await api<{ stage: { slug: string } }>("/api/studio/stages", {
+                    method: "POST",
+                    body: { slug: clean, name_en: "New stage", kind: "research" },
+                  });
+                  setSelected(r.stage.slug);
+                });
+              }}
+            >
+              <Svg paths={ICON.plus} /> Add stage
+            </button>
+          ) : null}
         </nav>
 
         <main
@@ -952,11 +1619,31 @@ export function StudioConsole() {
           style={selectedStage ? vars({ "--h": selectedStage.hue }) : undefined}
         >
           {selectedStage ? (
-            <FocusView
-              stage={selectedStage}
-              index={stages.indexOf(selectedStage) + 1}
-              onBack={() => setSelected(null)}
-            />
+            editing ? (
+              <StageEditor
+                stage={selectedStage}
+                index={stages.indexOf(selectedStage) + 1}
+                edit={edit}
+                onBack={() => setSelected(null)}
+                onDeleteStage={() => {
+                  if (
+                    !window.confirm(
+                      `Delete stage "${selectedStage.name}" and all its tasks, challenges and outputs? This cannot be undone.`,
+                    )
+                  )
+                    return;
+                  const slug = selectedStage.slug;
+                  setSelected(null);
+                  run(() => api(`/api/studio/stages/${slug}`, { method: "DELETE" }));
+                }}
+              />
+            ) : (
+              <FocusView
+                stage={selectedStage}
+                index={stages.indexOf(selectedStage) + 1}
+                onBack={() => setSelected(null)}
+              />
+            )
           ) : (
             <Dashboard overview={overview} />
           )}
