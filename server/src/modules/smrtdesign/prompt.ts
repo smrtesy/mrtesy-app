@@ -81,17 +81,72 @@ export function buildGenerationPrompt(input: GenerationInput): string {
   ].join("\n");
 }
 
+/**
+ * The opening turn of an INTERACTIVE design conversation (v2, mode='conversation').
+ * Unlike buildGenerationPrompt (which renders immediately), this seeds a chat: the
+ * engine greets, restates the brief, and refines it WITH the user before rendering.
+ * The callback (POST each render) is appended by routes.ts, same as the auto path.
+ */
+export function buildOpenConversationPrompt(input: GenerationInput): string {
+  const { subject, audience, languages, optionCount } = input;
+  return [
+    `You are running smrtDesign in INTERACTIVE mode — a design conversation with`,
+    `the user, who is NOT a designer. Follow the design method in`,
+    `docs/design-process.md (§0 the generative engine, §3 the anti-AI gate).`,
+    ``,
+    `The brief so far:`,
+    `- Subject: ${subject}`,
+    audience ? `- Audience: ${audience}` : `- Audience: (not given — ask, or infer)`,
+    `- Languages: ${langLabel(languages)}`,
+    `- Wants about ${optionCount} distinct directions.`,
+    ``,
+    `Your FIRST reply: greet briefly in Hebrew, restate the brief in one line, and`,
+    `ask 2–4 sharp clarifying questions that will most change the design (purpose,`,
+    `feeling/tone, must-haves, what it must NOT look like). Prefer an interactive`,
+    `\`smrtdesign-ask\`… actually use the console's own ask block if available; else`,
+    `plain numbered questions. DO NOT render or screenshot anything yet.`,
+    ``,
+    `Only once the brief is clear — or the user says "קדימה"/"go"/"just design it" —`,
+    `produce the distinct options: each from a DIFFERENT anchor (differ in`,
+    `information-architecture/layout, not just fonts/colors), pass the anti-AI gate,`,
+    `no 01/02/03 cliche, real professional typography (inline @font-face). For each`,
+    `option: self-contained HTML → render in a browser → screenshot with the browser`,
+    `helper → verify with your own eyes (§0 step 8) and fix defects → post it.`,
+    OPTION_BLOCK_SPEC,
+  ].join("\n");
+}
+
+/**
+ * The turn posted when LINKING an existing conversation to a design project (v2,
+ * option A). It tells the engine that, from now on, every design it renders in this
+ * thread should be posted to the project's gallery. The callback is appended by
+ * routes.ts.
+ */
+export function buildLinkThreadPrompt(): string {
+  return [
+    `This conversation is now linked to a smrtDesign project. From now on, whenever`,
+    `you render a design here (HTML → browser → screenshot), ALSO post it to the`,
+    `smrtDesign gallery so it appears for review and remixing — using the curl below,`,
+    `one POST per rendered option, with the \`smrtdesign-option\` JSON block. You do`,
+    `not need to re-render past designs; apply this to new renders from here on.`,
+    OPTION_BLOCK_SPEC,
+  ].join("\n");
+}
+
 export interface RemixInput {
   /** dimension -> the anchor/title of the source option to take it from */
   picks: Partial<Record<Dimension, string>>;
   /** the full spec_json of each source option, keyed by a stable label */
   sources: Record<string, Record<string, unknown>>;
+  /** free-text "other" — an extra instruction the user typed for the combined design */
+  note?: string | null;
 }
 
 export function buildRemixPrompt(input: RemixInput): string {
   const pickLines = DIMENSIONS.map((d) =>
     input.picks[d] ? `- ${d}: take from "${input.picks[d]}"` : `- ${d}: designer's choice (derive from the anchor)`,
   ).join("\n");
+  const note = input.note?.trim();
   return [
     `You are running a smrtDesign REMIX. Compose ONE combined design by taking`,
     `each of the 7 dimensions from the chosen source option below, then RENDER it`,
@@ -100,6 +155,7 @@ export function buildRemixPrompt(input: RemixInput): string {
     `Take each dimension from:`,
     pickLines,
     ``,
+    ...(note ? [`Additional instruction from the user ("other"):`, note, ``] : []),
     `Source specs (JSON):`,
     "```json",
     JSON.stringify(input.sources, null, 2),

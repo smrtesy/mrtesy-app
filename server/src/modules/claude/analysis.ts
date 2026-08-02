@@ -132,12 +132,22 @@ export async function runSplitAnalysis(
     transcriptOf(turns),
   ].join("\n");
 
-  // Decision/analysis (which turns to split into which chats) → strong model,
-  // never downgraded. On the automation account so it never eats the interactive window.
+  // The split only PROPOSES — applySplit is a separate, user-approved step (file
+  // header) — so it runs on the SAME model the thread is open on (the user's choice,
+  // decision 2026-08) rather than a pinned strong model. The human approval gate is
+  // what holds the "model proposes, code confirms" line here, not a forced model.
+  // thread.model null → runOneShot passes no --model → the engine's default, which is
+  // exactly what the thread's own turns run on. Automation account so it never eats
+  // the interactive window.
+  const { data: splitThread } = await db
+    .from("claude_threads")
+    .select("model")
+    .eq("id", threadId)
+    .maybeSingle();
   const reply = await runOneShot(prompt, {
     timeoutMs: 120_000,
     account: AUTOMATION_ACCOUNT,
-    model: BG_MODEL_STRONG,
+    model: splitThread?.model ?? undefined,
     label: "split-analysis",
   });
   const parsed = parseJsonReply(reply) as { topics?: unknown; confidence?: unknown } | null;
@@ -344,8 +354,11 @@ export async function runGroupAnalysis(orgId: string, userId: string | null): Pr
     list,
   ].join("\n");
 
-  // Decision/analysis (grouping threads under super-topics) → strong model, never
-  // downgraded. On the automation account so it never eats the interactive window.
+  // Group analysis APPLIES directly (assigned_by='auto'), unlike split/decompose which
+  // only propose — so a weak model's mistake here is NOT caught by a human gate. And
+  // there is no single "session" to inherit a model from (this is an org-wide pass over
+  // many threads). Both reasons keep it pinned to the strong model. Automation account
+  // so it never eats the interactive window.
   const reply = await runOneShot(prompt, {
     timeoutMs: 120_000,
     account: AUTOMATION_ACCOUNT,
@@ -471,12 +484,20 @@ export async function runDecomposeAnalysis(
     transcriptOf(turns),
   ].join("\n");
 
-  // Decision/analysis (breaking a plan into briefed child chats) → strong model,
-  // never downgraded. On the automation account so it never eats the interactive window.
+  // Decompose only PROPOSES — applyDecompose is a separate, user-approved step — so
+  // like split it runs on the model the thread is open on (the user's choice) rather
+  // than a pinned strong model; the approval gate is the real guard. thread.model null
+  // → engine default (what the thread's own turns use). Automation account so it never
+  // eats the interactive window.
+  const { data: decomposeThread } = await db
+    .from("claude_threads")
+    .select("model")
+    .eq("id", threadId)
+    .maybeSingle();
   const reply = await runOneShot(prompt, {
     timeoutMs: 120_000,
     account: AUTOMATION_ACCOUNT,
-    model: BG_MODEL_STRONG,
+    model: decomposeThread?.model ?? undefined,
     label: "decompose-analysis",
   });
   const parsed = parseJsonReply(reply) as { parts?: unknown } | null;

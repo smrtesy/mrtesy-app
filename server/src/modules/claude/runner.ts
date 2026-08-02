@@ -49,6 +49,33 @@ const TOKEN_APP_SLUG = "smrttask";
 const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
+ * Supabase migration credentials — what lets a run APPLY a migration it wrote, not
+ * just write the file (the additive path a repo run applies itself, and the
+ * destructive-apply run enqueued after human approval).
+ *
+ * The apply mechanism is the Supabase Management API `POST /v1/projects/{ref}/
+ * database/query` — the SAME endpoint the platform already uses to run migrations
+ * (the Supabase MCP), reached with a personal access token. It is deliberately NOT
+ * `supabase db push`: this repo's local `supabase/migrations/` filenames are disjoint
+ * from the remote `schema_migrations` history (the history was stamped by the MCP with
+ * its own versions — only ~9 of 260 local files overlap), so `db push` would either
+ * fail on out-of-order versions or, if forced, re-run ~250 historical migrations —
+ * dozens of them destructive — against production. The Management API applies ONLY the
+ * one file's SQL a run passes it, sidestepping that entirely, and needs only the access
+ * token (no db password). The ref matches `project_id` in `supabase/config.toml`; it is
+ * not a secret, so it is a default here (overridable by a SUPABASE_PROJECT_ID
+ * app_secret) rather than required.
+ *
+ * Trade-off of the query endpoint: unlike the MCP's apply_migration, it does NOT stamp
+ * `supabase_migrations.schema_migrations`, so a console-applied migration won't show in
+ * `list_migrations`. Intentional here — the repo's history is disjoint from that table
+ * already (above), so the migration file in git is the record; writing a version row
+ * would invent yet another scheme. Nothing in the codebase reads schema_migrations. */
+const SUPABASE_TOKEN_KEY = "SUPABASE_ACCESS_TOKEN";
+const SUPABASE_PROJECT_ID_KEY = "SUPABASE_PROJECT_ID";
+const SUPABASE_PROJECT_REF_DEFAULT = "exjnlghuzuvqedlltztz";
+
+/**
  * A SECOND, independent Claude subscription account, dedicated to automated
  * background work.
  *
@@ -646,6 +673,24 @@ async function executeRunBody(runId: string): Promise<void> {
     if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
   }
 
+  // Supabase migration credentials. Without the access token a run can WRITE a
+  // migration file but has no way to APPLY it (the missing plumbing this fixes). The
+  // apply goes through the Management API query endpoint (see the constant's doc), so
+  // only the access token is needed — no db password. Injected only when the token
+  // exists, so a project that hasn't set it degrades to "can't apply, ask the user"
+  // (composePrompt phrases that honestly via the same check). The token is added to
+  // redactSecrets below so a run's `env`/`curl -v`/stack trace can't leak it into the
+  // stored transcript. The apply run enqueued after a destructive approval runs through
+  // this same path, so it is covered by one injection point.
+  const supabaseTokenClean =
+    (await getAppSecret(TOKEN_APP_SLUG, SUPABASE_TOKEN_KEY, SUPABASE_TOKEN_KEY))?.trim() || null;
+  if (supabaseTokenClean) {
+    env.SUPABASE_ACCESS_TOKEN = supabaseTokenClean;
+    env.SUPABASE_PROJECT_ID =
+      (await getAppSecret(TOKEN_APP_SLUG, SUPABASE_PROJECT_ID_KEY, SUPABASE_PROJECT_ID_KEY))?.trim() ||
+      SUPABASE_PROJECT_REF_DEFAULT;
+  }
+
   // App access — a real short-lived session for the launching user, minted fresh
   // per turn, so the run can call the platform's own API the way the frontend does
   // (the env preamble in composePrompt tells it how). Minted every turn for every
@@ -745,8 +790,8 @@ async function executeRunBody(runId: string): Promise<void> {
     if (run.model) a.push("--model", run.model);
     if (run.effort) a.push("--effort", run.effort);
     // In a cloned workspace the run needs full agency: edit files, run the build,
-    // git-merge to main, and run `supabase db push` for migrations — the whole
-    // developer loop. Print mode cannot answer a permission prompt (an un-answerable
+    // git-merge to main, and apply a migration (curl to the Supabase Management API) —
+    // the whole developer loop. Print mode cannot answer a permission prompt (an un-answerable
     // prompt is a denial), so anything short of bypassPermissions would silently block
     // shell and leave a repo run able only to read/edit. The operator chose "full
     // access, like a developer on the team" (autonomy-safety-gate.md), so repo runs
@@ -796,15 +841,16 @@ async function executeRunBody(runId: string): Promise<void> {
 
   // Scrub EVERY secret this run's child holds — not just the GitHub token. The child
   // env also carries the shared internal secret (approval-gate callback), the
-  // subscription OAuth token, and the minted app-access session token, and a run with
-  // full shell can echo any of them (an accidental `env`, a curl -v, a stack trace).
-  // These rows are the permanent transcript, so all of them are replaced with ***
-  // before anything is stored. redact is a no-op for a null/empty value, so an
-  // unconfigured secret costs nothing here.
+  // subscription OAuth token, the minted app-access session token, and — for migration
+  // runs — the Supabase access token. A run with full shell can echo any of them (an
+  // accidental `env`, a curl -v, a stack trace, git printing a tokenised URL). These
+  // rows are the permanent transcript, so all of them are replaced with *** before
+  // anything is stored. redact is a no-op for a null/empty value, so an unconfigured
+  // secret costs nothing here.
   const redactSecrets = (s: string): string =>
     redact(
-      redact(redact(redact(s, ghToken), internalSecret || null), token),
-      appAccess?.token ?? null,
+      redact(redact(redact(redact(s, ghToken), internalSecret || null), token), appAccess?.token ?? null),
+      supabaseTokenClean,
     );
 
   const flush = async () => {
