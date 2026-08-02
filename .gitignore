@@ -52,3 +52,6 @@ android-app/app/google-services.json
 
 # Research-protocol runtime state (active plan, counters, waiver log, archives).
 .claude/research/
+
+# page-check harness runtime artifacts (browser screenshots + temp env backup)
+.page-check/

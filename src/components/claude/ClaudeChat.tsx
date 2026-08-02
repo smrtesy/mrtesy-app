@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslations, useLocale } from "next-intl";
 import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronRight,
@@ -129,6 +130,9 @@ interface TurnEvent {
   kind: string;
   text: string | null;
   tool_name: string | null;
+  /** When the event was stored — the live status line reads the newest one to name
+   *  the current activity. */
+  created_at?: string;
 }
 
 interface Turn {
@@ -152,6 +156,14 @@ interface Turn {
   output_tokens: number | null;
   duration_ms: number | null;
   created_at: string;
+  /** When the engine actually started this turn (null until it leaves 'queued') —
+   *  the live status line's elapsed clock counts from here. */
+  started_at?: string | null;
+  /** Bumped by the runner's ~20s heartbeat while the turn runs, so its age is how
+   *  the live status line tells an active turn from an orphaned one. */
+  updated_at?: string | null;
+  /** How many times the recoverer auto-continued this turn after a restart. */
+  resume_attempts?: number | null;
   events: TurnEvent[];
   attachments: {
     id: string;
@@ -819,7 +831,7 @@ export function ClaudeChat() {
               className="group flex min-w-0 flex-1 items-center gap-1.5 text-start"
               title={thread ? t("rename") : undefined}
             >
-              <span className="truncate text-sm font-medium" dir="auto">
+              <span className="line-clamp-2 break-words text-sm font-medium" dir="auto">
                 {title}
               </span>
               {thread && (
@@ -1065,6 +1077,9 @@ export function ClaudeChat() {
                 // Returns the send promise so an interactive block can revert its
                 // "sent" latch if the turn fails to queue (send rethrows on error).
                 (message) => send(message, []),
+                // The live status line's "stop" — cancels the executing turn (and,
+                // for an orphaned row, clears it so the screen stops polling).
+                () => void stop(),
               )}
             </div>
           )}
@@ -1196,7 +1211,7 @@ function ThreadRow({
         active && "bg-muted",
       )}
     >
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 truncate text-start text-xs" dir="auto">
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 line-clamp-2 break-words text-start text-xs" dir="auto">
         {thread.title?.trim() || t("untitled")}
       </button>
       <button
@@ -1289,6 +1304,7 @@ function renderTurns(
   openThread: (id: string) => void,
   onCancelWaiting: (id: string) => void,
   onAction: (message: string) => Promise<void> | void,
+  onStop: () => void,
 ): ReactNode[] {
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
@@ -1321,6 +1337,7 @@ function renderTurns(
           onCancelWaiting={onCancelWaiting}
           isLast={i === lastLiveIndex}
           onAction={onAction}
+          onStop={onStop}
         />,
       );
       if (turn.status === "done") seenPriorDone = true;
@@ -1434,12 +1451,124 @@ function AccountSwitcher({
 }
 
 /** One exchange: what you said, then what came back. */
+/** After this much silence from a RUNNING turn, the live line flags it as possibly
+ *  stuck. The runner pings every ~20s, so three missed pings ≈ a dead process. The
+ *  server recoverer is the real fix (it re-runs the turn); this is the honest UI
+ *  ahead of it. */
+const STALL_NOTE_MS = 65_000;
+
+/** A duration as a compact m:ss / h:mm:ss clock — language-neutral, rendered LTR. */
+function clockFmt(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+/** The one detail worth showing for a tool call — the command, file, or query it
+ *  ran on — pulled defensively from the stored tool input. */
+function toolDetail(ev: TurnEvent): string | null {
+  if (!ev.text) return null;
+  try {
+    const o = JSON.parse(ev.text) as Record<string, unknown>;
+    const v = o.description ?? o.command ?? o.file_path ?? o.path ?? o.pattern ?? o.query ?? o.url;
+    if (typeof v === "string" && v.trim()) return v.trim().replace(/\s+/g, " ").slice(0, 70);
+  } catch {
+    // Not JSON (a plain-text tool input) — the tool name alone is enough.
+  }
+  return null;
+}
+
+/** Name what the turn is doing right now, from its newest stored event. */
+function activityLabel(turn: Turn, t: ReturnType<typeof useTranslations>): string {
+  const ev = turn.events.length > 0 ? turn.events[turn.events.length - 1] : null;
+  if (!ev) return t("live.starting");
+  if (ev.kind === "tool_use") {
+    const name = ev.tool_name ?? "?";
+    const detail = toolDetail(ev);
+    return detail ? t("live.toolWith", { name, detail }) : t("live.tool", { name });
+  }
+  if (ev.kind === "assistant") return t("live.writing");
+  if (ev.kind === "tool_result") return t("live.reading");
+  return t("live.working");
+}
+
+/**
+ * A Claude-Code-style live status line for a turn in flight: what it is doing now,
+ * how long it has been running, how many steps it has taken — refreshed on every
+ * poll (~1s while live). A 'queued' turn shows a plain "starting" line (it has no
+ * process yet). A 'running' turn whose heartbeat (updated_at) has gone quiet past
+ * STALL_NOTE_MS gets a "no response — maybe stuck" note with a stop affordance; the
+ * server recoverer will re-run it on its own, but this tells the user what is (not)
+ * happening in the meantime.
+ */
+function LiveRunStatus({ turn, onStop }: { turn: Turn; onStop: () => void }) {
+  const t = useTranslations("claudeChat");
+
+  if (turn.status !== "running") {
+    // queued — dispatched but not yet started (or just re-queued by the recoverer).
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin shrink-0" />
+        <span>{t("live.starting")}</span>
+      </p>
+    );
+  }
+
+  const now = Date.now();
+  const startMs = turn.started_at
+    ? Date.parse(turn.started_at)
+    : Date.parse(turn.created_at);
+  const beatMs = turn.updated_at ? Date.parse(turn.updated_at) : startMs;
+  const elapsed = Number.isFinite(startMs) ? now - startMs : 0;
+  const idle = Number.isFinite(beatMs) ? now - beatMs : 0;
+  const steps = turn.events.length;
+  const resumed = (turn.resume_attempts ?? 0) > 0;
+  const stalled = idle > STALL_NOTE_MS;
+
+  return (
+    <div className="space-y-1">
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground" dir="auto">
+        <span className="flex items-center gap-1.5">
+          <Loader2 className="size-3.5 animate-spin shrink-0" />
+          <span>{activityLabel(turn, t)}</span>
+        </span>
+        <span dir="ltr" className="tabular-nums text-muted-foreground/70">
+          {clockFmt(elapsed)}
+        </span>
+        {steps > 0 && (
+          <span className="text-muted-foreground/70">· {t("live.steps", { n: steps })}</span>
+        )}
+        {resumed && (
+          <span className="text-muted-foreground/70">· {t("live.resumed")}</span>
+        )}
+      </p>
+      {stalled && (
+        <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-500" dir="auto">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span>{t("live.noOutput", { d: clockFmt(idle) })}</span>
+          <button
+            type="button"
+            onClick={onStop}
+            className="rounded px-1 underline-offset-2 hover:underline"
+          >
+            {t("live.stopHint")}
+          </button>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function TurnView({
   turn,
   hadPriorDoneTurn,
   onCancelWaiting,
   isLast,
   onAction,
+  onStop,
 }: {
   turn: Turn;
   hadPriorDoneTurn: boolean;
@@ -1450,6 +1579,9 @@ function TurnView({
   /** Send a follow-up turn when the user answers an interactive block. Returns
    *  the send promise so a block can revert its latch if the turn fails. */
   onAction: (message: string) => Promise<void> | void;
+  /** Stop the executing turn — used by the live status line's "stop" affordance
+   *  when a run looks stalled. */
+  onStop: () => void;
 }) {
   const t = useTranslations("claudeChat");
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -1618,12 +1750,7 @@ function TurnView({
             </div>
           )}
 
-          {live && (
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />
-              {t("thinking")}
-            </p>
-          )}
+          {live && <LiveRunStatus turn={turn} onStop={onStop} />}
 
           {/* Queued behind the live turn — it will run on its own; the one action
               it offers is leaving the line. */}

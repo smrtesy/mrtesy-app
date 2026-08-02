@@ -149,6 +149,58 @@ export async function mintAppAccess(userId: string): Promise<AppAccess | null> {
   }
 }
 
+export interface BrowserSession {
+  /** The minted user access token (JWT) — same value carried inside the cookies. */
+  token: string;
+  /** The app auth cookie(s), ready to install into a browser context. */
+  cookies: { name: string; value: string }[];
+}
+
+/**
+ * Mint a short-lived REAL session for `userId` and serialize it into the app's
+ * auth cookie — the same generateLink+verifyOtp path as mintAppAccess, but WITHOUT
+ * the `browser`-field gate on resolveAppUrl(). A locally-run copy of the frontend
+ * (page-check: driving the *changed* branch as the logged-in user) points the
+ * browser at localhost, so the frontend origin the backend happens to know is
+ * irrelevant — only the cookie name/value (a project-scoped JWT) matter, and
+ * sessionCookies() needs just the Supabase URL. Returns null on ANY failure.
+ */
+export async function mintSessionCookies(userId: string): Promise<BrowserSession | null> {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceKey) return null;
+
+  try {
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: userData, error: uErr } = await admin.auth.admin.getUserById(userId);
+    const email = userData?.user?.email;
+    if (uErr || !email) return null;
+
+    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+      type: "magiclink",
+      email,
+    });
+    if (linkError || !linkData) return null;
+
+    const { data: session, error: verifyError } = await admin.auth.verifyOtp({
+      token_hash: linkData.properties.hashed_token,
+      type: "magiclink",
+    });
+    if (verifyError || !session.session) return null;
+
+    return {
+      token: session.session.access_token,
+      cookies: sessionCookies(supabaseUrl, session.session),
+    };
+  } catch (e) {
+    console.error("[claude/app-access] mintSessionCookies failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 /**
  * Revoke a minted session once its run ended, so long conversations don't
  * accumulate live auth sessions (one per turn, each valid ~1h).

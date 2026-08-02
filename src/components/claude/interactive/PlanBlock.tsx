@@ -13,7 +13,7 @@
  * has already been sent, so history shows the steps as a static numbered list.
  */
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Check, Plus, Trash2, GripVertical } from "lucide-react";
 
@@ -30,6 +30,59 @@ let ROW_SEQ = 0;
 function makeRow(text: string): Row {
   ROW_SEQ += 1;
   return { key: `r${ROW_SEQ}`, text };
+}
+
+/**
+ * One step's text field. A textarea, not an input, so a long step wraps onto as
+ * many lines as it needs and stays fully visible — never truncated or scrolled
+ * sideways (the point matters most in the narrow side-drawer). It auto-grows to
+ * fit its content on every change and on first paint.
+ */
+function StepInput({
+  value,
+  onChange,
+  disabled,
+  placeholder,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+  disabled: boolean;
+  placeholder: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+  // Grow to fit on every content change.
+  useEffect(() => {
+    resize();
+  }, [value, resize]);
+  // Re-measure when the field becomes visible again. Inside the side-drawer the
+  // hosting iframe is display:none while closed, so a step that first mounts
+  // then (scrollHeight 0) would stay 0px on reopen — [value] alone never fires.
+  // A ResizeObserver catches the moment layout returns.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => resize());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [resize]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      dir="auto"
+      rows={1}
+      placeholder={placeholder}
+      className="min-w-0 flex-1 resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-2 py-1 text-sm leading-relaxed outline-none hover:border-border focus:border-primary focus:bg-background"
+    />
+  );
 }
 
 export function PlanBlock({
@@ -107,18 +160,16 @@ export function PlanBlock({
 
       <div className="flex flex-col gap-1">
         {rows.map((row, i) => (
-          <div key={row.key} className="group flex items-center gap-1.5">
-            <span className="flex w-5 shrink-0 justify-center text-[11px] text-muted-foreground">
+          <div key={row.key} className="group flex items-start gap-1.5">
+            <span className="mt-1.5 flex w-5 shrink-0 justify-center text-[11px] text-muted-foreground">
               {i + 1}
             </span>
-            <GripVertical className="size-3.5 shrink-0 text-muted-foreground/40" />
-            <input
+            <GripVertical className="mt-1.5 size-3.5 shrink-0 text-muted-foreground/40" />
+            <StepInput
               value={row.text}
-              onChange={(e) => edit(row.key, e.target.value)}
+              onChange={(text) => edit(row.key, text)}
               disabled={disabled}
-              dir="auto"
               placeholder={t("interactive.stepPlaceholder")}
-              className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm outline-none hover:border-border focus:border-primary focus:bg-background"
             />
             <button
               type="button"
@@ -126,7 +177,7 @@ export function PlanBlock({
               disabled={disabled}
               aria-label={t("interactive.addStep")}
               title={t("interactive.addStep")}
-              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-primary group-hover:opacity-100 disabled:hidden"
+              className="mt-0.5 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-primary group-hover:opacity-100 disabled:hidden"
             >
               <Plus className="size-3.5" />
             </button>
@@ -136,7 +187,7 @@ export function PlanBlock({
               disabled={disabled}
               aria-label={t("interactive.deleteStep")}
               title={t("interactive.deleteStep")}
-              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100 disabled:hidden"
+              className="mt-0.5 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100 disabled:hidden"
             >
               <Trash2 className="size-3.5" />
             </button>

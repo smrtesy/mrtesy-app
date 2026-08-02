@@ -25,9 +25,11 @@ import messagesRouter from "./routes/messages";
 import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
-import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
+import { webActionRouter, startIdleSweeper as startWebActionSweeper } from "./modules/web-action";
+import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter, driveCatalogRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
+import smrtdesignRouter from "./modules/smrtdesign";
 import smrtreachRouter, { unsubscribeRouter as smrtreachUnsubscribeRouter, publicRouter as smrtreachPublicRouter } from "./modules/smrtreach";
 import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as smrtbotWebRouter, jobsRouter as smrtbotJobsRouter, initBaileysConnections } from "./modules/smrtbot";
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
@@ -35,7 +37,7 @@ import smrtstudioRouter, { jobsRouter as smrtstudioJobsRouter } from "./modules/
 import correctionsJobsRouter from "./modules/smrttask/corrections/jobs";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
-import claudeRouter, { claudeActionM2MRouter } from "./modules/claude";
+import claudeRouter, { claudeActionM2MRouter, startClaudeRunRecovery } from "./modules/claude";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -172,6 +174,12 @@ app.use(correctionsJobsRouter);
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", claudeSessionRouter);
 
+// Google Drive catalog scanner — x-cron-secret guarded (kicked by this session
+// and self-draining server-side). Walks a shared Drive subtree into
+// public.drive_catalog. Mounted before the auth guards like the other machine
+// routers.
+app.use("/api", driveCatalogRouter);
+
 // smrtPlan Claude Code auto session report — x-cron-secret guarded (a Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", smrtplanSessionReportRouter);
@@ -191,6 +199,7 @@ app.use("/api", searchCronRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
+app.use("/api", webActionRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
 app.use("/api", smrtcrmRouter);
@@ -200,6 +209,7 @@ app.use("/api", smrtplanRouter);
 app.use("/api", smrtstudioRouter);
 app.use("/api", smrtvaultRouter);
 app.use("/api", smrtinfoRouter);
+app.use("/api", smrtdesignRouter);
 app.use("/api", claudeRouter);
 // The in-app Claude's machine-to-machine gate (destructive-migration approval),
 // gated by the shared internal secret rather than a JWT — mounted alongside the
@@ -279,6 +289,9 @@ function ensureChromium(): void {
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
   ensureChromium();
+  // web-action: sweep idle browser sessions so a walked-away signup can't hold
+  // a Chromium on the host forever. No-op until a session is created.
+  startWebActionSweeper();
   // Seed the global-search navigation destinations so settings/pages search
   // works immediately after a deploy. Best-effort, non-blocking; skips when
   // already seeded (see ensureDestinationsIndexed).
@@ -291,6 +304,11 @@ app.listen(PORT, HOST, () => {
   void initBaileysConnections().catch((e) =>
     console.error("[startup] initBaileysConnections failed:", e),
   );
+  // Continue Claude console turns whose in-process child died with a restarted
+  // container: find runs stuck 'running'/'queued' with no live process and
+  // re-execute them (context rebuilt from our DB). Runs on the subscription — no
+  // paid tokens. Assumes a single replica, same as the Baileys note above.
+  startClaudeRunRecovery();
 });
 
 // Surface unhandled errors so Railway logs show them instead of a silent crash

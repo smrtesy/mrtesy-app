@@ -49,6 +49,33 @@ const TOKEN_APP_SLUG = "smrttask";
 const TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
+ * Supabase migration credentials — what lets a run APPLY a migration it wrote, not
+ * just write the file (the additive path a repo run applies itself, and the
+ * destructive-apply run enqueued after human approval).
+ *
+ * The apply mechanism is the Supabase Management API `POST /v1/projects/{ref}/
+ * database/query` — the SAME endpoint the platform already uses to run migrations
+ * (the Supabase MCP), reached with a personal access token. It is deliberately NOT
+ * `supabase db push`: this repo's local `supabase/migrations/` filenames are disjoint
+ * from the remote `schema_migrations` history (the history was stamped by the MCP with
+ * its own versions — only ~9 of 260 local files overlap), so `db push` would either
+ * fail on out-of-order versions or, if forced, re-run ~250 historical migrations —
+ * dozens of them destructive — against production. The Management API applies ONLY the
+ * one file's SQL a run passes it, sidestepping that entirely, and needs only the access
+ * token (no db password). The ref matches `project_id` in `supabase/config.toml`; it is
+ * not a secret, so it is a default here (overridable by a SUPABASE_PROJECT_ID
+ * app_secret) rather than required.
+ *
+ * Trade-off of the query endpoint: unlike the MCP's apply_migration, it does NOT stamp
+ * `supabase_migrations.schema_migrations`, so a console-applied migration won't show in
+ * `list_migrations`. Intentional here — the repo's history is disjoint from that table
+ * already (above), so the migration file in git is the record; writing a version row
+ * would invent yet another scheme. Nothing in the codebase reads schema_migrations. */
+const SUPABASE_TOKEN_KEY = "SUPABASE_ACCESS_TOKEN";
+const SUPABASE_PROJECT_ID_KEY = "SUPABASE_PROJECT_ID";
+const SUPABASE_PROJECT_REF_DEFAULT = "exjnlghuzuvqedlltztz";
+
+/**
  * A SECOND, independent Claude subscription account, dedicated to automated
  * background work.
  *
@@ -230,6 +257,28 @@ const HEBREW_DIRECTIVE =
 const running = new Map<string, ReturnType<typeof spawn>>();
 
 /**
+ * Runs THIS process has taken responsibility for, from the first line of
+ * executeRun until it returns — a superset of `running` that also covers the
+ * pre-spawn window (cloning the repo, minting app access) before a child exists.
+ * The recoverer (recover.ts) reads it through isRunLive to know a run is being
+ * handled here and must not be treated as orphaned, even mid-clone.
+ */
+const inFlight = new Set<string>();
+
+/**
+ * Is this run being executed by THIS process right now? True from the moment
+ * executeRun is entered (even before the child spawns) until it returns. In-memory,
+ * so it answers only for this process — which is exactly what the recoverer needs:
+ * a run NOT live here, stuck `running`, is a run whose process died (a restart), so
+ * it is safe to re-execute. The single-instance assumption is the same one the
+ * cancel path documents above; a horizontally-scaled backend would need a
+ * cross-instance signal (see recover.ts).
+ */
+export function isRunLive(runId: string): boolean {
+  return inFlight.has(runId) || running.has(runId);
+}
+
+/**
  * Stop a turn the user asked to stop. Returns false when this process has no live
  * child for that id — the caller answers honestly instead of claiming success.
  */
@@ -245,8 +294,19 @@ export function cancelRun(runId: string): boolean {
 
 /** Hard ceiling on a single run, so a hung process can't occupy the host forever. */
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+/** The effective per-run ceiling, honoring the env override. Exported so the
+ *  recoverer can reason about it (a live run is SIGKILLed by this, so anything
+ *  stuck far past it has no process behind it). */
+export const RUN_TIMEOUT_MS = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 /** How long a timed-out child gets to exit on SIGTERM before it is SIGKILLed. */
 const SIGKILL_GRACE_MS = 10_000;
+/** Liveness ping: while a child runs, its claude_runs.updated_at is bumped this
+ *  often even when the stream is quiet (a long tool call emits no events). That
+ *  turns updated_at into a true "process alive" signal — the UI's live status line
+ *  reads it to tell an active run from a dead one, and the recoverer uses the same
+ *  staleness to decide a run was orphaned by a restart. 20s is frequent enough that
+ *  a healthy run never looks stale, cheap enough to be negligible. */
+const HEARTBEAT_MS = 20_000;
 /** Events are flushed in batches — a write per event would serialize the stream.
  *  Tuned down from 25/1000ms to 8/500ms so streamed output reaches the DB (and the
  *  polling UI) about twice as fast — the perceived-speed win. Still a batch, so a
@@ -433,6 +493,11 @@ function usageFromResult(result: Record<string, unknown> | null) {
  * the finally reach a workspace the inner function created.
  */
 export async function executeRun(runId: string): Promise<void> {
+  // Claim the run for THIS process from the very first line — before the clone, the
+  // app-access mint, anything — so the recoverer never mistakes a run we are setting
+  // up for an orphaned one and re-executes it in parallel (isRunLive covers this
+  // whole window, not just the post-spawn one that `running` covers).
+  inFlight.add(runId);
   try {
     await executeRunBody(runId);
   } catch (e) {
@@ -453,6 +518,8 @@ export async function executeRun(runId: string): Promise<void> {
       // rewritten by a throw in the teardown that followed it.
       .in("status", ["queued", "running"]);
     if (error) console.error("[claude/runner] could not record failure:", error.message);
+  } finally {
+    inFlight.delete(runId);
   }
 }
 
@@ -646,6 +713,24 @@ async function executeRunBody(runId: string): Promise<void> {
     if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
   }
 
+  // Supabase migration credentials. Without the access token a run can WRITE a
+  // migration file but has no way to APPLY it (the missing plumbing this fixes). The
+  // apply goes through the Management API query endpoint (see the constant's doc), so
+  // only the access token is needed — no db password. Injected only when the token
+  // exists, so a project that hasn't set it degrades to "can't apply, ask the user"
+  // (composePrompt phrases that honestly via the same check). The token is added to
+  // redactSecrets below so a run's `env`/`curl -v`/stack trace can't leak it into the
+  // stored transcript. The apply run enqueued after a destructive approval runs through
+  // this same path, so it is covered by one injection point.
+  const supabaseTokenClean =
+    (await getAppSecret(TOKEN_APP_SLUG, SUPABASE_TOKEN_KEY, SUPABASE_TOKEN_KEY))?.trim() || null;
+  if (supabaseTokenClean) {
+    env.SUPABASE_ACCESS_TOKEN = supabaseTokenClean;
+    env.SUPABASE_PROJECT_ID =
+      (await getAppSecret(TOKEN_APP_SLUG, SUPABASE_PROJECT_ID_KEY, SUPABASE_PROJECT_ID_KEY))?.trim() ||
+      SUPABASE_PROJECT_REF_DEFAULT;
+  }
+
   // App access — a real short-lived session for the launching user, minted fresh
   // per turn, so the run can call the platform's own API the way the frontend does
   // (the env preamble in composePrompt tells it how). Minted every turn for every
@@ -667,27 +752,40 @@ async function executeRunBody(runId: string): Promise<void> {
   // opens knowing its topic. Prepended (not appended) so it reads as background the
   // message then acts on. Written back to the row too, so the stored prompt matches
   // what actually ran.
-  if (seedContext && !resumeSession) {
+  //
+  // The startsWith guard makes this idempotent across a re-execution: the recoverer
+  // re-runs an orphaned turn from the SAME row, whose prompt already carries the
+  // seed from the first attempt — without the guard each resume would prepend it
+  // again, stacking `# רקע...` blocks and inflating the argv.
+  if (seedContext && !resumeSession && !promptText.startsWith("# רקע מהשיחה הקודמת")) {
     promptText = `# רקע מהשיחה הקודמת\n\n${seedContext}\n\n---\n\n${promptText}`;
     const { error: sErr } = await db.from("claude_runs").update({ prompt: promptText }).eq("id", runId);
     if (sErr) console.error("[claude/runner] seed prompt update failed:", sErr.message);
   }
   if (cwd) {
+    // Always re-materialize: a resumed run gets a fresh workspace, so the files must
+    // be re-downloaded to disk even though the prompt already names them.
     const { paths, failures } = await materializeAttachments(runId, cwd);
-    if (paths.length > 0) {
-      promptText += `\n\n# קבצים מצורפים\n${paths.map((p) => `- ${p}`).join("\n")}`;
-    }
-    // Surfaced in the prompt rather than swallowed: the turn should know a file it
-    // was told about is missing, instead of concluding the user sent nothing.
-    if (failures.length > 0) {
-      promptText += `\n\n(קבצים שלא נטענו: ${failures.join("; ")})`;
-    }
-    if (paths.length > 0 || failures.length > 0) {
-      const { error: pErr } = await db
-        .from("claude_runs")
-        .update({ prompt: promptText })
-        .eq("id", runId);
-      if (pErr) console.error("[claude/runner] prompt update failed:", pErr.message);
+    // But add the prompt SECTION only once — on a re-execution it is already there
+    // (written back on the first attempt), and re-appending would duplicate it.
+    const alreadyListed =
+      promptText.includes("# קבצים מצורפים") || promptText.includes("(קבצים שלא נטענו:");
+    if (!alreadyListed) {
+      if (paths.length > 0) {
+        promptText += `\n\n# קבצים מצורפים\n${paths.map((p) => `- ${p}`).join("\n")}`;
+      }
+      // Surfaced in the prompt rather than swallowed: the turn should know a file it
+      // was told about is missing, instead of concluding the user sent nothing.
+      if (failures.length > 0) {
+        promptText += `\n\n(קבצים שלא נטענו: ${failures.join("; ")})`;
+      }
+      if (paths.length > 0 || failures.length > 0) {
+        const { error: pErr } = await db
+          .from("claude_runs")
+          .update({ prompt: promptText })
+          .eq("id", runId);
+        if (pErr) console.error("[claude/runner] prompt update failed:", pErr.message);
+      }
     }
   }
 
@@ -722,7 +820,7 @@ async function executeRunBody(runId: string): Promise<void> {
 
   const bin = resolveCli();
   const extra = (process.env.CLAUDE_RUN_EXTRA_ARGS || "").split(" ").filter(Boolean);
-  const timeoutMs = Number(process.env.CLAUDE_RUN_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
+  const timeoutMs = RUN_TIMEOUT_MS;
 
   /**
    * The CLI args for one attempt. `resume` is a parameter, not a closed-over
@@ -745,8 +843,8 @@ async function executeRunBody(runId: string): Promise<void> {
     if (run.model) a.push("--model", run.model);
     if (run.effort) a.push("--effort", run.effort);
     // In a cloned workspace the run needs full agency: edit files, run the build,
-    // git-merge to main, and run `supabase db push` for migrations — the whole
-    // developer loop. Print mode cannot answer a permission prompt (an un-answerable
+    // git-merge to main, and apply a migration (curl to the Supabase Management API) —
+    // the whole developer loop. Print mode cannot answer a permission prompt (an un-answerable
     // prompt is a denial), so anything short of bypassPermissions would silently block
     // shell and leave a repo run able only to read/edit. The operator chose "full
     // access, like a developer on the team" (autonomy-safety-gate.md), so repo runs
@@ -796,15 +894,16 @@ async function executeRunBody(runId: string): Promise<void> {
 
   // Scrub EVERY secret this run's child holds — not just the GitHub token. The child
   // env also carries the shared internal secret (approval-gate callback), the
-  // subscription OAuth token, and the minted app-access session token, and a run with
-  // full shell can echo any of them (an accidental `env`, a curl -v, a stack trace).
-  // These rows are the permanent transcript, so all of them are replaced with ***
-  // before anything is stored. redact is a no-op for a null/empty value, so an
-  // unconfigured secret costs nothing here.
+  // subscription OAuth token, the minted app-access session token, and — for migration
+  // runs — the Supabase access token. A run with full shell can echo any of them (an
+  // accidental `env`, a curl -v, a stack trace, git printing a tokenised URL). These
+  // rows are the permanent transcript, so all of them are replaced with *** before
+  // anything is stored. redact is a no-op for a null/empty value, so an unconfigured
+  // secret costs nothing here.
   const redactSecrets = (s: string): string =>
     redact(
-      redact(redact(redact(s, ghToken), internalSecret || null), token),
-      appAccess?.token ?? null,
+      redact(redact(redact(redact(s, ghToken), internalSecret || null), token), appAccess?.token ?? null),
+      supabaseTokenClean,
     );
 
   const flush = async () => {
@@ -865,6 +964,23 @@ async function executeRunBody(runId: string): Promise<void> {
     const timer = setInterval(() => {
       void flush();
     }, FLUSH_INTERVAL_MS);
+
+    // Liveness ping — bumps updated_at on a fixed cadence, independent of the event
+    // stream, so a run doing a long silent tool call (a multi-minute build emits no
+    // stream lines) still reads as alive. Gated on status='running' so a ping can
+    // never touch a row the recoverer already claimed or failed. This is the single
+    // signal both the UI live line and the recoverer trust to tell an active run
+    // from an orphaned one.
+    const heartbeat = setInterval(() => {
+      void db
+        .from("claude_runs")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", runId)
+        .eq("status", "running")
+        .then(({ error }) => {
+          if (error) console.error("[claude/runner] heartbeat failed:", error.message);
+        });
+    }, HEARTBEAT_MS);
 
     // SIGTERM first so the engine can close cleanly, then SIGKILL if it doesn't. With
     // only SIGTERM, a child that ignores it never emits 'close' — the await below
@@ -932,6 +1048,7 @@ async function executeRunBody(runId: string): Promise<void> {
     });
 
     clearInterval(timer);
+    clearInterval(heartbeat);
     clearTimeout(killTimer);
     if (hardKillTimer) clearTimeout(hardKillTimer);
     // Off the registry the moment the process is gone, so a later cancel reports

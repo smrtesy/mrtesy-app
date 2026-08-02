@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-07-31.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-02.
 
 ## The three engines
 
@@ -25,7 +25,10 @@ Shared: **Supabase** = Postgres DB + auth. Migrations in `supabase/migrations/`
 (forward-only, 250+ files). Secrets exist **twice** — Railway env for `server/`,
 Supabase secrets for edge functions; rotating a key means updating both. Some
 runtime secrets also live in the DB (`app_secrets`, edited at
-`/admin/apps/<slug>/secrets`, env-var fallback).
+`/admin/apps/<slug>/secrets`, env-var fallback). A separate **managed-secrets**
+registry (`/admin/secrets`, server `modules/admin/secrets/`) is the "add once,
+mirror + propagate to Railway/Vercel/Supabase" tool — design
+`docs/managed-secrets-plan.md`, phase 1 wires Railway.
 
 ## The apps
 
@@ -43,6 +46,7 @@ route group `src/app/[locale]/(app)/(<slug>)/…`, components
 | smrtvault | `/vault` | Vault |
 | smrtinfo | `/info` | Info extraction center |
 | smrtstudio | `/studio` (console), `/studio/projects` (+`/[id]` — voice/image/video tabs), `/studio/models`, `/studio/research`; plus the absorbed voice screens at `/voice/*` (deep URLs kept; `/voice` itself redirects to `/studio/projects`) | Content studio — build plan: `docs/studio-build-plan.md`. **smrtVoice was absorbed here** (stage G, 2026-07-30): entitlement is smrtstudio (migration `20260730190000`), voice code still lives in `(smrtvoice)` route group / `components/smrtvoice/` / `modules/smrtvoice/`, settings+lexicon under `/settings/apps/smrtstudio` |
+| smrtdesign | `/design` (**being built**, v1+v2) | Generates unique, non-generic design ideas via the built-in Claude engine — guided by the design method `docs/design-process.md`, with a gallery + pick-from-each remix. Rides on the `claude` runner (repo access + browser-helper render loop, zero paid API). Plan: `docs/smrtdesign-plan.md`. Tables `smrtdesign_projects/options/selections`; server `modules/smrtdesign/` + `apps/smrtdesign/manifest.ts` |
 
 **Platform (cross-app), route group `(platform)`:** `/inbox` (notifications),
 `/suggestions`, `/settings`, `/account`, `/admin`, `/search` (global content
@@ -52,7 +56,11 @@ search — components `src/components/platform/search/`, server
 `src/lib/site-map.ts`, UI in `src/components/platform/map/`),
 and **`/claude`** — the in-app Claude console (components
 `src/components/claude/`, server `server/src/modules/claude/`, detail in
-`.claude/rules/claude-console.md`). Server side:
+`.claude/rules/claude-console.md`), and **`/web-action`** — the web-action agent
+(super-admin only): a backend-hosted headless-Chromium session driven as the
+user, live-view via CDP screencast + input relay, for opening accounts / grabbing
+API keys into smrtVault (components `src/components/web-action/`, server
+`server/src/modules/web-action/`, plan `docs/web-action-agent-plan.md`). Server side:
 `server/src/modules/platform/` (organizations, members, me, messaging, push,
 apps, search) and `server/src/modules/admin/`.
 
@@ -127,6 +135,15 @@ project: voice/image/video/character/background/storyboard/…, referencing the
 per-type detail row) + `studio_artifact_sources` (the derivation DAG, role-typed
 edges). A trigger projects `experiment_runs` (image/video) into the spine; voice
 projection + DAG population are staged. Design: `docs/studio-production-pipeline.md`.
+Managed secrets: `managed_secrets` (logical key → Vault value id + fingerprint),
+`managed_secret_targets` (one destination per row — provider + env var + drift
+bookkeeping), `secret_sync_log` (append-only audit, never a value) —
+`server/src/modules/admin/secrets/`, design `docs/managed-secrets-plan.md`.
+Drive catalog: `drive_catalog` (one row per folder/file of a scanned Drive
+subtree — resumable via the `folder_expanded` flag) + `drive_catalog_scans`
+(per-root scan state). Populated server-side by the `drive-catalog` machine
+route (`server/src/modules/smrttask/routes/drive-catalog.ts`) walking a shared
+Drive tree via the user's `google_drive` OAuth. Design: `docs/drive-catalog-plan.md`.
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`

@@ -11,6 +11,7 @@ export type StudioStatus = "done" | "now" | "todo";
  *  (`Research` / `Tests` / `Decisions`); for a build stage it is the tool the
  *  row builds, and `group_order` / `group_note` describe that tool's group. */
 export type StudioItem = {
+  id: string;
   group_key: string;
   group_order: number;
   group_note: string;
@@ -21,9 +22,19 @@ export type StudioItem = {
   link_label: string;
 };
 
-export type StudioChallenge = { problem: string; solved: boolean; solution: string | null };
+export type StudioChallenge = {
+  id: string;
+  kind: "expected" | "hit";
+  problem: string;
+  solved: boolean;
+  solution: string | null;
+  /** Raw detail text regardless of `solved` — the editor edits this; the
+   *  read-only view keeps using `solution` (which is null when unsolved). */
+  detail: string;
+};
 
 export type StudioOutput = {
+  id: string;
   kind: "image" | "video" | "audio" | "text" | "tool";
   label: string;
   meta: string;
