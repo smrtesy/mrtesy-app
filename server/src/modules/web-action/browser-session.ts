@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "crypto";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, CDPSession, Page } from "playwright";
 
 export interface WebSession {
   id: string;
@@ -29,6 +29,16 @@ export interface WebSession {
   lastUsedAt: number;
   /** Console/page errors seen on this session — surfaced, never the page text. */
   problems: string[];
+  /** Lazily-created CDP session for the live-view (screencast + input relay). */
+  cdp?: CDPSession;
+}
+
+/** Get (or lazily open) the page's CDP session — used by the live-view for
+ *  screencast frames and for dispatching the user's mouse/keyboard. Bound to the
+ *  page target, so it survives same-page navigations. */
+export async function getCdp(s: WebSession): Promise<CDPSession> {
+  if (!s.cdp) s.cdp = await s.context.newCDPSession(s.page);
+  return s.cdp;
 }
 
 const sessions = new Map<string, WebSession>();

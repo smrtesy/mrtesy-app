@@ -14,6 +14,7 @@ import { requireAuth, requireOrg } from "../../middleware";
 import * as bs from "./browser-session";
 import { latestSmsCode, latestEmailCode } from "./code-extract";
 import { storeSecret } from "./vault-store";
+import { startScreencast, dispatchInput, type InputEvent } from "./live-view";
 
 const router = Router();
 
@@ -76,6 +77,47 @@ router.get("/web-action/sessions/:id/screenshot", async (req: Request, res: Resp
 router.delete("/web-action/sessions/:id", async (req: Request, res: Response) => {
   const ok = await bs.closeSession(req.params.id, req.user!.id);
   res.json({ ok });
+});
+
+// ── live-view: SSE screencast (server→client) + input relay (client→server) ──
+
+/** GET /web-action/sessions/:id/stream — SSE stream of base64 JPEG frames. */
+router.get("/web-action/sessions/:id/stream", async (req: Request, res: Response) => {
+  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  if (!s) return res.status(404).json({ error: "session not found" });
+
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no", // don't let a proxy buffer the stream
+  });
+  res.flushHeaders?.();
+
+  let stop: (() => Promise<void>) | null = null;
+  try {
+    stop = await startScreencast(s, (b64) => res.write(`data: ${b64}\n\n`));
+  } catch (e) {
+    res.write(`event: error\ndata: ${msg(e)}\n\n`);
+    return res.end();
+  }
+  const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
+  req.on("close", () => {
+    clearInterval(ping);
+    void stop?.();
+  });
+});
+
+/** POST /web-action/sessions/:id/input — relay one user mouse/key/scroll event. */
+router.post("/web-action/sessions/:id/input", async (req: Request, res: Response) => {
+  const s = bs.getOwnedSession(req.params.id, req.user!.id);
+  if (!s) return res.status(404).json({ error: "session not found" });
+  try {
+    await dispatchInput(s, (req.body ?? {}) as InputEvent);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: msg(e) });
+  }
 });
 
 // ── verification-code extraction (email + SMS both land in the platform) ──────
