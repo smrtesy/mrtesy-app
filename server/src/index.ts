@@ -25,6 +25,7 @@ import messagesRouter from "./routes/messages";
 import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
+import { webActionRouter, startIdleSweeper as startWebActionSweeper } from "./modules/web-action";
 import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
@@ -192,6 +193,7 @@ app.use("/api", searchCronRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
+app.use("/api", webActionRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
 app.use("/api", smrtcrmRouter);
@@ -281,6 +283,9 @@ function ensureChromium(): void {
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
   ensureChromium();
+  // web-action: sweep idle browser sessions so a walked-away signup can't hold
+  // a Chromium on the host forever. No-op until a session is created.
+  startWebActionSweeper();
   // Seed the global-search navigation destinations so settings/pages search
   // works immediately after a deploy. Best-effort, non-blocking; skips when
   // already seeded (see ensureDestinationsIndexed).
