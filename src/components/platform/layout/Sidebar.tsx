@@ -30,6 +30,7 @@ import {
   Send,
   KeyRound,
   Info,
+  Palette,
   Map as MapIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -102,6 +103,10 @@ const smrtStudioItems = [
   { key: "studioResearch",   href: "/studio/research", icon: FlaskConical },
 ] as const;
 
+const smrtDesignItems = [
+  { key: "design", href: "/design", icon: Palette },
+] as const;
+
 type MobileNavItem = { key: string; href: string; icon: React.ElementType };
 
 // Every nav href across all apps + the management group. Used by isActive() to
@@ -137,6 +142,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtVault = enabledApps.includes("smrtvault");
   const hasSmrtInfo = enabledApps.includes("smrtinfo");
   const hasSmrtStudio = enabledApps.includes("smrtstudio");
+  const hasSmrtDesign = enabledApps.includes("smrtdesign");
   const t = useTranslations("nav");
   const pathname = usePathname();
   const router = useRouter();
@@ -318,6 +324,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   if (hasSmrtTask) moreSections.push({ app: APPS.smrttask, items: [...visibleSmrtTaskItems] });
   if (hasSmrtPlan) moreSections.push({ app: APPS.smrtplan, items: [...smrtPlanItems] });
   if (hasSmrtStudio) moreSections.push({ app: APPS.smrtstudio, items: [...smrtStudioItems] });
+  if (hasSmrtDesign) moreSections.push({ app: APPS.smrtdesign, items: [...smrtDesignItems] });
   if (hasSmrtCrm) moreSections.push({ app: APPS.smrtcrm, items: [...smrtCrmItems] });
   if (hasSmrtReach) moreSections.push({ app: APPS.smrtreach, items: [...smrtReachItems] });
   if (hasSmrtBot) moreSections.push({ app: APPS.smrtbot, items: [...smrtBotItems] });
@@ -411,6 +418,15 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
           {hasSmrtStudio && (
             <AppNavGroup app={APPS.smrtstudio}>
               {smrtStudioItems.map((item) => (
+                <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
+                  basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
+              ))}
+            </AppNavGroup>
+          )}
+
+          {hasSmrtDesign && (
+            <AppNavGroup app={APPS.smrtdesign}>
+              {smrtDesignItems.map((item) => (
                 <NavItem key={item.key} itemKey={item.key} href={item.href} icon={item.icon}
                   basePath={basePath} t={t} isActive={isActive} badgeFor={badgeFor} />
               ))}

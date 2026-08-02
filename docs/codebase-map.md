@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-07-31.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-02.
 
 ## The three engines
 
@@ -43,6 +43,7 @@ route group `src/app/[locale]/(app)/(<slug>)/…`, components
 | smrtvault | `/vault` | Vault |
 | smrtinfo | `/info` | Info extraction center |
 | smrtstudio | `/studio` (console), `/studio/projects` (+`/[id]` — voice/image/video tabs), `/studio/models`, `/studio/research`; plus the absorbed voice screens at `/voice/*` (deep URLs kept; `/voice` itself redirects to `/studio/projects`) | Content studio — build plan: `docs/studio-build-plan.md`. **smrtVoice was absorbed here** (stage G, 2026-07-30): entitlement is smrtstudio (migration `20260730190000`), voice code still lives in `(smrtvoice)` route group / `components/smrtvoice/` / `modules/smrtvoice/`, settings+lexicon under `/settings/apps/smrtstudio` |
+| smrtdesign | `/design` (**being built**, v1+v2) | Generates unique, non-generic design ideas via the built-in Claude engine — guided by the design method `docs/design-process.md`, with a gallery + pick-from-each remix. Rides on the `claude` runner (repo access + browser-helper render loop, zero paid API). Plan: `docs/smrtdesign-plan.md`. Tables `smrtdesign_projects/options/selections`; server `modules/smrtdesign/` + `apps/smrtdesign/manifest.ts` |
 
 **Platform (cross-app), route group `(platform)`:** `/inbox` (notifications),
 `/suggestions`, `/settings`, `/account`, `/admin`, `/search` (global content

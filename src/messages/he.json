@@ -247,7 +247,8 @@
     "studioProduction": "הפקה",
     "studioModels": "קטלוג מודלים",
     "studioResearch": "מרכז מחקרים",
-    "claude": "קלוד"
+    "claude": "קלוד",
+    "design": "עיצוב"
   },
   "account": {
     "title": "ניהול חשבון",
@@ -4807,6 +4808,51 @@
       "adminDocs": "מסמכי התוכניות והמפרטים",
       "adminDomainTracker": "אילו דומיינים נטענים בדף",
       "adminPriceTracker": "השוואת מחירים בין חנויות"
+    }
+  },
+  "smrtDesign": {
+    "title": "מחולל העיצוב",
+    "subtitle": "תארו נושא — קבלו כמה כיווני-עיצוב שונים באמת, בחרו בעין וממזגו את הטוב מכולם.",
+    "newProject": "פרויקט חדש",
+    "cancel": "ביטול",
+    "create": "צור",
+    "namePlaceholder": "שם הפרויקט",
+    "subjectPlaceholder": "מה מעצבים? (למשל: דף שער ל-ai chochom, עברית ואנגלית)",
+    "audiencePlaceholder": "קהל היעד (לא חובה)",
+    "hebrew": "עברית",
+    "english": "אנגלית",
+    "optionCount": "מספר כיוונים",
+    "nameSubjectRequired": "צריך שם ונושא",
+    "projectCreated": "הפרויקט נוצר",
+    "generationStarted": "הייצור התחיל — הכיוונים יופיעו בהדרגה",
+    "remixStarted": "המיזוג התחיל",
+    "locked": "נבחר",
+    "pickAtLeastOne": "בחרו לפחות ממד אחד",
+    "generate": "ייצר כיוונים",
+    "regenerate": "ייצר עוד",
+    "generatingHint": "מייצר ומרנדר כיוונים… זה לוקח כמה דקות.",
+    "noRender": "אין תצוגה",
+    "combined": "משולב",
+    "chooseThis": "בחר את זה",
+    "remixTitle": "קח מכל אחד",
+    "remixHint": "לכל ממד — מאיזה כיוון לקחת אותו. מה שלא תבחרו, ייגזר מהעוגן.",
+    "designersChoice": "בחירת המעצב",
+    "buildCombined": "בנה עיצוב משולב",
+    "status": {
+      "draft": "טיוטה",
+      "generating": "מייצר…",
+      "options_ready": "כיוונים מוכנים",
+      "locked": "נעול",
+      "failed": "נכשל"
+    },
+    "dimension": {
+      "typography": "טיפוגרפיה",
+      "color": "צבע",
+      "neutral": "נייטרל",
+      "layout": "עימוד",
+      "motion": "תנועה",
+      "signature": "חתימה",
+      "voice": "קול"
     }
   }
 }
