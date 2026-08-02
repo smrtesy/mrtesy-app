@@ -92,13 +92,16 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
   if (!project) return res.status(404).json({ error: "project not found" });
 
   // Lazy poll: if a generation/remix run is driving this project, reflect its
-  // terminal state. `thread_id` holds the driving run id (see prompt.ts / schema).
+  // terminal state. `thread_id` holds the driving claude_threads id; the run is
+  // the latest turn of that thread (a repo run must belong to a thread — runner.ts).
   if (project.status === "generating" && project.thread_id) {
     const { data: run, error: runErr } = await db
       .from("claude_runs")
       .select("id, error, ended_at, started_at")
       .eq("org_id", orgId)
-      .eq("id", project.thread_id)
+      .eq("thread_id", project.thread_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     if (runErr) console.error("[smrtdesign] run lookup failed:", runErr.message);
     // Resolve on terminal, missing, or stale — a backend restart mid-run leaves
@@ -140,13 +143,56 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
   });
 });
 
+/** Get the project's driving Claude thread, creating it once if needed. A repo run
+ *  MUST belong to a thread — the runner needs a stable per-thread working directory
+ *  to clone the repo into and to resume the session across generate→remix turns
+ *  (runner.ts). The thread is created `archived_at`=now so it stays out of the
+ *  /claude console thread list (that list filters `archived_at is null`), while its
+ *  runs still work normally. Returns the thread id, or null on failure. */
+async function ensureProjectThread(
+  orgId: string,
+  userId: string,
+  projectId: string,
+  currentThreadId: string | null,
+  title: string,
+): Promise<string | null> {
+  if (currentThreadId) {
+    const { data: t } = await db
+      .from("claude_threads")
+      .select("id")
+      .eq("id", currentThreadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (t) return t.id; // real thread — reuse it (remix resumes the same session)
+    // else: legacy value (a run id from before this fix) — fall through and make one
+  }
+  const { data: thread, error } = await db
+    .from("claude_threads")
+    .insert({
+      org_id: orgId,
+      created_by: userId,
+      title,
+      repo: REPO,
+      archived_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error) {
+    console.error("[smrtdesign] thread create failed:", error.message);
+    return null;
+  }
+  await db.from("smrtdesign_projects").update({ thread_id: thread.id }).eq("id", projectId);
+  return thread.id;
+}
+
 /** Kick a generation/remix run: compose the method-primed prompt, tell the run
- *  to POST each option back here, and fire it. Returns the run id (stored as the
- *  project's driving id in `thread_id`). */
+ *  to POST each option back here, and fire it as a new turn of the project's
+ *  Claude thread. Returns the run id. */
 async function startRun(
   req: Request,
   res: Response,
   projectId: string,
+  currentThreadId: string | null,
   basePrompt: string,
   title: string,
 ) {
@@ -167,11 +213,38 @@ async function startRun(
 
   const composed = await composePrompt(orgId, `${basePrompt}\n${callback}`, null);
 
+  const threadId = await ensureProjectThread(orgId, req.user!.id, projectId, currentThreadId, title);
+  if (!threadId) {
+    await notifyError(orgId, "smrtdesign", { title: "Design run could not start", body: "thread create failed" });
+    return res.status(500).json({ error: "could not start run" });
+  }
+
+  // One live run at a time per project — a repo run resumes the thread's single
+  // session, so two at once would race the same workspace.
+  const { data: live } = await db
+    .from("claude_runs")
+    .select("id")
+    .eq("thread_id", threadId)
+    .in("status", ["queued", "running", "waiting"])
+    .limit(1);
+  if (live && live.length > 0) {
+    return res.status(409).json({ error: "already generating" });
+  }
+
+  // Next turn index (uniq_claude_runs_thread_turn is on thread_id+turn_index).
+  const { count: prior } = await db
+    .from("claude_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("thread_id", threadId);
+  const turnIndex = (prior ?? 0) + 1;
+
   const { data: run, error } = await db
     .from("claude_runs")
     .insert({
       org_id: orgId,
       created_by: req.user!.id,
+      thread_id: threadId,
+      turn_index: turnIndex,
       title,
       prompt: composed.prompt,
       user_prompt: basePrompt,
@@ -187,7 +260,7 @@ async function startRun(
 
   await db
     .from("smrtdesign_projects")
-    .update({ status: "generating", thread_id: run.id })
+    .update({ status: "generating" })
     .eq("id", projectId);
 
   void executeRun(run.id).catch((e) =>
@@ -200,7 +273,7 @@ async function startRun(
 router.post("/design/projects/:id/generate", requireAuth, requireOrg, requireApp("smrtdesign"), async (req: Request, res: Response) => {
   const { data: project, error } = await db
     .from("smrtdesign_projects")
-    .select("id, name, subject, audience, languages, option_count")
+    .select("id, name, subject, audience, languages, option_count, thread_id")
     .eq("org_id", req.org!.id)
     .eq("id", req.params.id)
     .maybeSingle();
@@ -213,7 +286,7 @@ router.post("/design/projects/:id/generate", requireAuth, requireOrg, requireApp
     languages: project.languages ?? ["he"],
     optionCount: project.option_count ?? 4,
   });
-  return startRun(req, res, project.id, prompt, `smrtDesign — ${project.name}`);
+  return startRun(req, res, project.id, project.thread_id, prompt, `smrtDesign — ${project.name}`);
 });
 
 // ─── INGEST AN OPTION (called by the generation/remix run) ───
@@ -285,7 +358,7 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
 
   const { data: project, error } = await db
     .from("smrtdesign_projects")
-    .select("id, name")
+    .select("id, name, thread_id")
     .eq("org_id", orgId)
     .eq("id", req.params.id)
     .maybeSingle();
@@ -326,7 +399,7 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
   const prompt = buildRemixPrompt({ picks, sources });
   // startRun sets status=generating; the run posts the combined option (is_combined=true).
   void selection; // selection row created; combined_option_id linkage is a v2+ enhancement
-  return startRun(req, res, project.id, prompt, `smrtDesign remix — ${project.name}`);
+  return startRun(req, res, project.id, project.thread_id, prompt, `smrtDesign remix — ${project.name}`);
 });
 
 // ─── LOCK an option as the project's chosen design ───────────
