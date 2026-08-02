@@ -44,6 +44,10 @@ type ResolvedSection = {
   rows: Array<{ entry: SiteMapEntry; label: string; desc: string }>;
 };
 
+/** Shapes of the live smrtStudio lists surfaced as deep-linked sub-pages. */
+type StudioProjectRow = { id: string; name_he: string; name_en: string };
+type VoiceCharacterRow = { id: string; name: string; display_name: string | null };
+
 export function SiteMap() {
   const locale = useLocale();
   // Root namespace: the catalog carries FULL key paths ("nav.tasks",
@@ -61,12 +65,52 @@ export function SiteMap() {
   // asked for (same pattern as the WhatsApp chat search).
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+
+  // Live smrtStudio sub-pages (the real projects + characters) as deep links.
+  // Fetched HERE, not inside the card, for two reasons: (1) search can keep the
+  // studio section alive when a name matches even if no static screen does, and
+  // (2) the org lookup / queries aren't duplicated. Gated to entitled users and
+  // cached; any error/empty yields no rows.
+  const studioEntitled = useMemo(
+    () => new Set(enabledApps.map((s) => (s === "smrtvoice" ? "smrtstudio" : s))).has("smrtstudio"),
+    [enabledApps],
+  );
+  const projectsQ = useQuery({
+    queryKey: ["site-map-studio-projects", active?.id ?? "none"],
+    queryFn: () => api<{ projects: StudioProjectRow[] }>("/api/studio/projects"),
+    staleTime: 5 * 60 * 1000,
+    enabled: studioEntitled,
+  });
+  const charactersQ = useQuery({
+    queryKey: ["site-map-voice-characters", active?.id ?? "none"],
+    queryFn: () => api<{ characters: VoiceCharacterRow[] }>("/api/voice/characters"),
+    staleTime: 5 * 60 * 1000,
+    enabled: studioEntitled,
+  });
+  const studioSubpages = useMemo(() => {
+    const projects = (projectsQ.data?.projects ?? [])
+      .map((p) => ({
+        id: p.id,
+        label: (locale === "en" ? p.name_en : p.name_he) || p.name_en || p.name_he || p.id,
+        href: `/${locale}/studio/projects?project=${p.id}`,
+      }))
+      .filter((r) => !needle || r.label.toLowerCase().includes(needle));
+    const characters = (charactersQ.data?.characters ?? [])
+      .map((c) => ({
+        id: c.id,
+        label: c.display_name ?? c.name,
+        href: `/${locale}/voice/characters/${c.id}`,
+      }))
+      .filter((r) => !needle || r.label.toLowerCase().includes(needle));
+    return { projects, characters };
+  }, [projectsQ.data, charactersQ.data, locale, needle]);
+  const studioDynamicCount = studioSubpages.projects.length + studioSubpages.characters.length;
 
   const sections = useMemo<ResolvedSection[]>(() => {
     // A lingering pre-absorption `smrtvoice` entitlement counts as smrtstudio,
     // the app it was absorbed into — same normalization as getLandingHref().
     const apps = new Set(enabledApps.map((s) => (s === "smrtvoice" ? "smrtstudio" : s)));
-    const needle = query.trim().toLowerCase();
 
     const resolved: ResolvedSection[] = [];
     for (const section of SITE_MAP) {
@@ -91,15 +135,16 @@ export function SiteMap() {
             row.entry.path.toLowerCase().includes(needle),
         );
 
-      if (rows.length > 0) resolved.push({ section, rows });
+      // Keep the smrtStudio section alive when a search matches a live
+      // sub-page (project/character) even if no static studio screen does —
+      // otherwise the card, and its dynamic rows, would vanish mid-search.
+      const keepForDynamic = section.appSlug === "smrtstudio" && studioDynamicCount > 0;
+      if (rows.length > 0 || keepForDynamic) resolved.push({ section, rows });
     }
     return resolved;
-  }, [enabledApps, isAdmin, taskAccess, canManageOrg, query, t]);
+  }, [enabledApps, isAdmin, taskAccess, canManageOrg, needle, studioDynamicCount, t]);
 
   const total = sections.reduce((n, s) => n + s.rows.length, 0);
-  // Same needle the static rows are filtered by — passed down so the dynamic
-  // sub-page lists (projects/characters) filter in step with the search box.
-  const needle = query.trim().toLowerCase();
 
   return (
     <div className="space-y-4">
@@ -152,7 +197,7 @@ export function SiteMap() {
               section={section}
               rows={rows}
               locale={locale}
-              needle={needle}
+              studio={section.appSlug === "smrtstudio" ? studioSubpages : undefined}
             />
           ))}
         </div>
@@ -161,12 +206,17 @@ export function SiteMap() {
   );
 }
 
+type DeepRow = { id: string; label: string; href: string };
+
 function SectionCard({
   section,
   rows,
   locale,
-  needle,
-}: ResolvedSection & { locale: string; needle: string }) {
+  studio,
+}: ResolvedSection & {
+  locale: string;
+  studio?: { projects: DeepRow[]; characters: DeepRow[] };
+}) {
   const t = useTranslations();
   const app = section.appSlug ? APPS[section.appSlug] : undefined;
   // Inline color so the arbitrary accent hex from the app registry survives
@@ -226,56 +276,23 @@ function SectionCard({
 
       {/* Dynamic sub-pages: the actual projects and characters, listed as deep
           links so the map indexes real instances, not just the static screens.
-          Only under the smrtStudio section, which is the app that owns them. */}
-      {section.appSlug === "smrtstudio" && <StudioSubpages locale={locale} needle={needle} />}
+          Fetched by the parent (see SiteMap) and passed in only for the studio
+          section. */}
+      {studio && <StudioSubpages projects={studio.projects} characters={studio.characters} />}
     </section>
   );
 }
 
-type StudioProjectRow = { id: string; name_he: string; name_en: string };
-type VoiceCharacterRow = { id: string; name: string; display_name: string | null };
-
 /**
  * Live sub-pages under the smrtStudio card: each real project (deep-linked via
- * `?project=<id>`, the same shareable URL the production screen writes) and
- * each character (`/voice/characters/<id>`). Fetched once and cached; filtered
- * by the map's search box; entitlement comes for free because this only renders
- * inside the smrtStudio section, which is already gated by the caller. Any
- * fetch error / empty result simply renders nothing extra.
+ * `?project=<id>`, the same shareable URL the production screen writes) and each
+ * character (`/voice/characters/<id>`). Presentational — the rows are fetched
+ * and filtered by SiteMap; here we only lay them out. Renders nothing when both
+ * lists are empty.
  */
-function StudioSubpages({ locale, needle }: { locale: string; needle: string }) {
+function StudioSubpages({ projects, characters }: { projects: DeepRow[]; characters: DeepRow[] }) {
   const t = useTranslations();
-  const { active } = useActiveOrg();
-  // Key by active org so switching orgs doesn't show the previous org's list.
-  const projectsQ = useQuery({
-    queryKey: ["site-map-studio-projects", active?.id ?? "none"],
-    queryFn: () => api<{ projects: StudioProjectRow[] }>("/api/studio/projects"),
-    staleTime: 5 * 60 * 1000,
-  });
-  const charactersQ = useQuery({
-    queryKey: ["site-map-voice-characters", active?.id ?? "none"],
-    queryFn: () => api<{ characters: VoiceCharacterRow[] }>("/api/voice/characters"),
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const projects = (projectsQ.data?.projects ?? [])
-    .map((p) => ({
-      id: p.id,
-      label: (locale === "en" ? p.name_en : p.name_he) || p.name_en || p.name_he || p.id,
-      href: `/${locale}/studio/projects?project=${p.id}`,
-    }))
-    .filter((r) => !needle || r.label.toLowerCase().includes(needle));
-
-  const characters = (charactersQ.data?.characters ?? [])
-    .map((c) => ({
-      id: c.id,
-      label: c.display_name ?? c.name,
-      href: `/${locale}/voice/characters/${c.id}`,
-    }))
-    .filter((r) => !needle || r.label.toLowerCase().includes(needle));
-
   if (projects.length === 0 && characters.length === 0) return null;
-
   return (
     <>
       <SubpageGroup title={t("studioProjects.title")} Icon={Film} rows={projects} />
