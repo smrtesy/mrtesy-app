@@ -158,6 +158,9 @@ export async function createFixThread(
         created_by: userId,
         title,
         title_source: "auto",
+        // The task this fix thread belongs to — the rail leads the title with it
+        // and the auto-titler preserves it instead of writing "תיקון אוטומטי".
+        task_serial: fixCtx.serial ?? null,
         repo: AUTOFIX_REPO,
         git_branch: null, // clone the default branch; the run creates its own fix branch
       })

@@ -54,7 +54,7 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial";
 
 /** The account ids the runner knows how to route (loadAccountToken). An empty
  *  string / null means "use the default", stored as NULL. */
@@ -211,7 +211,45 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     console.error("[claude/threads] list failed:", error.message);
     return res.status(500).json({ error: "could not list threads" });
   }
-  return res.json({ threads: data ?? [] });
+
+  // Enrich each thread with the rail's live status dot: `live` when it has a
+  // non-terminal run (a turn executing/queued right now → the pulsing green dot),
+  // and `last_status` = the newest run's status (done/failed/…) for the resting
+  // colour. Two queries: live runs are always few (only non-terminal), so that one
+  // is unbounded; the status scan is capped, and a thread past the cap just shows a
+  // neutral dot rather than a wrong one.
+  const rows = data ?? [];
+  const ids = rows.map((r) => r.id);
+  const liveSet = new Set<string>();
+  const lastStatus = new Map<string, string>();
+  if (ids.length > 0) {
+    const { data: liveRows, error: lErr } = await db
+      .from("claude_runs")
+      .select("thread_id")
+      .in("thread_id", ids)
+      .in("status", ["running", "queued", "waiting"]);
+    if (lErr) console.error("[claude/threads] live status failed:", lErr.message);
+    for (const r of liveRows ?? []) if (r.thread_id) liveSet.add(r.thread_id);
+
+    const { data: statusRows, error: sErr } = await db
+      .from("claude_runs")
+      .select("thread_id, status, turn_index")
+      .in("thread_id", ids)
+      .order("thread_id", { ascending: true })
+      .order("turn_index", { ascending: false })
+      .limit(5000);
+    if (sErr) console.error("[claude/threads] run status failed:", sErr.message);
+    // Ordered turn_index DESC, so the FIRST row seen for a thread is its newest run.
+    for (const r of statusRows ?? []) {
+      if (r.thread_id && !lastStatus.has(r.thread_id)) lastStatus.set(r.thread_id, r.status);
+    }
+  }
+  const threads = rows.map((r) => ({
+    ...r,
+    live: liveSet.has(r.id),
+    last_status: lastStatus.get(r.id) ?? null,
+  }));
+  return res.json({ threads });
 });
 
 router.post("/claude/threads", async (req: Request, res: Response) => {
@@ -454,6 +492,11 @@ router.patch("/claude/threads/:id", async (req: Request, res: Response) => {
   }
   if (body.archived !== undefined) {
     patch.archived_at = body.archived ? new Date().toISOString() : null;
+  }
+  if (body.handled !== undefined) {
+    // The rail's green-check "I'm done with this session" mark. A handled thread
+    // dims and sorts to the bottom of the rail (client-side); un-checking clears it.
+    patch.handled_at = body.handled ? new Date().toISOString() : null;
   }
   if (body.model !== undefined) {
     const model = str(body.model, 64);
@@ -1014,11 +1057,12 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
   try {
     const { data: thread } = await db
       .from("claude_threads")
-      .select("id, title, title_source")
+      .select("id, title, title_source, task_serial")
       .eq("id", threadId)
       .eq("org_id", orgId)
       .maybeSingle();
     if (!thread || thread.title_source === "user") return;
+    const serial = (thread.task_serial ?? "").trim();
 
     // The REAL turn count, not the length of the capped slice below: with
     // `.limit(12)` the length saturates at 12, so TITLE_AT_TURNS.has(12) stayed
@@ -1053,6 +1097,10 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
       "- עד 6 מילים.",
       "- על התוכן, לא על הצורה. למשל 'החלפת ספק הסמס ל-Twilio', ולא 'שאלה על סמס'.",
       "- בלי מירכאות, בלי נקודה בסוף, בלי הקדמה.",
+      "- אל תכתוב תחיליות-מטא כמו 'תיקון אוטומטי', 'משימה', 'שיחה על' — רק על מה זה עוסק בפועל.",
+      ...(serial
+        ? [`- אל תכתוב את המזהה '${serial}' בכותרת — הוא מתווסף אוטומטית בהתחלה.`]
+        : []),
       "- החזר את הכותרת בלבד — שום דבר אחר.",
       "",
       transcript,
@@ -1067,7 +1115,19 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
     if (!raw) return;
     // First line only, quotes stripped: a model that adds a sentence of
     // explanation must not turn that into the thread's name.
-    const title = raw.split("\n")[0].replace(/^["'«»\s]+|["'«».\s]+$/g, "").slice(0, MAX_TITLE);
+    let title = raw.split("\n")[0].replace(/^["'«»\s]+|["'«».\s]+$/g, "").slice(0, MAX_TITLE);
+    if (!title) return;
+    // Code-enforced, not just prompt-requested (a prompt line reduces but never
+    // removes): strip a "תיקון אוטומטי" meta prefix the model may still emit, then
+    // lead with the task serial when the thread has one — so a task thread's title
+    // always starts with its ID (e.g. "T1699 · …") and never with "תיקון אוטומטי".
+    title = title.replace(/^\s*תיקון\s+אוטומטי\s*[:\-–—.]*\s*/u, "").trim();
+    if (serial) {
+      const esc = serial.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // Drop the serial if the model echoed it despite the rule, so it isn't doubled.
+      title = title.replace(new RegExp(`^\\s*${esc}\\s*[·:\\-–—]*\\s*`, "u"), "").trim();
+      title = (title ? `${serial} · ${title}` : serial).slice(0, MAX_TITLE);
+    }
     if (!title) return;
 
     const { error } = await db
