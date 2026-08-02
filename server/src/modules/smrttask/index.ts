@@ -60,6 +60,12 @@ export { runPart1 } from "./parts/part1-collector";
 // it must NOT sit behind platformRouter's requireAuth.
 export { default as claudeSessionRouter } from "./routes/claude-session";
 
+// x-cron-secret gated Google Drive catalog scanner (no JWT) — mounted before
+// the auth guards in server/index.ts, like the other machine routers. Walks a
+// shared Drive subtree into public.drive_catalog using the user's server-side
+// google_drive OAuth grant.
+export { default as driveCatalogRouter } from "./routes/drive-catalog";
+
 // x-cron-secret gated weekly report job (no JWT) — mounted before the auth
 // guards in server/index.ts, like the smrtbot/smrtplan job routers.
 export { default as dailyReportJobsRouter } from "./daily-report/jobs";

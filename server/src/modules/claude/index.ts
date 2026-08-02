@@ -37,6 +37,9 @@ router.use(actionRoutes);
 
 export default router;
 export { executeRun } from "./runner";
+// The orphaned-run recoverer — started once from server/src/index.ts after listen.
+// Continues turns whose in-process child died with a restarted container.
+export { startClaudeRunRecovery } from "./recover";
 // The machine-to-machine surface (the in-app Claude requesting a destructive-migration
 // gate) is exported separately so server/src/index.ts can mount it OUTSIDE the
 // super-admin chain — a CLI child has no JWT, only the shared internal secret.
