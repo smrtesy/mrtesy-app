@@ -4853,6 +4853,11 @@
     "pickThread": "Pick a chat",
     "linkAndOpen": "Link & open",
     "linked": "Chat linked",
+    "enlarge": "Enlarge",
+    "close": "Close",
+    "takeFromThis": "Take from this design:",
+    "otherNote": "Other — free instruction (optional)",
+    "otherNotePlaceholder": "Anything else to fold into the combined design (color, copy, mood…)",
     "status": {
       "draft": "Draft",
       "generating": "Generating…",

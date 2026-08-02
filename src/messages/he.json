@@ -4852,6 +4852,11 @@
     "pickThread": "בחר שיחה",
     "linkAndOpen": "קשר ופתח",
     "linked": "השיחה קושרה",
+    "enlarge": "הגדל",
+    "close": "סגור",
+    "takeFromThis": "קח מהעיצוב הזה:",
+    "otherNote": "אחר — הוראה חופשית (לא חובה)",
+    "otherNotePlaceholder": "משהו נוסף לשלב בעיצוב המשולב (צבע, טקסט, אווירה…)",
     "status": {
       "draft": "טיוטה",
       "generating": "מייצר…",
