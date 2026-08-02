@@ -135,3 +135,45 @@ smrtDesign רק מפנה אליו, לא משכפל.
 כ**תת-מחוללי-נכסים** (fal) וכ**ייצוא** (Canva), לא כמנוע.
 
 מקורות: [Canva Connect](https://www.canva.dev/docs/connect/) · [v0](https://www.mindstudio.ai/blog/what-is-vercel-v0) · [Google Stitch (MCP+API)](https://www.abhs.in/blog/google-stitch-ai-ui-design-tool-developers-2026) · [shadcn = גנרי-בכוונה](https://rahuldotbiz.medium.com/i-tested-37-v0-alternatives-so-you-dont-have-to-2026-693e833f2c43) · [Recraft/וקטור-API](https://flowith.io/blog/10-best-recraft-alternatives-vector-brand-asset-2026/)
+
+---
+
+## 10. v2 — מודל-האינטראקציה: שיחה אינטראקטיבית + מסך-הכרעה (החלטת המשתמש, 2026-08-02)
+
+**הבעיה ב-v1:** "עיצוב חדש" ירה הרצה **עיוורת** ברקע — טופס → N אפשרויות, בלי
+דרך להגדיר/לכוונן תוך כדי שיחה. המשתמש רוצה אחרת: **smrtDesign = מסך-הכרעה,
+והעבודה עצמה קורית בקלוד-המובנה האינטראקטיבי.** ההחלטה: **ב׳ ראשי + א׳ תוספת.**
+
+### ב׳ (ראשי) — "עיצוב חדש" פותח שיחת-קלוד אמיתית
+1. יצירת פרויקט פותחת **שיחת-קלוד-מובנה נראית** (`claude_threads`, לא-archived),
+   עם `repo=smrtesy/mrtesy-app` (כך ששיטת-העיצוב נטענת).
+2. השרת מפרסם **תור-פתיחה** לשיחה: השיטה (§0) + הבריף מהפרויקט + ה-callback
+   (POST כל ציור ל-`/design/projects/:id/options`) + הנחיה: **"חדד את הבריף עם
+   המשתמש קודם (שאלות/בלוק-Ask אינטראקטיבי), ורק כשהבריף ברור או שהמשתמש אומר
+   'קדימה' — צייר."** הקלוד פותח בברכה+שאלות, לא בציור עיוור.
+3. הפרונט מנווט את המשתמש ל-`/claude?thread=<id>` (הקונסולה תומכת deep-link
+   ל-thread; מאומת ב-`ClaudeChat.tsx:249`). שם מנהלים שיחה, מכווננים, ומבקשים
+   ציורים; **כל ציור נוחת מיד בגלריה של smrtDesign** דרך ה-callback.
+4. `/design` נשאר **מסך-ההכרעה**: גלריה + בחירה-מכל-אחד + נעילה.
+
+### א׳ (תוספת) — קשר שיחה קיימת לפרויקט
+כפתור "קשר שיחה קיימת" → בוחר thread קיים → `POST /design/projects/:id/link-thread`
+מקשר את ה-thread לפרויקט ומפרסם בו תור שמזריק את ה-callback, כך שכל ציור עתידי
+באותה שיחה נוחת בגלריה.
+
+### שינויים קונקרטיים
+- **מיגרציה (אדיטיבית):** `smrtdesign_projects.mode text default 'conversation'`
+  (`'conversation'` = שיחה אינטראקטיבית; `'auto'` = ההרצה-העיוורת של v1, נשמרת
+  ככפתור-משני "ייצר אוטומטית"). ה-poll ב-GET מסתעף לפי `mode`: ב-`auto` —
+  הלוגיקה הקיימת (flip ל-failed/options_ready לפי ההרצה); ב-`conversation` —
+  לא נופלים ל-failed מתור בודד שנגמר (שיחה נמשכת), רק אוספים ציורים.
+- **backend:** `ensureProjectThread` מקבל `visible` (archived מול נראה);
+  `POST /design/projects/:id/open` (conversation) ו-`/link-thread` (א׳);
+  `/generate` נשאר (auto).
+- **frontend `DesignConsole`:** CTA ראשי "פתח שיחת עיצוב" → `/open` → `/claude?thread=`;
+  משני "ייצר אוטומטית"; "קשר שיחה קיימת"; גלריה/רמיקס/נעילה כמו שהם.
+- **גישה:** הקונסולה `/claude` דורשת super-admin; הבעלים (chanoch770) הוא
+  super-admin, אז הזרימה עובדת לו. הרחבה למשתמשי-org לא-אדמין = עתידי (embed).
+
+התיקון הראשון (2026-08-02, כבר ב-main): הרצת-repo חייבת thread — כל פרויקט
+מקבל thread קבוע והרצות רצות כ-turns בתוכו.
