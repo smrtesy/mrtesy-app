@@ -84,6 +84,14 @@ Hebrew. Code, identifiers, file paths, and commit/PR text keep following the
 existing repo conventions (English where the repo already uses English) — only
 the text you address to the user is Hebrew.
 
+**מונחים עבריים טהורים — לא ז'רגון לועזי מתועתק** (החלטת המשתמש, 8/2026;
+מסונכרן בשלושת הריפו). בכל טקסט המופנה למשתמש — צ'אט, מסמכי-תוכנית, תיאורי
+משימות, סקילים — מונח-שיטה נכתב בעברית ולא כתעתיק לועזי: **חקירה קצרה**
+(לא "ספייק") · **בדיקת השוואה** (לא "בייק-אוף") · **אצווה** (לא "batch") ·
+וכן הלאה. אין מקבילה עברית מקובלת — מנסחים במילים פשוטות, לא ממציאים תעתיק.
+חריג: שמות-מוצר, מזהי-קוד/נתיבים, ומונחים טכניים שהם ממשק ממשי (API, token,
+endpoint) נשארים כמות שהם.
+
 ## Timezone — always New York (America/New_York)
 
 The user is based in **New York**. Present **all** dates, times, and
