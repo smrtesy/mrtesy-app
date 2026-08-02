@@ -133,6 +133,9 @@ function startDev(env) {
     if (/error|failed to compile/i.test(s)) process.stderr.write(`[next] ${s}`);
   });
   devProc.stderr.on("data", (b) => process.stderr.write(`[next] ${b}`));
+  // Without a listener a spawn failure (e.g. `next` binary missing) emits an
+  // 'error' event that crashes outside the promise chain; catch it as a clean fail.
+  devProc.on("error", (e) => fail(`could not start next dev: ${e.message}`));
 }
 function stopDev() {
   if (devProc && !devProc.killed) {
@@ -146,6 +149,16 @@ function stopDev() {
       }
     }
   }
+}
+
+// On Ctrl-C / harness timeout the process dies WITHOUT running main().finally,
+// and because next dev is a detached group leader it would survive as an orphan
+// holding the port (+ a leaked Chromium). Tear it down on the signals too.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    stopDev();
+    process.exit(1);
+  });
 }
 
 // ── 3. drive the browser ──────────────────────────────────────────────────────

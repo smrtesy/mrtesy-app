@@ -25,6 +25,7 @@ import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { emitEvent } from "../../../lib/platform";
 import { mintSessionCookies } from "../../claude/app-access";
+import { isSuperAdmin } from "../../../middleware";
 
 const router = Router();
 
@@ -233,7 +234,15 @@ function publicFrontendEnv(): { env: Record<string, string>; missing: string[] }
  * Code dev session boot the CHANGED branch locally (`next dev`) and drive it as
  * the logged-in user (the page-check harness) — the live app runs old `main`, so
  * only a local run reflects the change under review. The token is short-lived
- * (Supabase default ~1h), which covers a single page-check run.
+ * (Supabase default ~1h) and self-expires — a single page-check run is well
+ * within that, so this path deliberately does not revoke (unlike the runner's
+ * mintAppAccess/revokeAppAccess pair, which mints one session per chat turn).
+ *
+ * SECURITY: unlike the other x-cron-secret routes here (which only write task/
+ * inbox rows), this returns live session cookies — full impersonation. So the
+ * shared secret alone is NOT sufficient: the TARGET user must also be a
+ * super-admin (the developers who run page-check). That caps a leaked secret at
+ * impersonating a super-admin, never an arbitrary end user.
  */
 router.get("/claude-session/app-access", async (req: Request, res: Response) => {
   const expected = process.env.CRON_SECRET || process.env.SMRTBOT_INTERNAL_SECRET;
@@ -246,6 +255,14 @@ router.get("/claude-session/app-access", async (req: Request, res: Response) => 
     typeof req.query.user_email === "string" ? req.query.user_email : undefined,
   );
   if (!userId) return res.status(404).json({ error: "user not found" });
+
+  // Second gate: the impersonation target must be a super-admin. Fail closed on
+  // any lookup error (isSuperAdmin returns false → 403).
+  const { data: u } = await db.auth.admin.getUserById(userId);
+  const email = u?.user?.email ?? null;
+  if (!(await isSuperAdmin({ id: userId, email }))) {
+    return res.status(403).json({ error: "app-access is restricted to super-admins" });
+  }
 
   const session = await mintSessionCookies(userId);
   if (!session) {
