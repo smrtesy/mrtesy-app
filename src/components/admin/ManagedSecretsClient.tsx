@@ -332,7 +332,11 @@ function SecretCard({ secret, onChange }: { secret: Secret; onChange: () => void
                   <AlertTriangle className="h-3 w-3" />
                   {t("drift")}
                 </Badge>
-              ) : secret.has_value && secret.targets.length > 0 ? (
+              ) : secret.has_value &&
+                secret.targets.length > 0 &&
+                secret.targets.every((tg) => tg.configured && !tg.provider_error) ? (
+                // Only a positive, verified signal earns the "in sync" badge — never
+                // claim sync for a target we couldn't even read (unset token, etc.).
                 <Badge variant="secondary" className="gap-1">
                   <Check className="h-3 w-3" />
                   {t("inSync")}

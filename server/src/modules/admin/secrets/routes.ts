@@ -464,7 +464,10 @@ router.post("/admin/secrets/:id/sync", async (req: Request, res: Response) => {
     }
 
     const nowIso = new Date().toISOString();
-    await db
+    // undefined keys are dropped by postgrest-js, so on error we don't clobber the
+    // last-known presence/fingerprint. Surface (not swallow) a bookkeeping failure —
+    // the provider write already happened, but a stale status column shouldn't hide.
+    const { error: bookkeepErr } = await db
       .from("managed_secret_targets")
       .update({
         last_synced_at: nowIso,
@@ -475,6 +478,8 @@ router.post("/admin/secrets/:id/sync", async (req: Request, res: Response) => {
         updated_at: nowIso,
       })
       .eq("id", t.id);
+    if (bookkeepErr)
+      console.error("[managed-secrets] target status update failed:", bookkeepErr.message);
 
     await audit({
       secretId: id,
