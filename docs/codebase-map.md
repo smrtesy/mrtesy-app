@@ -56,7 +56,11 @@ search — components `src/components/platform/search/`, server
 `src/lib/site-map.ts`, UI in `src/components/platform/map/`),
 and **`/claude`** — the in-app Claude console (components
 `src/components/claude/`, server `server/src/modules/claude/`, detail in
-`.claude/rules/claude-console.md`). Server side:
+`.claude/rules/claude-console.md`), and **`/web-action`** — the web-action agent
+(super-admin only): a backend-hosted headless-Chromium session driven as the
+user, live-view via CDP screencast + input relay, for opening accounts / grabbing
+API keys into smrtVault (components `src/components/web-action/`, server
+`server/src/modules/web-action/`, plan `docs/web-action-agent-plan.md`). Server side:
 `server/src/modules/platform/` (organizations, members, me, messaging, push,
 apps, search) and `server/src/modules/admin/`.
 
@@ -135,6 +139,11 @@ Managed secrets: `managed_secrets` (logical key → Vault value id + fingerprint
 `managed_secret_targets` (one destination per row — provider + env var + drift
 bookkeeping), `secret_sync_log` (append-only audit, never a value) —
 `server/src/modules/admin/secrets/`, design `docs/managed-secrets-plan.md`.
+Drive catalog: `drive_catalog` (one row per folder/file of a scanned Drive
+subtree — resumable via the `folder_expanded` flag) + `drive_catalog_scans`
+(per-root scan state). Populated server-side by the `drive-catalog` machine
+route (`server/src/modules/smrttask/routes/drive-catalog.ts`) walking a shared
+Drive tree via the user's `google_drive` OAuth. Design: `docs/drive-catalog-plan.md`.
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`

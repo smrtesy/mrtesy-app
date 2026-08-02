@@ -116,6 +116,7 @@ html[data-embed="1"] [data-sidebar-open-handle],
 html[data-embed="1"] [data-task-fab],
 html[data-embed="1"] [data-mobile-avatar],
 html[data-embed="1"] [data-mobile-nav],
+html[data-embed="1"] [data-claude-drawer],
 html[data-embed="1"] .wa-panel {
   display: none !important;
 }
@@ -137,6 +138,17 @@ html[data-embed="1"] body[data-wa-panel="true"] main[data-sidebar-main] {
 }
 html[data-embed="1"] main[data-sidebar-main] > div {
   max-width: none !important;
+}
+
+/* The Claude side-drawer steps aside for the mobile full-screen WhatsApp panel.
+   On mobile the WA panel is position:fixed inset-0 (owns the whole screen) at the
+   same z-60 as the drawer; hide the drawer while it's open so the launcher can't
+   paint over it. On desktop they sit on opposite sides and coexist, so this only
+   applies below md. */
+@media (max-width: 767px) {
+  body[data-wa-panel="true"] [data-claude-drawer] {
+    display: none !important;
+  }
 }
 
 /* Collapsible desktop sidebar — toggled by Sidebar.tsx via `data-sidebar-collapsed`

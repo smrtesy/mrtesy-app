@@ -25,7 +25,8 @@ import messagesRouter from "./routes/messages";
 import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
-import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
+import { webActionRouter, startIdleSweeper as startWebActionSweeper } from "./modules/web-action";
+import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter, driveCatalogRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtdesignRouter from "./modules/smrtdesign";
@@ -173,6 +174,12 @@ app.use(correctionsJobsRouter);
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", claudeSessionRouter);
 
+// Google Drive catalog scanner — x-cron-secret guarded (kicked by this session
+// and self-draining server-side). Walks a shared Drive subtree into
+// public.drive_catalog. Mounted before the auth guards like the other machine
+// routers.
+app.use("/api", driveCatalogRouter);
+
 // smrtPlan Claude Code auto session report — x-cron-secret guarded (a Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", smrtplanSessionReportRouter);
@@ -192,6 +199,7 @@ app.use("/api", searchCronRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
+app.use("/api", webActionRouter);
 app.use("/api", smrttaskRouter);
 app.use("/api", smrtvoiceRouter);
 app.use("/api", smrtcrmRouter);
@@ -281,6 +289,9 @@ function ensureChromium(): void {
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on ${HOST}:${PORT}`);
   ensureChromium();
+  // web-action: sweep idle browser sessions so a walked-away signup can't hold
+  // a Chromium on the host forever. No-op until a session is created.
+  startWebActionSweeper();
   // Seed the global-search navigation destinations so settings/pages search
   // works immediately after a deploy. Best-effort, non-blocking; skips when
   // already seeded (see ensureDestinationsIndexed).
