@@ -572,8 +572,8 @@ function AddTargetForm({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="railway">Railway</SelectItem>
-              <SelectItem value="vercel">Vercel ({t("soon")})</SelectItem>
-              <SelectItem value="supabase">Supabase ({t("soon")})</SelectItem>
+              <SelectItem value="vercel">Vercel</SelectItem>
+              <SelectItem value="supabase">Supabase</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -586,8 +586,21 @@ function AddTargetForm({
           <Input value={environment} onChange={(e) => setEnvironment(e.target.value)} placeholder="production" />
         </div>
         <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">{t("targetRef")}</label>
-          <Input value={targetRef} onChange={(e) => setTargetRef(e.target.value)} placeholder={t("targetRefPlaceholder")} />
+          <label className="text-xs font-medium text-muted-foreground">
+            {provider === "vercel" ? t("targetRefVercel") : t("targetRef")}
+          </label>
+          <Input
+            value={targetRef}
+            onChange={(e) => setTargetRef(e.target.value)}
+            placeholder={
+              provider === "vercel"
+                ? t("targetRefVercelPlaceholder")
+                : provider === "supabase"
+                  ? t("targetRefSupabase")
+                  : t("targetRefPlaceholder")
+            }
+            disabled={provider === "supabase"}
+          />
         </div>
       </div>
       <div className="flex items-center gap-2">
