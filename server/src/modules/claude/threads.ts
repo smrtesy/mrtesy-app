@@ -304,7 +304,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
   const { data: runs, error: rErr } = await db
     .from("claude_runs")
     .select(
-      "id, turn_index, status, user_prompt, result_summary, error, model, effort, resumed_session, moved_to_thread_id, total_cost_usd, input_tokens, output_tokens, num_turns, duration_ms, created_at, ended_at",
+      "id, turn_index, status, user_prompt, result_summary, error, model, effort, resumed_session, moved_to_thread_id, total_cost_usd, input_tokens, output_tokens, num_turns, duration_ms, created_at, started_at, updated_at, ended_at, resume_attempts",
     )
     .eq("thread_id", thread.id)
     .order("turn_index", { ascending: true })
