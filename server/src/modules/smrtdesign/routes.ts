@@ -24,9 +24,10 @@ async function withSignedUrls(
   return Promise.all(
     options.map(async (o) => {
       if (!o.image_url) return { ...o, image_signed_url: null };
-      const { data } = await db.storage
+      const { data, error } = await db.storage
         .from(RENDER_BUCKET)
         .createSignedUrl(o.image_url, SIGNED_TTL);
+      if (error) console.error("[smrtdesign] signed url failed:", error.message);
       return { ...o, image_signed_url: data?.signedUrl ?? null };
     }),
   );
@@ -93,16 +94,27 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
   // Lazy poll: if a generation/remix run is driving this project, reflect its
   // terminal state. `thread_id` holds the driving run id (see prompt.ts / schema).
   if (project.status === "generating" && project.thread_id) {
-    const { data: run } = await db
+    const { data: run, error: runErr } = await db
       .from("claude_runs")
-      .select("id, error, ended_at")
+      .select("id, error, ended_at, started_at")
       .eq("org_id", orgId)
       .eq("id", project.thread_id)
       .maybeSingle();
-    if (run?.ended_at) {
-      const next = run.error ? "failed" : "options_ready";
-      await db.from("smrtdesign_projects").update({ status: next }).eq("id", project.id);
-      project.status = next;
+    if (runErr) console.error("[smrtdesign] run lookup failed:", runErr.message);
+    // Resolve on terminal, missing, or stale — a backend restart mid-run leaves
+    // the run 'running' with no reaper, which would otherwise stick forever.
+    const startedMs = run?.started_at ? Date.parse(run.started_at) : NaN;
+    const stale = Number.isFinite(startedMs) && Date.now() - startedMs > 20 * 60 * 1000;
+    let next: string | null = null;
+    if (run?.ended_at) next = run.error ? "failed" : "options_ready";
+    else if (!run || stale) next = "failed";
+    if (next) {
+      const { error: updErr } = await db
+        .from("smrtdesign_projects")
+        .update({ status: next })
+        .eq("id", project.id);
+      if (updErr) console.error("[smrtdesign] status sync failed:", updErr.message);
+      else project.status = next;
     }
   }
 
@@ -114,11 +126,12 @@ router.get("/design/projects/:id", requireAuth, requireOrg, requireApp("smrtdesi
     .order("created_at", { ascending: true });
   if (oErr) return res.status(500).json({ error: oErr.message });
 
-  const { data: selections } = await db
+  const { data: selections, error: selErr } = await db
     .from("smrtdesign_selections")
     .select("*")
     .eq("project_id", project.id)
     .order("created_at", { ascending: false });
+  if (selErr) console.error("[smrtdesign] selections load failed:", selErr.message);
 
   res.json({
     project,
@@ -303,11 +316,12 @@ router.post("/design/projects/:id/remix", requireAuth, requireOrg, requireApp("s
   }
 
   // Record the selection (combined_option_id filled once the run posts it back).
-  const { data: selection } = await db
+  const { data: selection, error: selInsErr } = await db
     .from("smrtdesign_selections")
     .insert({ org_id: orgId, project_id: project.id, created_by: req.user!.id, picks_json: picksIn })
     .select("id")
     .single();
+  if (selInsErr) console.error("[smrtdesign] selection insert failed:", selInsErr.message);
 
   const prompt = buildRemixPrompt({ picks, sources });
   // startRun sets status=generating; the run posts the combined option (is_combined=true).
