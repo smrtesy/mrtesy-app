@@ -205,26 +205,33 @@ export interface RailwayReadResult {
 /** Read all variable NAMES for a target's service/environment, returning a fingerprint
  *  per name (never a value). Used to build the live mirror. */
 export async function railwayReadVariables(spec: RailwayTargetSpec): Promise<RailwayReadResult> {
-  const r = await resolveRailwayContext(spec);
-  if (!r.ok || !r.ctx) return { configured: r.configured, hint: r.hint, error: r.error };
-  const { token, projectId, serviceId, environmentId } = r.ctx;
+  // try/catch so a network error or the 10s fetch timeout (AbortError) degrades to an
+  // error result instead of throwing — the mirror/sync loop reads many providers and
+  // one Railway hiccup must not take the others down with it.
+  try {
+    const r = await resolveRailwayContext(spec);
+    if (!r.ok || !r.ctx) return { configured: r.configured, hint: r.hint, error: r.error };
+    const { token, projectId, serviceId, environmentId } = r.ctx;
 
-  const query = `query variables($projectId: String!, $environmentId: String!, $serviceId: String) {
-    variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId)
-  }`;
-  const { ok, status, data, errors } = await railwayGraphql(token, query, {
-    projectId,
-    environmentId,
-    serviceId,
-  });
-  if (!ok || errors) return { configured: true, error: gqlError(errors, status) };
+    const query = `query variables($projectId: String!, $environmentId: String!, $serviceId: String) {
+      variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId)
+    }`;
+    const { ok, status, data, errors } = await railwayGraphql(token, query, {
+      projectId,
+      environmentId,
+      serviceId,
+    });
+    if (!ok || errors) return { configured: true, error: gqlError(errors, status) };
 
-  const map = ((data as { variables?: unknown })?.variables ?? {}) as Record<string, unknown>;
-  const fingerprints: Record<string, string> = {};
-  for (const [name, value] of Object.entries(map)) {
-    if (typeof value === "string") fingerprints[name] = fingerprint(value);
+    const map = ((data as { variables?: unknown })?.variables ?? {}) as Record<string, unknown>;
+    const fingerprints: Record<string, string> = {};
+    for (const [name, value] of Object.entries(map)) {
+      if (typeof value === "string") fingerprints[name] = fingerprint(value);
+    }
+    return { configured: true, fingerprints };
+  } catch (e) {
+    return { configured: true, error: e instanceof Error ? e.message : String(e) };
   }
-  return { configured: true, fingerprints };
 }
 
 export interface RailwayWriteResult {
@@ -241,18 +248,24 @@ export async function railwayUpsertVariable(
   name: string,
   value: string,
 ): Promise<RailwayWriteResult> {
-  const r = await resolveRailwayContext(spec);
-  if (!r.ok || !r.ctx) return { ok: false, configured: r.configured, hint: r.hint, error: r.error };
-  const { token, projectId, serviceId, environmentId } = r.ctx;
+  // try/catch so a network error / fetch timeout degrades to an error result rather
+  // than throwing out of the multi-provider sync loop.
+  try {
+    const r = await resolveRailwayContext(spec);
+    if (!r.ok || !r.ctx) return { ok: false, configured: r.configured, hint: r.hint, error: r.error };
+    const { token, projectId, serviceId, environmentId } = r.ctx;
 
-  const mutation = `mutation variableUpsert($input: VariableUpsertInput!) {
-    variableUpsert(input: $input)
-  }`;
-  const { ok, status, errors } = await railwayGraphql(token, mutation, {
-    input: { projectId, environmentId, serviceId, name, value },
-  });
-  if (!ok || errors) return { ok: false, configured: true, error: gqlError(errors, status) };
-  return { ok: true, configured: true };
+    const mutation = `mutation variableUpsert($input: VariableUpsertInput!) {
+      variableUpsert(input: $input)
+    }`;
+    const { ok, status, errors } = await railwayGraphql(token, mutation, {
+      input: { projectId, environmentId, serviceId, name, value },
+    });
+    if (!ok || errors) return { ok: false, configured: true, error: gqlError(errors, status) };
+    return { ok: true, configured: true };
+  } catch (e) {
+    return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /**

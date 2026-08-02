@@ -21,16 +21,25 @@ import {
   type RailwayReadResult,
   type RailwayTargetSpec,
 } from "./railway";
-import { vercelInventory } from "./vercel";
-import { supabaseInventory } from "./supabase";
+import {
+  vercelInventory,
+  vercelProjectEnvNames,
+  vercelUpsertEnv,
+  type VercelReadResult,
+} from "./vercel";
+import {
+  supabaseInventory,
+  supabaseUpsertSecret,
+  supabaseSecretFingerprints,
+  type SupabaseReadResult,
+} from "./supabase";
 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
 
-// Providers whose connector is wired up in this phase. A target on any other
-// provider is stored (the schema allows all three for phases 2-3) but reads as
-// "connector not available yet" and can never be silently reported as synced.
-const LIVE_PROVIDERS = new Set(["railway"]);
+// Providers whose read+write connectors are wired up. All three are live now
+// (Railway phase 1, Vercel + Supabase phase 2/3).
+const LIVE_PROVIDERS = new Set(["railway", "vercel", "supabase"]);
 
 // Logical key names follow the same shape as the app_secrets custom keys — but the
 // managed registry keys on a human label, so we allow spaces and mixed case. Keep it
@@ -150,13 +159,21 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
     targetRows = (targets ?? []) as TargetRow[];
   }
 
-  // Read each distinct Railway (service, environment) context at most once.
+  // Read each distinct provider context at most once (mirror is presence + drift).
   const railwayCache = new Map<string, RailwayReadResult>();
+  const vercelCache = new Map<string, VercelReadResult>();
+  let supabaseRead: SupabaseReadResult | null = null;
   for (const t of targetRows) {
-    if (t.provider !== "railway") continue;
-    const key = ctxKey(t);
-    if (!railwayCache.has(key)) {
-      railwayCache.set(key, await railwayReadVariables(specOf(t)));
+    if (t.provider === "railway") {
+      const key = ctxKey(t);
+      if (!railwayCache.has(key)) railwayCache.set(key, await railwayReadVariables(specOf(t)));
+    } else if (t.provider === "vercel") {
+      const key = t.target_ref ?? "";
+      if (t.target_ref && !vercelCache.has(key)) {
+        vercelCache.set(key, await vercelProjectEnvNames(t.target_ref));
+      }
+    } else if (t.provider === "supabase") {
+      if (!supabaseRead) supabaseRead = await supabaseSecretFingerprints();
     }
   }
 
@@ -177,6 +194,12 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
       let hint: string | undefined;
       let providerError: string | undefined;
 
+      // present = does env_var_name exist on the provider; matches = does its value
+      // fingerprint the same as our intended value (only where the provider returns a
+      // value we can fingerprint: Railway + Supabase; Vercel values are encrypted, so
+      // Vercel is presence-only with matches=null). fpOnProvider is persisted for drift.
+      let fpOnProvider: string | null = null;
+
       if (t.provider === "railway") {
         const read = railwayCache.get(ctxKey(t));
         if (read) {
@@ -186,28 +209,59 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
           if (read.fingerprints) {
             const fp = read.fingerprints[t.env_var_name];
             present = fp !== undefined;
+            fpOnProvider = present ? fp : null;
             matches = s.value_fingerprint ? (present ? fp === s.value_fingerprint : false) : null;
-            // Persist the live read onto the target (fire-and-forget). Wrapped so
-            // the Supabase query builder becomes a real Promise for Promise.allSettled.
-            const present_ = present;
-            const fp_ = fp;
-            persistUpdates.push(
-              (async () => {
-                await db
-                  .from("managed_secret_targets")
-                  .update({
-                    last_seen_present: present_,
-                    value_fingerprint: present_ ? fp_ : null,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq("id", t.id);
-              })(),
-            );
           }
         }
-      } else {
-        configured = false;
-        hint = `The ${t.provider} connector is not available yet (phase 1 is Railway only).`;
+      } else if (t.provider === "vercel") {
+        if (!t.target_ref) {
+          configured = false;
+          hint = "This Vercel target needs the project id (set it as the target's service id).";
+        } else {
+          const read = vercelCache.get(t.target_ref);
+          if (read) {
+            configured = read.configured;
+            hint = read.hint;
+            providerError = read.error;
+            if (read.names) {
+              present = read.names.includes(t.env_var_name);
+              matches = null; // Vercel values are encrypted — presence only.
+            }
+          }
+        }
+      } else if (t.provider === "supabase") {
+        const read = supabaseRead;
+        if (read) {
+          configured = read.configured;
+          hint = read.hint;
+          providerError = read.error;
+          if (read.fingerprints) {
+            const fp = read.fingerprints[t.env_var_name];
+            present = fp !== undefined;
+            fpOnProvider = present ? fp : null;
+            matches = s.value_fingerprint ? (present ? fp === s.value_fingerprint : false) : null;
+          }
+        }
+      }
+
+      // Persist the live read onto the target (fire-and-forget). Only when we got a
+      // definitive presence read (present !== null), so a provider error doesn't wipe
+      // the last-known state.
+      if (present !== null) {
+        const present_ = present;
+        const fp_ = fpOnProvider;
+        persistUpdates.push(
+          (async () => {
+            await db
+              .from("managed_secret_targets")
+              .update({
+                last_seen_present: present_,
+                value_fingerprint: fp_,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", t.id);
+          })(),
+        );
       }
 
       return {
@@ -483,18 +537,31 @@ router.post("/admin/secrets/:id/sync", async (req: Request, res: Response) => {
     env_var_name: string;
     ok: boolean;
     error?: string;
+    note?: string;
   }> = [];
 
   for (const t of targetRows) {
     let ok = false;
     let errMsg: string | undefined;
+    let note: string | undefined;
 
     if (t.provider === "railway") {
       const w = await railwayUpsertVariable(specOf(t), t.env_var_name, value);
       ok = w.ok;
       errMsg = w.ok ? undefined : w.error || w.hint || "railway write failed";
+      note = w.ok ? "written; Railway auto-redeploys the service" : undefined;
+    } else if (t.provider === "vercel") {
+      const w = await vercelUpsertEnv(t.target_ref, t.env_var_name, value, t.environment);
+      ok = w.ok;
+      errMsg = w.ok ? undefined : w.error || w.hint || "vercel write failed";
+      note = w.ok ? w.note ?? "written; production redeploy triggered" : undefined;
+    } else if (t.provider === "supabase") {
+      const w = await supabaseUpsertSecret(t.env_var_name, value);
+      ok = w.ok;
+      errMsg = w.ok ? undefined : w.error || w.hint || "supabase write failed";
+      note = w.ok ? "written; edge functions pick it up on next invocation" : undefined;
     } else {
-      errMsg = `${t.provider} connector not available yet (phase 1 is Railway only)`;
+      errMsg = `unknown provider ${t.provider}`;
     }
 
     const nowIso = new Date().toISOString();
@@ -522,11 +589,11 @@ router.post("/admin/secrets/:id/sync", async (req: Request, res: Response) => {
       provider: t.provider,
       envVarName: t.env_var_name,
       result: ok ? "ok" : "error",
-      message: ok ? "value written; provider redeploy triggered" : errMsg,
+      message: ok ? note ?? "value written" : errMsg,
       actor,
     });
 
-    results.push({ target_id: t.id, provider: t.provider, env_var_name: t.env_var_name, ok, error: errMsg });
+    results.push({ target_id: t.id, provider: t.provider, env_var_name: t.env_var_name, ok, error: errMsg, note });
   }
 
   res.json({ results });

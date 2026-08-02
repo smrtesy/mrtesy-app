@@ -1,10 +1,22 @@
 # Managed secrets — one place to add a key, live mirror + auto-propagate
 
-**Status:** phase 1 (Railway loop) **built** — `2026-08-02`, branch
-`claude/wallet-secrets-management-x2f8g7`. Tables + Vault storage + Railway
-read/write connector + the live-mirror screen (`/admin/secrets`, super-admin) +
-the approval-gated sync are in place. Phases 2 (Vercel), 3 (Supabase) and 4
-(Claude-orchestrated authoring) remain. **What it looks like when built:**
+**Status:** phases 1–3 **built** — `2026-08-02`, branch
+`claude/wallet-secrets-management-x2f8g7`. Tables + Vault storage + the
+live-mirror screen (`/admin/secrets`, super-admin) + the approval-gated sync are
+in place, and **all three provider connectors (Railway, Vercel, Supabase) do
+both read and write** — add a key once and propagate it to any target in one
+approved click. A read-only **inventory panel** ("what exists in each service")
+lists every variable NAME across all three, side by side. Phase 4
+(Claude-orchestrated authoring) remains.
+- Write connectors: Railway `variableUpsert` (auto-redeploy), Vercel
+  `POST …/env?upsert=true` + a production redeploy (`POST /v13/deployments`
+  with the latest deployment id), Supabase `POST …/secrets` (upsert by name,
+  no redeploy). All contracts verified against the live API schemas 2026-08-02.
+- Per-target drift in the mirror: Railway + Supabase show present **and**
+  value-match (the API returns a value we fingerprint then drop); Vercel is
+  presence-only (its values are encrypted, so no value-match without decrypt).
+- Vercel targets need the project id in the target's `target_ref`; Supabase is
+  project-wide (ref from `SUPABASE_URL`); Railway auto-resolves the service. **What it looks like when built:**
 - Migration `supabase/migrations/20260802150000_managed_secrets.sql` — the three
   tables (`managed_secrets`, `managed_secret_targets`, `secret_sync_log`), RLS on
   with no policies (service-role only).
