@@ -20,20 +20,10 @@
 # (server/src/modules/claude/github.ts). Because nixPkgs REPLACES the auto-detected
 # set, git is not present unless it is listed here — a clone would fail with
 # `spawn git ENOENT`, the same class of miss that `claude` hit in slice 1.
-# supabase-cli is added so Claude runs can APPLY migrations, not just write them:
-# the autonomy gate (server/src/modules/claude/actions.ts + the env preamble in
-# playbooks.ts) has a run apply an additive migration itself, and apply an approved
-# destructive one, via `supabase db push` in its cloned checkout. Because nixPkgs
-# REPLACES the auto-detected set, the `supabase` binary is absent unless listed here —
-# a push would fail with `spawn supabase ENOENT`, the same class of miss git hit. Like
-# nix-provided ffmpeg (and unlike Chromium), the CLI is self-contained via its RPATH
-# into /nix/store and spawns fine. The credentials it needs (access token + db
-# password) are injected into the run env from app_secrets in runner.ts.
 nixPkgs = [
   "nodejs_22",
   "ffmpeg",
   "git",
-  "supabase-cli",
 ]
 
 # Dependency install runs in its OWN cached layer, keyed only on the lockfiles.
