@@ -17,6 +17,7 @@ import { EmbedFlag } from "@/components/platform/layout/EmbedFlag";
 import { WorkClockBar } from "@/components/smrttask/workclock/WorkClockBar";
 import { PullToRefresh } from "@/components/platform/pwa/PullToRefresh";
 import { ClaudeInspector } from "@/components/claude/ClaudeInspector";
+import { ClaudeDrawer } from "@/components/claude/ClaudeDrawer";
 import { SystemMessagesRecorder } from "@/components/platform/layout/SystemMessagesRecorder";
 
 export default async function AppLayout({
@@ -192,6 +193,12 @@ export default async function AppLayout({
               Admin-only, matching the /claude routes' requireSuperAdmin gate: for
               anyone else the capture would land on a screen whose every call 403s. */}
           {isAdmin && <ClaudeInspector />}
+          {/* Floating, collapsible Claude console — a side chat launched from a
+              corner button, hosting the /claude screen in an embed iframe. Admin
+              only, matching the /claude routes' super-admin gate. Renders nothing
+              inside its own iframe (recursion guard in the component + the
+              data-embed CSS rule), so it never nests. */}
+          {isAdmin && <ClaudeDrawer locale={locale} />}
           {/* Archives every toast shown into the sidebar bell (SystemMessagesBell).
               Lives INSIDE TabsWorkspaceProvider so it can attribute each message
               to the active tab's screen (panes never change the top URL). */}

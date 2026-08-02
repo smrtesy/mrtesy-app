@@ -4451,6 +4451,13 @@
       "notConnected": "GitHub is not connected. Save a GitHub token with the 'repo' scope as {key} at {where}."
     }
   },
+  "claudeDrawer": {
+    "launch": "Ask Claude",
+    "title": "Claude",
+    "openFull": "Open full screen",
+    "close": "Close",
+    "loading": "Loading Claude…"
+  },
   "claudeChat": {
     "interactive": {
       "picked": "I chose: {label}",
