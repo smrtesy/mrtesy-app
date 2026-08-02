@@ -132,6 +132,11 @@ project: voice/image/video/character/background/storyboard/…, referencing the
 per-type detail row) + `studio_artifact_sources` (the derivation DAG, role-typed
 edges). A trigger projects `experiment_runs` (image/video) into the spine; voice
 projection + DAG population are staged. Design: `docs/studio-production-pipeline.md`.
+Drive catalog: `drive_catalog` (one row per folder/file of a scanned Drive
+subtree — resumable via the `folder_expanded` flag) + `drive_catalog_scans`
+(per-root scan state). Populated server-side by the `drive-catalog` machine
+route (`server/src/modules/smrttask/routes/drive-catalog.ts`) walking a shared
+Drive tree via the user's `google_drive` OAuth. Design: `docs/drive-catalog-plan.md`.
 Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
 playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`

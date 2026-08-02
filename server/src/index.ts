@@ -26,7 +26,7 @@ import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
 import { webActionRouter, startIdleSweeper as startWebActionSweeper } from "./modules/web-action";
-import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter } from "./modules/smrttask";
+import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter, driveCatalogRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
 import smrtdesignRouter from "./modules/smrtdesign";
@@ -173,6 +173,12 @@ app.use(correctionsJobsRouter);
 // smrtTask Claude Code session proposals — x-cron-secret guarded (the Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", claudeSessionRouter);
+
+// Google Drive catalog scanner — x-cron-secret guarded (kicked by this session
+// and self-draining server-side). Walks a shared Drive subtree into
+// public.drive_catalog. Mounted before the auth guards like the other machine
+// routers.
+app.use("/api", driveCatalogRouter);
 
 // smrtPlan Claude Code auto session report — x-cron-secret guarded (a Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
