@@ -28,7 +28,7 @@ import { embedText } from "../../../services/voyage";
 
 const router = Router();
 
-// Safe to leave unscoped: this router is MOUNTED on a path
+// gate-scope-ok: this router is MOUNTED on a path
 // (`router.use("/knowledge", knowledgeRouter)` in ../index.ts), so the mount
 // is the scope and this gate cannot leak onto other /api traffic.
 router.use(
