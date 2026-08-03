@@ -25,6 +25,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api/client";
 import { TaskRow, type RowZone } from "./TaskRow";
+import { DaySchedulePopover } from "./DaySchedulePopover";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
 import { TaskDetail } from "./TaskDetail";
 import { MarathonMode } from "./MarathonMode";
@@ -58,7 +59,7 @@ import {
 import { undoToast } from "@/components/ui/undo-toast";
 import { dueLabel } from "./DueDateChip";
 import { toast } from "sonner";
-import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer, ClipboardList, X } from "lucide-react";
+import { Zap, ChevronDown, ChevronUp, Play, Home, Briefcase, MapPin, GripVertical, ExternalLink, Timer, ClipboardList, CalendarClock, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskNeed } from "@/types/task";
 
@@ -572,6 +573,34 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     };
   }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr, mediumQuota, bigQuota]);
 
+  // Future commitments — medium/big tasks scheduled for a day AFTER today
+  // (planned_for > today). They are hidden from the desk until their day arrives
+  // (isHidden above), so this "מתוזמן קדימה" ledger is the only place the days
+  // ahead the user has already filled are visible. Grouped by day, ascending,
+  // active tasks only (the rollover's non-terminal set). method131 only — the
+  // day-scheduling flow belongs to that method.
+  const [scheduledOpen, setScheduledOpen] = useState(false);
+  const scheduledAhead = useMemo(() => {
+    if (!m131Enabled) return [] as { date: string; tasks: Task[] }[];
+    const active = new Set(["inbox", "in_progress", "snoozed", "pending_completion"]);
+    const byDay = new Map<string, Task[]>();
+    for (const tk of tasks) {
+      if (tk.plan_id || tk.size === "quick") continue;
+      if (!tk.planned_for || tk.planned_for <= todayStr) continue;
+      if (!active.has(tk.status)) continue;
+      const list = byDay.get(tk.planned_for) ?? [];
+      list.push(tk);
+      byDay.set(tk.planned_for, list);
+    }
+    return [...byDay.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([date, list]) => ({ date, tasks: list }));
+  }, [tasks, m131Enabled, todayStr]);
+  const scheduledCount = useMemo(
+    () => scheduledAhead.reduce((n, d) => n + d.tasks.length, 0),
+    [scheduledAhead],
+  );
+
   // Marathon "regular" run set: the day's medium+big work — desk picks plus the
   // pool overflow (ON), or the surfaced regular desk (OFF). Quick keeps its own run.
   const marathonRegularTasks = useMemo(
@@ -827,7 +856,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
         onSnooze={(id) => setSnoozeTaskId(id)}
         onSizeToggle={handleSizeToggle}
         onDueChange={task.plan_id ? undefined : handleDueChange}
-        onPlanToggle={handlePlanToggle}
+        onSchedule={handleSchedule}
         plannedToday={task.planned_for === todayStr}
       />
     );
@@ -894,20 +923,27 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     await applyDeskOrder(arrayMove(column, oldIndex, newIndex).map((row) => row.id), null, null);
   }
 
-  /** Add a task to / remove it from today's plan (planned_for), and snapshot the
-   *  day to daily_plans. The build-day modal was removed — picking inline (the
-   *  +/− on each row) IS building the day, so the snapshot happens on every pick
-   *  instead of behind a separate "done" button (docs/workclock-plan.md §6.7). */
-  function handlePlanToggle(taskId: string, addToToday: boolean) {
-    const planned_for = addToToday ? todayStr : null;
-    patchTask(taskId, { planned_for }, (task) => ({ ...task, planned_for }));
-    // Snapshot ALL picked medium/big tasks (not the context-filtered pickedIds —
-    // that would drop home/outside picks). `tasks` is pre-optimistic here, so
-    // apply the toggle to the derived set. Quick tasks are never "picked".
+  /** Commit a medium/big task to a specific day (planned_for = date) or remove it
+   *  from its day (date = null), via the day-picker. Picking inline IS building
+   *  the day — the build-day modal was removed (docs/workclock-plan.md §6.7) — so
+   *  we refresh TODAY's daily_plans snapshot on every change. A task moved onto or
+   *  off today changes today's committed set; scheduling to a FUTURE day leaves
+   *  today's set unchanged (the re-post is idempotent). Future days are not
+   *  snapshotted in v1 — the rollover still un-plans them if they slip, and
+   *  capacity reads planned_for directly, so scoring history is the only thing
+   *  a future snapshot would add. */
+  function handleSchedule(taskId: string, date: string | null) {
+    patchTask(taskId, { planned_for: date }, (task) => ({ ...task, planned_for: date }));
+    // Recompute today's picked medium/big from the pre-optimistic list (ALL of
+    // them, not the context-filtered set — that would drop home/outside picks),
+    // then apply this change. Quick tasks are never "picked".
     const nextPicked = new Set(
-      tasks.filter((tk) => tk.planned_for === todayStr && tk.size !== "quick").map((tk) => tk.id),
+      tasks
+        .filter((tk) => tk.id !== taskId && tk.planned_for === todayStr && tk.size !== "quick")
+        .map((tk) => tk.id),
     );
-    if (addToToday) nextPicked.add(taskId); else nextPicked.delete(taskId);
+    const moved = tasks.find((tk) => tk.id === taskId);
+    if (date === todayStr && moved && moved.size !== "quick") nextPicked.add(taskId);
     api("/api/tasks/day-plan", {
       method: "POST",
       body: { plan_date: todayStr, picked_task_ids: [...nextPicked], quick_total: deskQuick.length },
@@ -984,6 +1020,62 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
             onChanged={fetchTasks}
             onSnooze={(id) => setSnoozeTaskId(id)}
           />
+
+          {/* ── מתוזמן קדימה — the ledger of medium/big tasks committed to a
+              future day. Collapsed by default (compact-UI rule); one quiet row
+              that expands to the days ahead, each task rescheduleable in place. ── */}
+          {scheduledAhead.length > 0 && (
+            <section className="rounded-lg border">
+              <button
+                type="button"
+                onClick={() => setScheduledOpen((v) => !v)}
+                aria-expanded={scheduledOpen}
+                className="flex w-full items-center gap-2 px-3 py-2 text-start"
+              >
+                <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("scheduled.heading")}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {t("scheduled.summary", { days: scheduledAhead.length, tasks: scheduledCount })}
+                </span>
+                <ChevronDown className={cn("ms-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform", scheduledOpen && "rotate-180")} />
+              </button>
+              {scheduledOpen && (
+                <div className="space-y-3 border-t px-3 py-2">
+                  {scheduledAhead.map(({ date, tasks: dayTasks }) => (
+                    <div key={date} className="space-y-1">
+                      <div className="text-[11px] font-semibold text-muted-foreground" dir="auto">{dueLabel(date)}</div>
+                      {dayTasks.map((tk) => (
+                        <div key={tk.id} className="group flex items-center gap-2 rounded-md px-2 py-1 hover:bg-accent/50">
+                          <span
+                            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tk.size === "big" ? "bg-status-late" : "bg-status-warn")}
+                            title={t(tk.size === "big" ? "scheduled.sizeBig" : "scheduled.sizeMedium")}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSelect(tk)}
+                            className="min-w-0 flex-1 truncate text-start text-sm"
+                            dir="auto"
+                          >
+                            {locale === "he" && tk.title_he ? tk.title_he : tk.title}
+                          </button>
+                          <span className="opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <DaySchedulePopover
+                              size={tk.size === "big" ? "big" : "medium"}
+                              plannedFor={tk.planned_for ?? null}
+                              dueDate={tk.due_date ?? null}
+                              onSchedule={(d) => handleSchedule(tk.id, d)}
+                            />
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* ── Plan-focus blocks — a separate section (⏱ NN ▶), independent of
               method131; one row per active focus commitment (§8.7). ── */}
