@@ -64,6 +64,13 @@ API keys into smrtVault (components `src/components/web-action/`, server
 `server/src/modules/platform/` (organizations, members, permissions, me,
 messaging, push, apps, search) and `server/src/modules/admin/`.
 
+**App entitlement guard (screens):** each app route group has a `layout.tsx`
+calling `requireAppAccess("<slug>", locale)` (`src/lib/apps/guard.ts`), which
+redirects a user who lacks the app to a screen they can open. Without it any
+direct entry — bookmark, shared link, or the installed PWA replaying a cached
+`/tasks` shell — mounted the screen and fired API calls the backend then
+refused. Visibility only; `requireApp` on the server is the real boundary.
+
 **Permissions (open-by-default restriction layer):** on top of app entitlements,
 an org can restrict specific screens/actions and grant per-user exceptions.
 Catalog is code (`src/lib/permissions/registry.ts` + server twin
