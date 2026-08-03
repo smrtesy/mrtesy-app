@@ -92,17 +92,70 @@ const SUPABASE_PROJECT_REF_DEFAULT = "exjnlghuzuvqedlltztz";
  * /admin/apps/smrttask/secrets (key CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION).
  */
 export const AUTOMATION_ACCOUNT = "automation";
-const AUTOMATION_TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION";
 
 /** The default account id — interactive console threads with no explicit choice
  *  run here (a NULL `claude_account` resolves to this token in loadAccountToken). */
 export const PRIMARY_ACCOUNT = "primary";
 
-/** Optional human labels for the two accounts, so the operator can name them in the
- *  switcher ("החשבון של מאור" vs "חשבון משני") without a code change. Unset → the UI
- *  falls back to its own default label per account id. */
+/** The primary account's optional human label, so the operator can name it in the
+ *  switcher ("החשבון של מאור") without a code change. Each extra account has its own
+ *  CLAUDE_ACCOUNT_LABEL_<ID> (labelKeyFor). Unset → the UI falls back to a default
+ *  label per account id. */
 const PRIMARY_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL";
-const AUTOMATION_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL_AUTOMATION";
+
+/**
+ * The console is no longer capped at two accounts. Beyond the built-in `primary`,
+ * the set of extra accounts is a comma-separated registry secret so a THIRD (or
+ * Nth) account is added with zero code change — just secrets under
+ * /admin/apps/smrttask/secrets:
+ *
+ *   CLAUDE_ACCOUNTS            = automation,ai3      (the extra account ids)
+ *   CLAUDE_CODE_OAUTH_TOKEN_AI3 = sk-ant-oat01-…     (that account's token)
+ *   CLAUDE_ACCOUNT_LABEL_AI3    = ai3                (optional human label)
+ *
+ * Unset → the historical default `["automation"]`, so nothing changes for an
+ * environment that never sets the registry. Each id maps to a token/label key by
+ * the same convention the two original accounts already used: `primary` owns the
+ * bare `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_ACCOUNT_LABEL`; every other id `X` owns
+ * `CLAUDE_CODE_OAUTH_TOKEN_<UPPER(X)>` / `CLAUDE_ACCOUNT_LABEL_<UPPER(X)>` — which
+ * for `X = automation` is exactly the pre-existing pair, so this is a pure
+ * generalization with no migration.
+ */
+const ACCOUNTS_REGISTRY_KEY = "CLAUDE_ACCOUNTS";
+const DEFAULT_EXTRA_ACCOUNTS = [AUTOMATION_ACCOUNT];
+/** A safe account id: lowercase letters/digits/underscore, so it can be pasted
+ *  verbatim into an env-var name (`CLAUDE_CODE_OAUTH_TOKEN_<UPPER>`). */
+const ACCOUNT_ID_RE = /^[a-z0-9_]{1,32}$/;
+
+/** The secret key holding a given account's OAuth token. */
+function tokenKeyFor(id: string): string {
+  return id === PRIMARY_ACCOUNT ? TOKEN_KEY : `CLAUDE_CODE_OAUTH_TOKEN_${id.toUpperCase()}`;
+}
+/** The secret key holding a given account's optional human label. */
+function labelKeyFor(id: string): string {
+  return id === PRIMARY_ACCOUNT ? PRIMARY_LABEL_KEY : `CLAUDE_ACCOUNT_LABEL_${id.toUpperCase()}`;
+}
+
+/**
+ * The ordered account ids the console can route to — `primary` first, then the
+ * registry's extras (deduped, validated, never a second `primary`). This is the
+ * single source of truth for both the switcher (describeAccounts) and the
+ * server-side validation in threads.ts, so the two can never drift.
+ */
+export async function listAccountIds(): Promise<string[]> {
+  const raw = (await getAppSecret(TOKEN_APP_SLUG, ACCOUNTS_REGISTRY_KEY, ACCOUNTS_REGISTRY_KEY))?.trim();
+  const extras = raw
+    ? raw
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => ACCOUNT_ID_RE.test(s) && s !== PRIMARY_ACCOUNT)
+    : DEFAULT_EXTRA_ACCOUNTS;
+  // `automation` is always kept in the list, even if the operator's registry value
+  // omits it: background work (analysis.ts) routes to it by id, so it must stay a
+  // known, switchable account rather than silently vanishing from the switcher when
+  // someone sets CLAUDE_ACCOUNTS to just their new id. Deduped, primary first.
+  return [PRIMARY_ACCOUNT, ...Array.from(new Set([...DEFAULT_EXTRA_ACCOUNTS, ...extras]))];
+}
 
 export interface AccountInfo {
   /** The id stored on a thread and sent to loadAccountToken. */
@@ -124,16 +177,16 @@ export interface AccountInfo {
  * greys it out rather than offering a route that does nothing.
  */
 export async function describeAccounts(): Promise<AccountInfo[]> {
-  const [primaryTok, autoTok, primaryLabel, autoLabel] = await Promise.all([
-    getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY),
-    getAppSecret(TOKEN_APP_SLUG, AUTOMATION_TOKEN_KEY, AUTOMATION_TOKEN_KEY),
-    getAppSecret(TOKEN_APP_SLUG, PRIMARY_LABEL_KEY, PRIMARY_LABEL_KEY),
-    getAppSecret(TOKEN_APP_SLUG, AUTOMATION_LABEL_KEY, AUTOMATION_LABEL_KEY),
-  ]);
-  return [
-    { id: PRIMARY_ACCOUNT, label: primaryLabel?.trim() || null, configured: !!primaryTok?.trim() },
-    { id: AUTOMATION_ACCOUNT, label: autoLabel?.trim() || null, configured: !!autoTok?.trim() },
-  ];
+  const ids = await listAccountIds();
+  return Promise.all(
+    ids.map(async (id) => {
+      const [tok, label] = await Promise.all([
+        getAppSecret(TOKEN_APP_SLUG, tokenKeyFor(id), tokenKeyFor(id)),
+        getAppSecret(TOKEN_APP_SLUG, labelKeyFor(id), labelKeyFor(id)),
+      ]);
+      return { id, label: label?.trim() || null, configured: !!tok?.trim() };
+    }),
+  );
 }
 
 /**
@@ -147,11 +200,14 @@ export async function describeAccounts(): Promise<AccountInfo[]> {
 async function loadAccountToken(
   account: string | null | undefined,
 ): Promise<{ token: string | null; key: string }> {
-  if ((account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT) {
-    const auto =
-      (await getAppSecret(TOKEN_APP_SLUG, AUTOMATION_TOKEN_KEY, AUTOMATION_TOKEN_KEY))?.trim() ||
-      null;
-    if (auto) return { token: auto, key: AUTOMATION_TOKEN_KEY };
+  const id = (account ?? "").trim().toLowerCase();
+  if (id && id !== PRIMARY_ACCOUNT && ACCOUNT_ID_RE.test(id)) {
+    const key = tokenKeyFor(id);
+    const tok = (await getAppSecret(TOKEN_APP_SLUG, key, key))?.trim() || null;
+    if (tok) return { token: tok, key };
+    // Fall through to the primary token: a non-primary account whose own key is
+    // unset keeps running rather than failing loudly on a credential that hasn't
+    // been added yet (the original automation-account behavior, now for any id).
   }
   const primary = (await getAppSecret(TOKEN_APP_SLUG, TOKEN_KEY, TOKEN_KEY))?.trim() || null;
   return { token: primary, key: TOKEN_KEY };
