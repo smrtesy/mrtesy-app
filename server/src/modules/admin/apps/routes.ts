@@ -203,6 +203,13 @@ const SMRTTASK_PLATFORM_KEYS = [
   // same way (`npx @anthropic-ai/claude-code setup-token`). Optional: when unset the
   // runner falls back to CLAUDE_CODE_OAUTH_TOKEN, so nothing breaks until it's added.
   { key: "CLAUDE_CODE_OAUTH_TOKEN_AUTOMATION", is_secret: true, default_value: null },
+  // The account REGISTRY — a comma-separated list of the EXTRA Claude accounts the
+  // console switcher offers beyond the built-in `primary` (e.g. `automation,ai3`).
+  // Unset behaves as `automation` (the historical two-account default). Adding a
+  // THIRD account is: append its id here, then add two custom keys —
+  // CLAUDE_CODE_OAUTH_TOKEN_<ID> (its token, secret) and, optionally,
+  // CLAUDE_ACCOUNT_LABEL_<ID> (its display name). Not a secret — it's config.
+  { key: "CLAUDE_ACCOUNTS", is_secret: false, default_value: null },
   // GitHub personal access token ('repo' scope) — lets a Claude chat pick a
   // repository and work in a clone of it (modules/claude/github.ts).
   //
