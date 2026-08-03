@@ -4524,6 +4524,28 @@
     "close": "סגור",
     "loading": "טוען את קלוד…"
   },
+  "claudeAccounts": {
+    "title": "חשבונות Claude",
+    "hint": "החשבונות שקונסולת Claude יכולה לרוץ עליהם. הוסף חשבון חדש בטופס אחד — מזהה, שם וטוקן — במקום לערוך מפתחות סוד בנפרד.",
+    "loading": "טוען חשבונות…",
+    "addAccount": "הוסף חשבון",
+    "configured": "מוגדר",
+    "notConfigured": "בלי טוקן",
+    "builtin": "מובנה",
+    "edit": "עריכה",
+    "remove": "הסרה",
+    "removeConfirm": "להסיר את החשבון \"{id}\"? הטוקן יישאר שמור אך החשבון לא יופיע יותר במחליף.",
+    "removed": "החשבון הוסר",
+    "idPlaceholder": "ai3",
+    "idHint": "מזהה באנגלית קטנה (אותיות, ספרות, קו-תחתון). משמש לשם המפתחות בשרת ולא ניתן לשינוי אחר-כך.",
+    "labelPlaceholder": "שם לתצוגה (למשל ai3)",
+    "tokenPlaceholder": "הטוקן — sk-ant-oat01…",
+    "tokenPlaceholderKeep": "השאר ריק כדי לשמור את הטוקן הקיים",
+    "tokenHint": "מייצרים בטרמינל: npx @anthropic-ai/claude-code setup-token — התחבר בדפדפן לחשבון שאתה רוצה, ולא לחשבון אחר. לתקציב נפרד באמת — מנוי נפרד.",
+    "save": "שמור",
+    "cancel": "ביטול",
+    "saved": "נשמר"
+  },
   "claudeChat": {
     "interactive": {
       "picked": "בחרתי: {label}",

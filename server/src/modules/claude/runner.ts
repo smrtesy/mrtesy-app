@@ -121,18 +121,21 @@ const PRIMARY_LABEL_KEY = "CLAUDE_ACCOUNT_LABEL";
  * for `X = automation` is exactly the pre-existing pair, so this is a pure
  * generalization with no migration.
  */
-const ACCOUNTS_REGISTRY_KEY = "CLAUDE_ACCOUNTS";
+export const ACCOUNTS_REGISTRY_KEY = "CLAUDE_ACCOUNTS";
 const DEFAULT_EXTRA_ACCOUNTS = [AUTOMATION_ACCOUNT];
 /** A safe account id: lowercase letters/digits/underscore, so it can be pasted
  *  verbatim into an env-var name (`CLAUDE_CODE_OAUTH_TOKEN_<UPPER>`). */
-const ACCOUNT_ID_RE = /^[a-z0-9_]{1,32}$/;
+export const ACCOUNT_ID_RE = /^[a-z0-9_]{1,32}$/;
+/** The app slug all Claude account secrets live under (platform infrastructure).
+ *  Exported so the accounts-admin router writes to the same place the runner reads. */
+export const ACCOUNTS_APP_SLUG = TOKEN_APP_SLUG;
 
 /** The secret key holding a given account's OAuth token. */
-function tokenKeyFor(id: string): string {
+export function tokenKeyFor(id: string): string {
   return id === PRIMARY_ACCOUNT ? TOKEN_KEY : `CLAUDE_CODE_OAUTH_TOKEN_${id.toUpperCase()}`;
 }
 /** The secret key holding a given account's optional human label. */
-function labelKeyFor(id: string): string {
+export function labelKeyFor(id: string): string {
   return id === PRIMARY_ACCOUNT ? PRIMARY_LABEL_KEY : `CLAUDE_ACCOUNT_LABEL_${id.toUpperCase()}`;
 }
 

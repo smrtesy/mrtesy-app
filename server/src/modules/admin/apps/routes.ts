@@ -366,7 +366,7 @@ const CUSTOM_KEY_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
  * of the vault_create/vault_update branch would eventually disagree about which
  * path leaves value_text populated.
  */
-async function writeAppSecret(
+export async function writeAppSecret(
   appId: string,
   slug: string,
   key: string,
