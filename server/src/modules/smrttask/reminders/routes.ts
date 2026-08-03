@@ -16,7 +16,11 @@ import { requireFullTask } from "../lib/access";
 const router = Router();
 
 // Every reminder route requires auth + active org + smrtTask enabled for that org.
-router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/reminders", requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 const UPDATABLE_FIELDS = new Set([
   "remind_at", "channel", "message", "message_he", "title_he",
