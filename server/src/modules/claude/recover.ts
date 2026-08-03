@@ -46,7 +46,13 @@
  */
 
 import { db } from "../../db";
-import { executeRun, isRunLive, RUN_TIMEOUT_MS, USAGE_LIMIT_SENTINEL } from "./runner";
+import {
+  executeRun,
+  isRunLive,
+  RUN_TIMEOUT_MS,
+  USAGE_LIMIT_SENTINEL,
+  USAGE_UNTIL_RE,
+} from "./runner";
 import { dispatchNextWaiting } from "./threads";
 
 /** A run untouched this long with no in-process child is treated as orphaned. Well
@@ -67,14 +73,17 @@ const GAVE_UP_MESSAGE =
   "ההרצה נקטעה שוב ושוב (כנראה שרת ה-Claude עלה מחדש באמצע התור יותר מפעם אחת). " +
   "ניסינו להמשיך אותה אוטומטית ולא הצלחנו — שלח את ההודעה שוב.";
 
-/** How long a usage-limit-parked run waits between retries. The subscription
- *  window resets on its own schedule we cannot read, so retry on a slow fixed
- *  cadence: cheap when the window is still exhausted (the run fails fast and is
- *  re-parked), and at most ~15 minutes late once it has reset. */
+/** The blind retry cadence, used ONLY when the CLI's message did not name the
+ *  reset moment (no `until=` in the sentinel). When it did, the retry is
+ *  scheduled for that exact moment instead — the CLI usually says when the
+ *  window resets, and waiting for it beats probing. */
 const USAGE_RETRY_MS = 15 * 60 * 1000;
-/** A run parked on the usage limit for this long is given up — a window that
- *  hasn't reset within a day is not a window problem. */
+/** A blind-parked run (no known reset time) is given up after a day — a window
+ *  that hasn't reset within one is not a window problem. */
 const USAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** A run whose KNOWN reset time passed this long ago and still keeps failing is
+ *  given up — the parse was wrong or something else is broken. */
+const USAGE_UNTIL_GRACE_MS = 6 * 60 * 60 * 1000;
 const USAGE_GAVE_UP_MESSAGE =
   "חלון השימוש במנוי לא התאפס במשך יממה, ולכן ההרצה לא הושלמה. שלח את ההודעה שוב.";
 
@@ -132,8 +141,31 @@ async function recoverOrphanedRuns(): Promise<void> {
     // window that resets in three hours needs a dozen tries), and the loop is
     // bounded by AGE instead.
     if ((run.error ?? "").startsWith(USAGE_LIMIT_SENTINEL)) {
+      // The reset moment the runner parsed out of the CLI's message, if any.
+      const untilMatch = (run.error ?? "").match(USAGE_UNTIL_RE);
+      const untilMs = untilMatch ? Date.parse(untilMatch[1]) : NaN;
+      const hasUntil = Number.isFinite(untilMs);
+
+      // Not yet time: a known reset moment still ahead means SLEEP, not probe —
+      // this is the whole point of parsing it. (+60s so the window has actually
+      // opened when the retry spawns.)
+      if (hasUntil && Date.now() < untilMs + 60_000) continue;
+
+      // Give up: a known reset that passed hours ago and the run is still
+      // parked (each failed retry re-parks it), or a blind park older than a
+      // day. Either way this is no longer a wait-for-the-window situation.
+      // The absolute 3-day cap holds EVEN with a known reset time: each failed
+      // retry re-parks with a fresh FUTURE until (the next window), so without
+      // an age bound a persistently-exhausted account would wait-retry-repark
+      // forever while the screen promises a resume.
       const createdMs = Date.parse(run.created_at ?? "") || 0;
-      if (Date.now() - createdMs > USAGE_MAX_AGE_MS) {
+      const pastAbsoluteCap = Date.now() - createdMs > 3 * USAGE_MAX_AGE_MS;
+      const gaveUp =
+        pastAbsoluteCap ||
+        (hasUntil
+          ? Date.now() - untilMs > USAGE_UNTIL_GRACE_MS
+          : Date.now() - createdMs > USAGE_MAX_AGE_MS);
+      if (gaveUp) {
         const { error: gErr } = await db
           .from("claude_runs")
           .update({
@@ -147,18 +179,23 @@ async function recoverOrphanedRuns(): Promise<void> {
         if (gErr) console.error("[claude/recover] usage give-up failed:", gErr.message);
         continue;
       }
-      const retryCutoff = new Date(Date.now() - USAGE_RETRY_MS).toISOString();
-      // Atomic claim, same shape as the orphan claim below: clear the sentinel so
-      // the runner sees a normal queued row; only one scan (and only after the
-      // retry delay) can take it. resume_attempts deliberately untouched.
-      const { data: claimed, error: cErr } = await db
+
+      // Atomic claim: clear the sentinel so the runner sees a normal queued row;
+      // only one scan can take it. resume_attempts deliberately untouched.
+      // Guards differ by mode: with a known reset time the timing gate already
+      // passed above, so matching the exact sentinel text is the atomicity (only
+      // one UPDATE can flip error→null); without one, the updated_at gate is
+      // what enforces the 15-minute cadence.
+      let claimQ = db
         .from("claude_runs")
         .update({ error: null, updated_at: new Date().toISOString() })
         .eq("id", run.id)
         .eq("status", "queued")
-        .lt("updated_at", retryCutoff)
-        .select("id")
-        .maybeSingle();
+        .eq("error", run.error ?? "");
+      if (!hasUntil) {
+        claimQ = claimQ.lt("updated_at", new Date(Date.now() - USAGE_RETRY_MS).toISOString());
+      }
+      const { data: claimed, error: cErr } = await claimQ.select("id").maybeSingle();
       if (cErr || !claimed) continue; // not yet time, or another scan took it
       // The parked attempt's events would collide with the retry's seq 1..N on
       // UNIQUE(run_id, seq) — clear them, exactly like the orphan path.
