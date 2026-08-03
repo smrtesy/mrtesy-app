@@ -24,6 +24,7 @@ import { SuggestionToolbar } from "@/components/smrttask/common/SuggestionToolba
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { CombinedSearch } from "@/components/smrttask/common/CombinedSearch";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
+import { DaySchedulePopover } from "@/components/smrttask/tasks/DaySchedulePopover";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
@@ -465,8 +466,17 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
   // Returned-task triage: commit it to today (planned_for = today). Clears the
   // "×N returned" nag by putting it on today's desk; leaves the inbox list.
   function handlePlanToday(taskId: string) {
+    handlePlanDay(taskId, todayISO());
+  }
+
+  // Returned/backlog triage to a CHOSEN day (the day-picker) — the same commit
+  // as handlePlanToday but to any day (today or a future one, when today is
+  // full). The card leaves the inbox; a future day shows in the desk's
+  // "מתוזמן קדימה" ledger until it arrives. `date` is never null here (the
+  // inbox always picks a day), but the signature mirrors the desk's onSchedule.
+  function handlePlanDay(taskId: string, date: string | null) {
     removeLocal([taskId]);
-    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: todayISO() } })
+    api(`/api/tasks/${taskId}`, { method: "PATCH", body: { planned_for: date } })
       .then(() => onUpdate?.())
       .catch((e) => { toast.error((e as Error).message); fetchSuggestions(); });
   }
@@ -744,6 +754,7 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                     onDismissWithReason={() => openDismissDialog(task.id, title, source?.source_type ?? null)}
                     onApprove={() => handleApprove(task.id)}
                     onPlanToday={() => handlePlanToday(task.id)}
+                    onScheduleDay={(date) => handlePlanDay(task.id, date)}
                     onSnooze={() => setSnoozeTaskId(task.id)}
                     onAddEvent={() => setAddEventTaskId(task.id)}
                   />
@@ -862,6 +873,7 @@ function SuggestionActions({
   onDismissWithReason,
   onApprove,
   onPlanToday,
+  onScheduleDay,
   onSnooze,
   onAddEvent,
 }: {
@@ -878,6 +890,8 @@ function SuggestionActions({
   onDismissWithReason: () => void;
   onApprove: () => void;
   onPlanToday: () => void;
+  /** Schedule a returned/backlog task to a chosen day via the day-picker. */
+  onScheduleDay: (date: string | null) => void;
   onSnooze: () => void;
   onAddEvent: () => void;
 }) {
@@ -970,6 +984,19 @@ function SuggestionActions({
           into a standing pool with no day attached, which is what made cards
           silently vanish. Approve now always lands on a concrete track — the same
           destination file-by-level produces, minus the size decision. */}
+      {/* A returned/backlog medium/big task can be scheduled to another day
+          (the day-picker) instead of only "today" — this is the inbox arm of
+          "the day is full, pick another day". Quick tasks and events keep just
+          the one-tap add. */}
+      {isBacklog && !isEvent && task.size && task.size !== "quick" && (
+        <DaySchedulePopover
+          size={task.size === "big" ? "big" : "medium"}
+          plannedFor={task.planned_for ?? null}
+          dueDate={task.due_date ?? null}
+          onSchedule={onScheduleDay}
+          className="h-8 w-8"
+        />
+      )}
       <IconButton
         label={isEvent ? t("closeReminder") : isBacklog ? tTasks("row.addToToday") : t("addToTasks")}
         color="blue"

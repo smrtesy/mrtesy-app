@@ -4,6 +4,7 @@ import { useTranslations } from "next-intl";
 import { Zap, Clock, Home, MapPin, Hourglass, ArrowDown, ArrowUp, AlarmClockCheck, Repeat, Bot, Plus, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DueDateChip } from "./DueDateChip";
+import { DaySchedulePopover } from "./DaySchedulePopover";
 import {
   sittingWorkdays,
   AGING_LABEL_WORKDAYS,
@@ -36,6 +37,7 @@ export function TaskRow({
   onSizeToggle,
   onDueChange,
   onPlanToggle,
+  onSchedule,
   plannedToday,
 }: {
   task: Task;
@@ -51,8 +53,13 @@ export function TaskRow({
   onMove?: (taskId: string, toDesk: boolean) => void;
   onSizeToggle?: (taskId: string, size: "quick" | "medium" | "big") => void;
   onDueChange?: (taskId: string, date: string | null, time: string | null) => void;
-  /** Add to / remove from today's plan (planned_for). Not shown for quick. */
+  /** Add to / remove from today's plan (planned_for). Not shown for quick.
+   *  Legacy one-tap toggle — superseded by onSchedule where a day-picker is wanted. */
   onPlanToggle?: (taskId: string, addToToday: boolean) => void;
+  /** Schedule the task to a specific day (or null to un-schedule) via the
+   *  day-picker. When provided, replaces the plain +/− toggle for medium/big.
+   *  Not shown for quick (quick is always "today"). */
+  onSchedule?: (taskId: string, date: string | null) => void;
   plannedToday?: boolean;
 }) {
   const t = useTranslations("tasks");
@@ -207,8 +214,17 @@ export function TaskRow({
 
           {/* Plan / snooze / move — always visible but faint; full on hover. */}
           <span className="flex shrink-0 items-center gap-0.5 opacity-35 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-            {/* Add to / remove from today's plan (medium/big only — quick is always today). */}
-            {onPlanToggle && task.size !== "quick" && (
+            {/* Schedule to a day (medium/big only — quick is always today). The
+                day-picker (onSchedule) supersedes the plain +/− toggle; the
+                toggle stays as a fallback for callers that don't pass onSchedule. */}
+            {onSchedule && task.size && task.size !== "quick" ? (
+              <DaySchedulePopover
+                size={task.size === "big" ? "big" : "medium"}
+                plannedFor={task.planned_for ?? null}
+                dueDate={task.due_date ?? null}
+                onSchedule={(date) => onSchedule(task.id, date)}
+              />
+            ) : onPlanToggle && task.size !== "quick" ? (
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onPlanToggle(task.id, !plannedToday); }}
@@ -217,7 +233,7 @@ export function TaskRow({
               >
                 {plannedToday ? <Minus className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
               </button>
-            )}
+            ) : null}
             {onSnooze && (
               <button
                 type="button"
