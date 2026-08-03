@@ -7,6 +7,7 @@ import {
   resolveEnabledApps,
   startEnabledAppsQueries,
 } from "@/lib/apps/server";
+import { getRestrictedResourcesForUser } from "@/lib/permissions/server";
 import { WhatsAppPanelProvider } from "@/contexts/WhatsAppPanelContext";
 import { WhatsAppPanel } from "@/components/smrttask/whatsapp/WhatsAppPanel";
 import { TabsWorkspaceProvider } from "@/contexts/TabsWorkspaceContext";
@@ -145,6 +146,28 @@ export default async function AppLayout({
     }
   }
 
+  // Restrictable-resource layer (open-by-default within an app). Only members
+  // can be blocked — admins/super-admins bypass, so we skip the lookups for
+  // them entirely. For a plain member we read their role once, then intersect
+  // the org's restrictions with the user's exceptions.
+  let restrictedResources: string[] = [];
+  if (user && !isAdmin && resolvedOrgId) {
+    const { data: roleRow } = await supabase
+      .from("org_members")
+      .select("role")
+      .eq("org_id", resolvedOrgId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const role = (roleRow?.role as "owner" | "admin" | "member" | undefined) ?? null;
+    restrictedResources = await getRestrictedResourcesForUser(
+      supabase,
+      user.id,
+      resolvedOrgId,
+      role,
+      isAdmin,
+    );
+  }
+
   return (
     <div className="flex min-h-screen w-full overflow-x-hidden">
       {/* When this page is loaded inside a tabs-workspace pane, flag it before
@@ -169,7 +192,7 @@ export default async function AppLayout({
       {/* Publishes the access facts the sidebar is built from (enabled apps,
           super-admin, smrtTask level) so client screens — including the ones
           rendered as component panes below — filter on exactly the same set. */}
-      <AppAccessProvider value={{ enabledApps, isAdmin, taskAccess }}>
+      <AppAccessProvider value={{ enabledApps, isAdmin, taskAccess, restrictedResources }}>
       <TabsWorkspaceProvider>
       {/* Shared open/close state for the Claude side-drawer — wraps both the
           Sidebar (whose Claude button opens it) and the ClaudeDrawer below. */}

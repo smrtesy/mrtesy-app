@@ -11,5 +11,6 @@ export { requireAuth } from "./auth";
 export { requireOrg } from "./org-context";
 export { requireRole, type Role } from "./require-role";
 export { requireApp, requireAnyApp } from "./require-app";
+export { requireResource } from "./require-resource";
 export { requireSuperAdmin, isSuperAdmin } from "./require-super-admin";
 export { rateLimit } from "./rate-limit";

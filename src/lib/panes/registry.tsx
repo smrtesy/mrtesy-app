@@ -32,6 +32,7 @@ import { TasksPageClient } from "@/components/smrttask/tasks/TasksPageClient";
 import { WhatsAppPageClient } from "@/components/smrttask/whatsapp/WhatsAppPageClient";
 import { SmsPageClient } from "@/components/smrttask/sms/SmsPageClient";
 import { KnowledgeCenter } from "@/components/smrttask/knowledge/KnowledgeCenter";
+import { ResourceGuard } from "@/components/platform/permissions/ResourceGuard";
 import { DailyReportClient } from "@/components/smrttask/dailyreport/DailyReportClient";
 import { DayToolsClient } from "@/components/smrttask/settings/DayToolsClient";
 import { AutoReplyManager } from "@/components/smrttask/whatsapp/AutoReplyManager";
@@ -247,8 +248,16 @@ const PANE_SCREENS: PaneScreen[] = [
   { match: (p) => p === "/map", render: () => <SiteMap /> },
   { match: (p) => p === "/whatsapp", render: () => <WhatsAppPane />, fullHeight: true },
   { match: (p) => p === "/sms", render: () => <SmsPane />, fullHeight: true },
-  { match: (p) => p === "/knowledge", render: () => <KnowledgeCenter /> },
-  { match: (p) => p === "/daily-report", render: () => <DailyReportClient /> },
+  { match: (p) => p === "/knowledge", render: () => (
+    <ResourceGuard resourceKey="smrttask.screen.knowledge" labelKey="permissions.resources.smrttask_screen_knowledge">
+      <KnowledgeCenter />
+    </ResourceGuard>
+  ) },
+  { match: (p) => p === "/daily-report", render: () => (
+    <ResourceGuard resourceKey="smrttask.screen.daily-report" labelKey="permissions.resources.smrttask_screen_daily_report">
+      <DailyReportClient />
+    </ResourceGuard>
+  ) },
   { match: (p) => p === "/day-tools", render: () => <DayToolsClient /> },
   { match: (p) => p === "/log", render: (locale) => <LogPane locale={locale} /> },
   { match: (p) => p === "/crm", render: () => <CrmPane /> },

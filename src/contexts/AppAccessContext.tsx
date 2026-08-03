@@ -21,9 +21,21 @@ export type AppAccess = {
   isAdmin: boolean;
   /** smrtTask access level; "lite" = project-only worker (task list only). */
   taskAccess: "full" | "lite";
+  /**
+   * Restrictable-resource keys this user is currently BLOCKED on (restricted by
+   * the org and not granted an exception). Empty for owners/admins/super-admins.
+   * Screens/actions check membership via `useResourceAccess(key)`. See
+   * docs/permissions-management-plan.md.
+   */
+  restrictedResources: string[];
 };
 
-const FALLBACK: AppAccess = { enabledApps: [], isAdmin: false, taskAccess: "full" };
+const FALLBACK: AppAccess = {
+  enabledApps: [],
+  isAdmin: false,
+  taskAccess: "full",
+  restrictedResources: [],
+};
 
 const AppAccessContext = createContext<AppAccess | null>(null);
 
