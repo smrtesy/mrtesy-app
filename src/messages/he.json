@@ -3206,7 +3206,9 @@
       "loadFiles": "טען קבצים",
       "loadingFiles": "טוען…",
       "noFiles": "לא נמצאו קבצי אודיו בתיקיה",
-      "cloneFromDriveCount": "צור קלון מ-{count} קבצים"
+      "cloneFromDriveCount": "צור קלון מ-{count} קבצים",
+      "errorNoSlots": "נגמרו ה-slots לשיבוט מהיר ברזמבל. קנה עוד (או מחק קולות שאינם בשימוש מ\"ספרייה\") כדי לשבט שוב.",
+      "openBilling": "פתח חיוב ברזמבל"
     },
     "recordingUploader": {
       "titleNew": "העלה הקלטת עורך (STS)",

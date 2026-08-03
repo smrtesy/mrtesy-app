@@ -43,6 +43,30 @@ function veMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Unknown error";
 }
 
+// Resemble's own deep link to buy more voice-cloning slots (verbatim from its
+// 400 response text — the point of contact where the user resolves the quota).
+const RESEMBLE_BILLING_URL = "https://app.resemble.ai/hub/billing";
+
+/**
+ * Map a voice-engine/Resemble clone error to a client-actionable shape. Resemble
+ * returns HTTP 400 "no rapid clone slots remaining" when the account's rapid-clone
+ * quota is exhausted — a billing state, NOT a bug and NOT an audio-length problem.
+ * We tag it with a stable `code` + the billing `link` so the UI shows a clear,
+ * one-click-to-fix message instead of raw provider English.
+ */
+function humanizeCloneError(err: unknown): { message: string; code?: string; link?: string } {
+  const message = veMessage(err);
+  if (/clone slots?|rapid clone/i.test(message)) {
+    return {
+      message:
+        "Resemble is out of rapid voice-clone slots — buy more (or delete unused voices) to clone again.",
+      code: "resemble_no_slots",
+      link: RESEMBLE_BILLING_URL,
+    };
+  }
+  return { message };
+}
+
 /** Fetch the caller's Google access token (Docs/Drive share one grant). */
 async function getGoogleAccessToken(userId: string): Promise<string | null> {
   try {
@@ -604,9 +628,9 @@ router.post(
       });
       res.json({ character: updated, status: result.status });
     } catch (err) {
-      const message = veMessage(err);
-      await notifyError(req.org!.id, "smrtvoice", { title: "Failed to create voice clone", body: message });
-      res.status(502).json({ error: message });
+      const { message, code, link } = humanizeCloneError(err);
+      await notifyError(req.org!.id, "smrtvoice", { title: "Failed to create voice clone", body: message, link });
+      res.status(502).json({ error: message, code, link });
     }
   },
 );
@@ -910,9 +934,9 @@ router.post(
       });
       res.json({ character: updated, status: result.status, skipped });
     } catch (err) {
-      const message = veMessage(err);
-      await notifyError(req.org!.id, "smrtvoice", { title: "Failed to clone voice from Drive", body: message });
-      res.status(502).json({ error: message });
+      const { message, code, link } = humanizeCloneError(err);
+      await notifyError(req.org!.id, "smrtvoice", { title: "Failed to clone voice from Drive", body: message, link });
+      res.status(502).json({ error: message, code, link });
     }
   },
 );
