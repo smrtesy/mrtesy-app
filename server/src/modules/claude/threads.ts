@@ -24,7 +24,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, cancelRun, runOneShot, BG_MODEL_FAST } from "./runner";
+import { executeRun, cancelRun, runOneShot, listAccountIds, BG_MODEL_FAST } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
@@ -56,9 +56,15 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const THREAD_COLS =
   "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial";
 
-/** The account ids the runner knows how to route (loadAccountToken). An empty
- *  string / null means "use the default", stored as NULL. */
-const ACCOUNTS = new Set(["primary", "automation"]);
+/** Is `account` one the runner can route to right now? The valid ids are the
+ *  runner's registry (listAccountIds — primary + the configured extras), so this
+ *  validation can never drift from what the switcher offers. An empty string /
+ *  null means "use the default", stored as NULL, and is always accepted. */
+async function isKnownAccount(account: string): Promise<boolean> {
+  if (!account) return true;
+  const ids = await listAccountIds();
+  return ids.includes(account);
+}
 
 function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -266,7 +272,8 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   const playbookId = str(body.playbook_id, 64) || null;
   if (playbookId && !UUID_RE.test(playbookId)) return res.status(400).json({ error: "invalid playbook_id" });
   const account = str(body.claude_account, 32);
-  if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
+  if (account && !(await isKnownAccount(account)))
+    return res.status(400).json({ error: "invalid claude_account" });
 
   // Auto-connect the repo: when the caller didn't pick one, default to the org's
   // primary repo so the workspace has real code from turn one — the backend clones
@@ -324,6 +331,92 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
 
 // ── read one, with its turns ──────────────────────────────────────────────────
 
+/**
+ * In-process cache for signed attachment URLs. A signature is valid for
+ * SIGN_TTL_S; re-minting one per image per screen load was pure waste (and while
+ * a turn was live, the old full-thread poll re-minted every image every ~900ms).
+ * Entries are reused while they still have ≥10 minutes of validity — plenty for
+ * one render — and the map is cleared wholesale past a size bound rather than
+ * LRU-managed: it re-fills for pennies.
+ */
+const SIGN_TTL_S = 3600;
+const signedUrlCache = new Map<string, { url: string; expiresAtMs: number }>();
+async function signedUrlFor(storagePath: string): Promise<string | null> {
+  const hit = signedUrlCache.get(storagePath);
+  if (hit && hit.expiresAtMs - Date.now() > 10 * 60 * 1000) return hit.url;
+  const { data: signed, error: sErr } = await db.storage
+    .from(BUCKET)
+    .createSignedUrl(storagePath, SIGN_TTL_S);
+  if (sErr || !signed?.signedUrl) {
+    if (sErr) console.error("[claude/threads] sign failed:", sErr.message);
+    return null;
+  }
+  if (signedUrlCache.size > 500) signedUrlCache.clear();
+  signedUrlCache.set(storagePath, {
+    url: signed.signedUrl,
+    expiresAtMs: Date.now() + SIGN_TTL_S * 1000,
+  });
+  return signed.signedUrl;
+}
+
+/**
+ * GET /claude/threads/:id/live?run=<runId>&after=<seq> — the light poll a live
+ * screen runs on (~1s cadence) instead of refetching the whole conversation.
+ *
+ * Returns only what changes while a turn executes:
+ *   runs    every non-terminal run of the thread PLUS the run named by `run`
+ *           whatever its status — so the poll that watched a turn finish sees
+ *           its terminal state (and result_summary/usage) in the same response
+ *           and knows to do one full reload for the canonical view.
+ *   events  the named run's events with seq > `after` — the increment only.
+ *
+ * This is what decouples poll cost from conversation length: the old full-thread
+ * poll ran ~9 queries and returned every turn + every event every 900ms, growing
+ * linearly with the thread. This route is two small indexed queries, constant.
+ */
+router.get("/claude/threads/:id/live", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
+  const runId = typeof req.query.run === "string" && UUID_RE.test(req.query.run) ? req.query.run : null;
+  const after = Math.max(0, Number(req.query.after) || 0);
+
+  const { data: thread, error: tErr } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (tErr) return res.status(500).json({ error: "could not fetch thread" });
+  if (!thread) return res.status(404).json({ error: "thread not found" });
+
+  const RUN_COLS =
+    "id, turn_index, status, error, result_summary, resumed_session, model, input_tokens, output_tokens, duration_ms, created_at, started_at, updated_at, ended_at, resume_attempts";
+  let q = db.from("claude_runs").select(RUN_COLS).eq("thread_id", thread.id);
+  q = runId
+    ? q.or(`status.in.(queued,running,waiting),id.eq.${runId}`)
+    : q.in("status", ["queued", "running", "waiting"]);
+  const { data: runs, error: rErr } = await q.order("turn_index", { ascending: true }).limit(50);
+  if (rErr) return res.status(500).json({ error: "could not fetch runs" });
+
+  let events: unknown[] = [];
+  // Events only for a run the runs query PROVED belongs to this thread (and this
+  // org, via the thread check above) — a bare run uuid from the query string must
+  // never read another tenant's stream.
+  const ownedRun = runId && (runs ?? []).some((r) => r.id === runId);
+  if (ownedRun) {
+    const { data: evs, error: eErr } = await db
+      .from("claude_run_events")
+      .select("seq, kind, text, tool_name, created_at")
+      .eq("run_id", runId)
+      .gt("seq", after)
+      .order("seq", { ascending: true })
+      .limit(EVENT_CAP);
+    if (eErr) console.error("[claude/threads] live events failed:", eErr.message);
+    events = evs ?? [];
+  }
+
+  return res.json({ runs: runs ?? [], events });
+});
+
 router.get("/claude/threads/:id", async (req: Request, res: Response) => {
   if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
 
@@ -366,7 +459,7 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
   const ids = (runs ?? []).map((r) => r.id);
   // One query for every turn's events instead of N: a 40-turn thread would
   // otherwise be 40 round trips before the screen can paint.
-  const eventsByRun = new Map<string, unknown[]>();
+  const eventsByRun = new Map<string, { run_id: string; seq: number; kind: string; text: string | null; tool_name: string | null; created_at: string }[]>();
   if (ids.length > 0) {
     const { data: events, error: eErr } = await db
       .from("claude_run_events")
@@ -376,7 +469,10 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
       // the whole budget and an older turn came back empty — rendering a blank
       // answer for a turn that had answered perfectly well.
       .order("run_id", { ascending: true })
-      .order("seq", { ascending: true })
+      // seq DESC so the per-run cap keeps the NEWEST events. With ASC, a turn
+      // past the cap froze its "what is happening now" line at event #400 while
+      // the run kept going — the newest events are what the screen needs.
+      .order("seq", { ascending: false })
       .limit(EVENT_CAP * ids.length);
     if (eErr) console.error("[claude/threads] events failed:", eErr.message);
     for (const ev of events ?? []) {
@@ -384,6 +480,8 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
       if (list.length < EVENT_CAP) list.push(ev);
       eventsByRun.set(ev.run_id, list);
     }
+    // Collected newest-first; the screen renders oldest-first.
+    for (const list of eventsByRun.values()) list.reverse();
   }
 
   const { data: attachments, error: aErr } = await db
@@ -398,19 +496,16 @@ router.get("/claude/threads/:id", async (req: Request, res: Response) => {
   // than exposing a public path. Only for images the RUN produced: user uploads
   // stay filename chips and never need a URL. Best-effort per file (a failed
   // signature downgrades that one image to a chip, not the whole screen).
+  // Cached in-process (signedUrlCache): the URL is valid for an hour, so
+  // re-signing every image on every screen load was N Storage round trips for
+  // an answer we already had.
   const signedByPath = new Map<string, string>();
   await Promise.all(
     (attachments ?? [])
       .filter((a) => a.source === "run" && (a.mime_type ?? "").startsWith("image/"))
       .map(async (a) => {
-        const { data: signed, error: sErr } = await db.storage
-          .from(BUCKET)
-          .createSignedUrl(a.storage_path, 3600);
-        if (sErr || !signed?.signedUrl) {
-          if (sErr) console.error("[claude/threads] sign failed:", sErr.message);
-          return;
-        }
-        signedByPath.set(a.storage_path, signed.signedUrl);
+        const url = await signedUrlFor(a.storage_path);
+        if (url) signedByPath.set(a.storage_path, url);
       }),
   );
   const attachmentPayload = (attachments ?? []).map((a) => ({
@@ -525,7 +620,8 @@ router.patch("/claude/threads/:id", async (req: Request, res: Response) => {
   }
   if (body.claude_account !== undefined) {
     const account = str(body.claude_account, 32);
-    if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
+    if (account && !(await isKnownAccount(account)))
+      return res.status(400).json({ error: "invalid claude_account" });
     // Empty → NULL, which loadAccountToken reads as the primary account.
     patch.claude_account = account || null;
   }

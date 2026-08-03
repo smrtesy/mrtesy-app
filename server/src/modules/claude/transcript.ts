@@ -14,21 +14,27 @@
  * API / claude.ai use — the history simply comes from our DB rather than the
  * wiped on-disk transcript.
  *
- * SOURCE: `claude_runs.prompt` (the user's turn) + `result_summary` (the
- * assistant's reply), NOT `claude_run_events`. Those two columns are always
- * populated for a completed turn (prompt is set on insert; result_summary is
- * written by the runner's finish() on success), so the reconstruction never
- * depends on the event stream being intact and stays compact.
+ * SOURCE: `claude_runs.user_prompt` (what the human actually typed) +
+ * `result_summary` (the assistant's reply), NOT the composed `prompt` column.
+ * The turn-1 `prompt` carries the whole environment preamble + standing
+ * instructions, and rebuilding from it duplicated ~10-40 KB of boilerplate
+ * inside the history, crowding out real turns. The runner re-attaches the
+ * preamble itself (composePrompt around the rebuilt history), so the history
+ * here stays purely the conversation. `prompt` remains the fallback for rows
+ * that predate user_prompt or an attachment-only message ("" user_prompt).
  */
 import { db } from "../../db";
 
 /**
- * Headroom for the rebuilt history, kept well under the ~100 KB single-argv
- * budget the prompt is composed against (the whole prompt is one argv entry —
- * Linux MAX_ARG_STRLEN), leaving room for the user's actual new message and the
- * environment preamble that also ride in that argv.
+ * Headroom for the rebuilt history, in BYTES — not characters. Hebrew is 2 bytes
+ * per character in UTF-8, so the previous 60 000-character budget could reach
+ * ~120 KB and, combined with the new message, brush the Linux single-argv limit
+ * (MAX_ARG_STRLEN, 131 072 bytes) as an opaque spawn E2BIG. 50 KB of bytes keeps
+ * the whole recomposed prompt (preamble + clamped instructions + history + the
+ * user's message, see composePrompt's 100 KB budget) clearly inside it.
  */
-const MAX_TRANSCRIPT_CHARS = 60_000;
+const MAX_TRANSCRIPT_BYTES = 50_000;
+const byteLen = (s: string) => Buffer.byteLength(s, "utf8");
 
 /**
  * Rebuild the prior conversation of a thread as a plain-text transcript.
@@ -44,7 +50,7 @@ export async function buildThreadTranscript(
 ): Promise<string | null> {
   const { data, error } = await db
     .from("claude_runs")
-    .select("turn_index, prompt, result_summary")
+    .select("turn_index, user_prompt, prompt, result_summary")
     .eq("thread_id", threadId)
     .eq("status", "done")
     .neq("id", excludeRunId)
@@ -57,7 +63,7 @@ export async function buildThreadTranscript(
   const rows = data ?? [];
   const blocks: string[] = [];
   for (const r of rows) {
-    const user = (r.prompt ?? "").trim();
+    const user = (r.user_prompt ?? "").trim() || (r.prompt ?? "").trim();
     const assistant = (r.result_summary ?? "").trim();
     if (!user && !assistant) continue;
     const parts: string[] = [];
@@ -68,7 +74,7 @@ export async function buildThreadTranscript(
   if (blocks.length === 0) return null;
 
   const joined = blocks.join("\n\n---\n\n");
-  if (joined.length <= MAX_TRANSCRIPT_CHARS) return joined;
+  if (byteLen(joined) <= MAX_TRANSCRIPT_BYTES) return joined;
 
   // Over budget: keep the MOST RECENT turns (recency matters most for continuing
   // a conversation) and mark that earlier ones were dropped, rather than silently
@@ -76,10 +82,18 @@ export async function buildThreadTranscript(
   const kept: string[] = [];
   let total = 0;
   for (let i = blocks.length - 1; i >= 0; i--) {
-    const next = total + blocks[i].length + 8; // +8 ≈ the "\n\n---\n\n" separator
-    if (next > MAX_TRANSCRIPT_CHARS && kept.length > 0) break;
+    const next = total + byteLen(blocks[i]) + 9; // +9 = the "\n\n---\n\n" separator in bytes
+    if (next > MAX_TRANSCRIPT_BYTES && kept.length > 0) break;
     kept.unshift(blocks[i]);
     total = next;
   }
-  return `…(תורים מוקדמים הושמטו כדי להתאים למגבלת האורך)…\n\n---\n\n${kept.join("\n\n---\n\n")}`;
+  let out = `…(תורים מוקדמים הושמטו כדי להתאים למגבלת האורך)…\n\n---\n\n${kept.join("\n\n---\n\n")}`;
+  // A SINGLE block can exceed the whole budget (user_prompt and result_summary
+  // are each capped at 20K chars ≈ 40 KB of Hebrew, so one block can reach
+  // ~80 KB). The loop above always keeps at least one block, so hard-clamp the
+  // final string by bytes, keeping the TAIL — the most recent text.
+  while (byteLen(out) > MAX_TRANSCRIPT_BYTES) {
+    out = out.slice(Math.ceil((byteLen(out) - MAX_TRANSCRIPT_BYTES) / 2) || 1);
+  }
+  return out;
 }

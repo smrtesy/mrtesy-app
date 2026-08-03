@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { api, ApiError } from "@/lib/api/client";
+import { api, apiStream, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { AnswerContent } from "./interactive/AnswerContent";
 import { CopyButton } from "@/components/common/CopyButton";
@@ -91,6 +91,44 @@ const LIVE = ["queued", "running", "waiting"] as const;
  *  from the queue instead. */
 const EXECUTING = ["queued", "running"] as const;
 const POLL_MS = 900;
+/** The rail (threads list) refresh cadence while a turn is live. Much slower than
+ *  the turn poll on purpose: the rail only shows a status dot, and refreshing it
+ *  at 900ms re-ran the list's status queries every second for no visible gain. */
+const THREADS_POLL_MS = 5000;
+
+/** The runner parks a turn hit by the subscription usage limit back in 'queued'
+ *  with this prefix on `error` (server runner.ts USAGE_LIMIT_SENTINEL) — the
+ *  live status line reads it to say "waiting for the window", not "starting". */
+const USAGE_WAIT_PREFIX = "usage-limit-wait:";
+
+/** Dedupe-merge new events into a turn's list by seq (the poll and the live
+ *  stream both feed the same list, and either can arrive first). */
+function mergeEvents(oldEvents: TurnEvent[], newEvents: TurnEvent[]): TurnEvent[] {
+  if (newEvents.length === 0) return oldEvents;
+  const seen = new Set(oldEvents.map((e) => e.seq));
+  const add = newEvents.filter((e) => !seen.has(e.seq));
+  if (add.length === 0) return oldEvents;
+  return [...oldEvents, ...add].sort((a, b) => a.seq - b.seq);
+}
+
+/** The live poll's per-run patch — the mutable fields of a Turn, minus events. */
+interface LiveRunPatch {
+  id: string;
+  turn_index: number;
+  status: Turn["status"];
+  error: string | null;
+  result_summary: string | null;
+  resumed_session: string | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  duration_ms: number | null;
+  created_at: string;
+  started_at?: string | null;
+  updated_at?: string | null;
+  ended_at?: string | null;
+  resume_attempts?: number | null;
+}
 
 /** 12345 → "12.3K" — the compact way the usage figures read in the chrome. */
 function fmtTokens(n: number): string {
@@ -110,7 +148,8 @@ interface Thread {
   git_branch: string | null;
   playbook_id: string | null;
   /** Which Claude subscription account this thread runs on. Null = the primary
-   *  account (the default); "automation" = the second account. */
+   *  account (the default); any other id (e.g. "automation") is one of the extra
+   *  accounts the server's registry exposes. */
   claude_account: string | null;
   last_message_at: string;
   /** When the user marked this thread handled from the rail (green check). Null =
@@ -475,14 +514,145 @@ export function ClaudeChat() {
   // Poll only while a turn is actually moving. A finished conversation is static,
   // so there is nothing to fetch and no reason to keep asking.
   const hasLive = turns.some((x) => (LIVE as readonly string[]).includes(x.status));
+
+  // The poll reads the freshest turns through a ref, so the interval itself does
+  // not have to be torn down and re-armed on every merged event batch.
+  const turnsRef = useRef<Turn[]>(turns);
+  useEffect(() => {
+    turnsRef.current = turns;
+  }, [turns]);
+
+  /**
+   * One light poll tick — GET /threads/:id/live, which returns only the
+   * non-terminal runs and the executing run's NEW events (seq-incremental).
+   * This replaced the full-thread refetch that ran every 900ms: that one
+   * re-read every turn, every event and every attachment signature on each
+   * tick, so a long conversation got slower and heavier exactly while it was
+   * working. The full reload now happens once, on the turn's terminal edge.
+   */
+  const tickLive = useCallback(async () => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    const cur = turnsRef.current;
+    const exec = cur.find(
+      (x) => (EXECUTING as readonly string[]).includes(x.status) && !x.id.startsWith("pending-"),
+    );
+    const lastSeq =
+      exec && exec.events.length > 0 ? exec.events[exec.events.length - 1].seq : 0;
+    try {
+      const r = await api<{ runs: LiveRunPatch[]; events: TurnEvent[] }>(
+        `/api/claude/threads/${id}/live?run=${exec?.id ?? ""}&after=${lastSeq}`,
+      );
+      if (activeIdRef.current !== id) return;
+      const known = new Set(cur.map((t) => t.id));
+      // A run this screen doesn't know (sent from another tab / the recoverer) or
+      // the watched turn reaching a terminal state → one full reload for the
+      // canonical view (attachments, split proposal, usage figures).
+      const unknown = r.runs.some((x) => !known.has(x.id));
+      const execPatch = exec ? r.runs.find((x) => x.id === exec.id) : undefined;
+      const finished = execPatch && !(LIVE as readonly string[]).includes(execPatch.status);
+      if (unknown || finished) {
+        void loadThread(id);
+        void loadThreads();
+        return;
+      }
+      setTurns((prev) =>
+        prev.map((t) => {
+          const patch = r.runs.find((x) => x.id === t.id);
+          if (!patch) return t;
+          // A turn back in 'queued' with no started_at while it already has
+          // events = the recoverer (or the usage-limit park) reclaimed it and
+          // CLEARED its event rows — the re-execution restarts seq from 1.
+          // Keeping the dead attempt's events would hide the new ones behind a
+          // stale `after=` and interleave two attempts on screen; reset instead.
+          const reExecuted =
+            patch.status === "queued" && !patch.started_at && t.events.length > 0;
+          const events = reExecuted
+            ? []
+            : exec && t.id === exec.id
+              ? mergeEvents(t.events, r.events)
+              : t.events;
+          return { ...t, ...patch, events };
+        }),
+      );
+    } catch {
+      // A poll blip — the next tick retries; the turn runs on regardless.
+    }
+  }, [loadThread, loadThreads]);
+
   useEffect(() => {
     if (!hasLive || !activeId) return;
     const id = setInterval(() => {
-      void loadThread(activeId);
-      void loadThreads();
+      void tickLive();
     }, POLL_MS);
     return () => clearInterval(id);
-  }, [hasLive, activeId, loadThread, loadThreads]);
+  }, [hasLive, activeId, tickLive]);
+
+  // The rail refresh, on its own slow cadence — see THREADS_POLL_MS.
+  useEffect(() => {
+    if (!hasLive) return;
+    const id = setInterval(() => {
+      void loadThreads();
+    }, THREADS_POLL_MS);
+    return () => clearInterval(id);
+  }, [hasLive, loadThreads]);
+
+  /**
+   * Live stream — the accelerator on top of the poll. While a turn is 'running'
+   * in this backend process, GET /runs/:id/stream tails the runner's in-memory
+   * event bus as NDJSON, so text appears the moment the engine emits it instead
+   * of after flush+poll (~1.4s worst case). Merged by seq into the same list the
+   * poll feeds; 204 / any error just means "no stream — the poll has it".
+   */
+  const streamRunId =
+    turns.find((x) => x.status === "running" && !x.id.startsWith("pending-"))?.id ?? null;
+  useEffect(() => {
+    if (!streamRunId) return;
+    const ctrl = new AbortController();
+    let gone = false;
+    void (async () => {
+      try {
+        const res = await apiStream(`/api/claude/runs/${streamRunId}/stream`, {
+          signal: ctrl.signal,
+        });
+        if (res.status !== 200 || !res.body) return;
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done || gone) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          const evs: TurnEvent[] = [];
+          for (const ln of lines) {
+            const s = ln.trim();
+            if (!s) continue; // the server's keep-alive newline
+            try {
+              const ev = JSON.parse(s) as TurnEvent;
+              if (typeof ev?.seq === "number") evs.push(ev);
+            } catch {
+              // A torn line mid-chunk — the remainder rides in `buf`.
+            }
+          }
+          if (evs.length > 0) {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === streamRunId ? { ...t, events: mergeEvents(t.events, evs) } : t,
+              ),
+            );
+          }
+        }
+      } catch {
+        // Stream unavailable (abort, proxy, scaled-out instance) — poll covers it.
+      }
+    })();
+    return () => {
+      gone = true;
+      ctrl.abort();
+    };
+  }, [streamRunId]);
 
   useEffect(() => {
     // nearest, not the default: scrollIntoView on a pane-embedded screen otherwise
@@ -1463,11 +1633,14 @@ function renderTurns(
 
 /**
  * The header account switcher — shows which Claude subscription account the open
- * conversation runs on, and lets the user move it to the other account.
+ * conversation runs on, and lets the user move it to another account.
  *
- * Why it exists: two accounts are configured (primary + a second), and when one hits
- * its rolling usage limit the conversation should be movable to the one that still
- * has budget — without leaving the console. Compact by default (CLAUDE.md): a small
+ * Why it exists: several accounts can be configured (primary + one or more extras),
+ * and when one hits its rolling usage limit the conversation should be movable to one
+ * that still has budget — without leaving the console. NOTE: separate accounts only
+ * give separate budget when their tokens belong to genuinely separate subscriptions;
+ * two tokens minted from the same account share one limit. Compact by default
+ * (CLAUDE.md): a small
  * labelled icon button that opens a menu only on click. An account with no token
  * configured is listed but greyed out, so the user can see it exists yet cannot
  * route a thread to a credential that would silently fall back to the primary.
@@ -1485,8 +1658,15 @@ function AccountSwitcher({
 }) {
   const t = useTranslations("claudeChat");
   // Explicit id→key map (not a template key) so next-intl's typed keys still check.
+  // A third/Nth account the operator added (any id past the two built-ins) has no
+  // fixed translation — fall back to the raw id, which the operator can override
+  // with a CLAUDE_ACCOUNT_LABEL_<ID> secret that arrives as `a.label`.
   const defaultLabel = (id: string) =>
-    id === "automation" ? t("account.automation") : t("account.primary");
+    id === "primary"
+      ? t("account.primary")
+      : id === "automation"
+        ? t("account.automation")
+        : id;
   const labelFor = (a: Account) => a.label?.trim() || defaultLabel(a.id);
 
   const current = accounts.find((a) => a.id === value);
@@ -1602,6 +1782,16 @@ function LiveRunStatus({ turn, onStop }: { turn: Turn; onStop: () => void }) {
   const t = useTranslations("claudeChat");
 
   if (turn.status !== "running") {
+    // queued, parked on the subscription usage window — the server retries it
+    // every ~15 minutes by itself (recover.ts); tell the user that, not "starting".
+    if (turn.error?.startsWith(USAGE_WAIT_PREFIX)) {
+      return (
+        <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500" dir="auto">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          <span>{t("live.usageWait")}</span>
+        </p>
+      );
+    }
     // queued — dispatched but not yet started (or just re-queued by the recoverer).
     return (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

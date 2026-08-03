@@ -4570,6 +4570,28 @@
     "close": "Close",
     "loading": "Loading Claude…"
   },
+  "claudeAccounts": {
+    "title": "Claude accounts",
+    "hint": "The accounts the Claude console can run on. Add a new one from a single form — id, name and token — instead of editing secret keys separately.",
+    "loading": "Loading accounts…",
+    "addAccount": "Add account",
+    "configured": "Configured",
+    "notConfigured": "No token",
+    "builtin": "Built-in",
+    "edit": "Edit",
+    "remove": "Remove",
+    "removeConfirm": "Remove the account \"{id}\"? Its token stays stored, but the account will no longer appear in the switcher.",
+    "removed": "Account removed",
+    "idPlaceholder": "ai3",
+    "idHint": "Lowercase id (letters, digits, underscore). Used for the server key names and can't be changed later.",
+    "labelPlaceholder": "Display name (e.g. ai3)",
+    "tokenPlaceholder": "The token — sk-ant-oat01…",
+    "tokenPlaceholderKeep": "Leave blank to keep the current token",
+    "tokenHint": "Generate in a terminal: npx @anthropic-ai/claude-code setup-token — sign in to the account you want, not another. For genuinely separate budget, use a separate subscription.",
+    "save": "Save",
+    "cancel": "Cancel",
+    "saved": "Saved"
+  },
   "claudeChat": {
     "interactive": {
       "picked": "I chose: {label}",
@@ -4630,7 +4652,8 @@
       "steps": "{n} steps",
       "resumed": "resumed after a restart",
       "noOutput": "No response for {d} — may be stuck",
-      "stopHint": "Stop and resend"
+      "stopHint": "Stop and resend",
+      "usageWait": "Subscription usage window exhausted — the run will continue automatically once it resets (retried every 15 minutes, for up to a day)"
     },
     "toolCount": "{count} tool calls",
     "effortDefault": "Effort: default",
