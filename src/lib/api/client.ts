@@ -37,6 +37,23 @@ export function setActiveOrgId(id: string) {
 }
 
 /**
+ * Forget the stored active org. Used to self-heal a stale value that points at
+ * an org the user isn't a member of — which otherwise makes requireOrg 403
+ * EVERY call with no recovery. Clears the in-memory value, the localStorage
+ * key, the in-flight resolver, AND the JS-readable subdomain cookie (middleware
+ * re-sets it per hostname), so the next getActiveOrgId() falls through to
+ * /api/orgs/me and picks a real membership.
+ */
+export function resetActiveOrg() {
+  activeOrgId = null;
+  resolving = null;
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(ACTIVE_ORG_KEY);
+    document.cookie = "smrt_org_id=; path=/; max-age=0";
+  }
+}
+
+/**
  * Read the org ID set by middleware for the current subdomain.
  * Cookie name: smrt_org_id — written by src/middleware.ts.
  * Takes precedence over localStorage so the subdomain always wins.
@@ -128,17 +145,22 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
     throw new ApiError(401, "Not authenticated");
   }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${session.access_token}`,
-    ...(opts.headers as Record<string, string> | undefined),
+  // Headers are rebuilt on an org self-heal (below), so the org id is resolved
+  // inside a closure rather than once up front.
+  const buildHeaders = async (): Promise<Record<string, string>> => {
+    const h: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${session.access_token}`,
+      ...(opts.headers as Record<string, string> | undefined),
+    };
+    if (!opts.noOrg) {
+      const orgId = opts.orgId ?? await getActiveOrgId();
+      if (!orgId) throw new ApiError(400, "No active organization");
+      h["X-Org-Id"] = orgId;
+    }
+    return h;
   };
-
-  if (!opts.noOrg) {
-    const orgId = opts.orgId ?? await getActiveOrgId();
-    if (!orgId) throw new ApiError(400, "No active organization");
-    headers["X-Org-Id"] = orgId;
-  }
+  let headers = await buildHeaders();
 
   // Transparent retry for transient backend blips. The Railway edge proxy
   // occasionally returns a connection reset / 502-504 with no CORS headers
@@ -152,44 +174,69 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   const maxAttempts = isIdempotent ? 3 : 1;
   const GATEWAY = new Set([502, 503, 504]);
 
-  let lastNetworkErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    let res: Response;
-    try {
-      res = await fetch(`${BACKEND}${path}`, {
-        ...opts,
-        headers,
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-      });
-    } catch (e) {
-      // Network-level failure (DNS, connection reset, CORS-blocked response).
-      lastNetworkErr = e;
-      if (attempt < maxAttempts) {
+  // Self-heal a stale active org. A `smrtesy.active_org_id` (or subdomain
+  // cookie) that points at an org the user isn't a member of makes requireOrg
+  // 403 EVERY call, with no recovery — the client trusts the stored value and
+  // never refetches. On exactly that 403, forget the org, re-resolve from
+  // /api/orgs/me, and retry ONCE. Only when we auto-resolved the org (an
+  // explicit opts.orgId / opts.noOrg is left untouched).
+  let orgHealed = false;
+
+  orgHeal: for (let orgTry = 0; orgTry < 2; orgTry++) {
+    let lastNetworkErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(`${BACKEND}${path}`, {
+          ...opts,
+          headers,
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        });
+      } catch (e) {
+        // Network-level failure (DNS, connection reset, CORS-blocked response).
+        lastNetworkErr = e;
+        if (attempt < maxAttempts) {
+          await new Promise((r) => setTimeout(r, attempt * 400));
+          continue;
+        }
+        throw e;
+      }
+
+      if (GATEWAY.has(res.status) && attempt < maxAttempts) {
         await new Promise((r) => setTimeout(r, attempt * 400));
         continue;
       }
-      throw e;
+
+      const text = await res.text();
+      let json: unknown;
+      try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+
+      if (!res.ok) {
+        const errMsg = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
+        if (
+          res.status === 403 &&
+          !orgHealed &&
+          !opts.noOrg &&
+          !opts.orgId &&
+          /not a member of this organization/i.test(errMsg)
+        ) {
+          orgHealed = true;
+          resetActiveOrg();
+          headers = await buildHeaders(); // re-resolves via /api/orgs/me
+          continue orgHeal; // retry the whole request with the corrected org
+        }
+        throw new ApiError(res.status, errMsg, json);
+      }
+
+      return json as T;
     }
 
-    if (GATEWAY.has(res.status) && attempt < maxAttempts) {
-      await new Promise((r) => setTimeout(r, attempt * 400));
-      continue;
-    }
-
-    const text = await res.text();
-    let json: unknown;
-    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-
-    if (!res.ok) {
-      const errMsg = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
-      throw new ApiError(res.status, errMsg, json);
-    }
-
-    return json as T;
+    // Exhausted retries on repeated network failures.
+    throw lastNetworkErr ?? new ApiError(0, "Network error");
   }
 
-  // Exhausted retries on repeated network failures.
-  throw lastNetworkErr ?? new ApiError(0, "Network error");
+  // Both org attempts exhausted — the heal didn't recover a valid org.
+  throw new ApiError(403, "You are not a member of this organization");
 }
 
 /**
