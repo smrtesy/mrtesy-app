@@ -17,7 +17,11 @@ import { requireAuth, requireSuperAdmin } from "../../../middleware";
 import { metaErrorSummary } from "../../../lib/meta-errors";
 
 const router = Router();
-router.use(requireAuth, requireSuperAdmin);
+// Path-scoped to "/admin" ON PURPOSE. This router is mounted with
+// app.use("/api", adminRouter), so a BARE router.use() here runs for EVERY
+// /api request that falls through to it — which 403'd every non-super-admin
+// on routers mounted after it (smrtTask, studio, inbox, …).
+router.use("/admin", requireAuth, requireSuperAdmin);
 
 /** Strict slug shape: lowercase letters, numbers, dashes. */
 const SLUG_RE = /^[a-z][a-z0-9-]{1,39}$/;

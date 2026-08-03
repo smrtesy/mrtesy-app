@@ -25,7 +25,10 @@ import { notifyError } from "../../lib/platform";
 
 const router = Router();
 
-router.use(requireAuth, requireOrg, requireApp("smrtvault"));
+// Path-scoped to "/vault" ON PURPOSE — see the note in smrtstudio/routes.ts.
+// A bare router.use() here gates every /api request that falls through to this
+// router, not just the vault ones.
+router.use("/vault", requireAuth, requireOrg, requireApp("smrtvault"));
 
 // The columns safe to return to the browser — everything EXCEPT the Vault
 // pointer and the password plaintext (which is never on the row anyway).
