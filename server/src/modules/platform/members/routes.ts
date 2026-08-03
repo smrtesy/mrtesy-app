@@ -479,13 +479,20 @@ router.delete("/org/members/:userId",
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Remove their per-user app grants for this org (no FK cascade from org_members).
-    const { error: grantErr } = await db
-      .from("user_app_access")
-      .delete()
-      .eq("org_id", req.org!.id)
-      .eq("user_id", userId);
-    if (grantErr) console.error("[org/members] app-grant cleanup failed:", grantErr.message);
+    // Remove their per-user access rows for this org (no FK cascade from
+    // org_members): app grants, the smrtTask full/lite level, and any
+    // resource-restriction exceptions. All three key off (org_id, user_id) and
+    // would otherwise linger after the member is gone (and silently re-apply if
+    // they rejoin).
+    const cleanups: [string, Promise<{ error: { message: string } | null }>][] = [
+      ["user_app_access", db.from("user_app_access").delete().eq("org_id", req.org!.id).eq("user_id", userId)],
+      ["app_user_access", db.from("app_user_access").delete().eq("org_id", req.org!.id).eq("user_id", userId)],
+      ["user_resource_grants", db.from("user_resource_grants").delete().eq("org_id", req.org!.id).eq("user_id", userId)],
+    ];
+    for (const [table, p] of cleanups) {
+      const { error: cleanupErr } = await p;
+      if (cleanupErr) console.error(`[org/members] ${table} cleanup failed:`, cleanupErr.message);
+    }
 
     res.json({ ok: true });
   },

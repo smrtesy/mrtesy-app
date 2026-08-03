@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-02.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-03.
 
 ## The three engines
 
@@ -61,8 +61,20 @@ and **`/claude`** — the in-app Claude console (components
 user, live-view via CDP screencast + input relay, for opening accounts / grabbing
 API keys into smrtVault (components `src/components/web-action/`, server
 `server/src/modules/web-action/`, plan `docs/web-action-agent-plan.md`). Server side:
-`server/src/modules/platform/` (organizations, members, me, messaging, push,
-apps, search) and `server/src/modules/admin/`.
+`server/src/modules/platform/` (organizations, members, permissions, me,
+messaging, push, apps, search) and `server/src/modules/admin/`.
+
+**Permissions (open-by-default restriction layer):** on top of app entitlements,
+an org can restrict specific screens/actions and grant per-user exceptions.
+Catalog is code (`src/lib/permissions/registry.ts` + server twin
+`server/src/lib/permissions/registry.ts` — keep in sync). Enforcement:
+`requireResource("<key>")` middleware (`server/src/middleware/require-resource.ts`,
+logic in `server/src/lib/permissions/resolve.ts`); frontend gates via
+`useResourceAccess`/`ResourceGuard` (`src/components/platform/permissions/`) off
+`AppAccessContext.restrictedResources`. Management UI: `/settings/permissions`
+(org admin, `components/platform/settings/PermissionsTabPanel.tsx`) +
+`/admin/permissions` (super-admin catalog view). Design + phase-2 (request→approve
++ cost-gated actions): `docs/permissions-management-plan.md`.
 
 ## Server layout (`server/src/`)
 
@@ -119,7 +131,11 @@ shared code in `_shared/`.
 ## Database — the tables you'll touch most
 
 Orgs/entitlements: `organizations`, `app_memberships`, `user_settings`,
-`user_credentials`, `app_secrets`. Pipeline: `source_messages` (raw ingest) →
+`user_credentials`, `app_secrets`. Per-user app access: `user_app_access`
+(which apps a member is granted) vs `app_user_access` (the smrtTask full/lite
+level — two similarly-named tables, don't confuse). Permission layer:
+`org_restrictions` (which catalog resources an org restricts),
+`user_resource_grants` (per-user exceptions), `permission_audit_log`. Pipeline: `source_messages` (raw ingest) →
 `tasks` (+ `task_activities`) → `projects` / `reminders` / `contacts`.
 Rules & AI: `rules_memory` (skip rules — parser lives in
 `server/src/modules/smrttask/lib/rule-filters.ts` with a Deno twin in

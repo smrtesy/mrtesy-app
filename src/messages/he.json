@@ -266,11 +266,54 @@
   "settingsTabs": {
     "apps": "אפליקציות",
     "org": "ארגון",
+    "permissions": "הרשאות",
     "platform": "פלטפורמה",
     "noAppsEnabled": "אין אפליקציות מאופשרות בארגון הזה",
     "openPlatformAdmin": "פתח פאנל ניהול-על",
     "platformDescription": "ניהול ברמת המערכת — משתמשים, ארגונים, אפליקציות, לוגים ושימוש.",
     "voiceGuide": "מדריך הקול (smrtVoice)"
+  },
+  "permissions": {
+    "costly": "בתשלום",
+    "restricted": "מוגבל",
+    "open": "פתוח",
+    "locked": {
+      "title": "הגישה מוגבלת",
+      "body": "אין לך גישה לאזור הזה. פנה למנהל הארגון כדי לקבל הרשאה.",
+      "bodyNamed": "אין לך גישה ל\"{name}\". פנה למנהל הארגון כדי לקבל הרשאה."
+    },
+    "orgSection": {
+      "title": "מה מוגבל בארגון",
+      "subtitle": "כל האפליקציות פתוחות לחברי הארגון כברירת מחדל. סמן כאן רק את הפרטים שברצונך להגביל — מי שירצה גישה יקבל אותה ממך."
+    },
+    "userSection": {
+      "title": "חריגות למשתמש",
+      "subtitle": "פתח פריט מוגבל למשתמש מסוים בלי לפתוח אותו לכולם.",
+      "pick": "בחר משתמש…",
+      "bypasses": "מנהלי ארגון ובעלים אינם מוגבלים — יש להם גישה לכל האזורים.",
+      "grantedTag": "פתוח למשתמש (חריגה)",
+      "blockedTag": "חסום",
+      "grant": "פתח גישה",
+      "revoke": "בטל גישה"
+    },
+    "admin": {
+      "title": "קטלוג ההרשאות",
+      "subtitle": "הרשימה המרכזית של כל מה שניתן להגביל בפלטפורמה. ההגבלה בפועל לכל ארגון נעשית בהגדרות אותו ארגון.",
+      "defaultRestricted": "ברירת מחדל: מוגבל",
+      "defaultOpen": "ברירת מחדל: פתוח"
+    },
+    "resources": {
+      "smrttask_screen_knowledge": "מאגר הידע (smrtTask)",
+      "smrttask_screen_daily_report": "דוח יומי (smrtTask)",
+      "smrtcrm_screen_crm": "מסך ה-CRM (smrtCRM)",
+      "smrtstudio_action_run_paid": "הרצת הפקה בתשלום (smrtStudio)"
+    },
+    "resourceDesc": {
+      "smrttask_screen_knowledge": "מסך מאגר הידע — שאלות, תשובות והנחיות לצוות.",
+      "smrttask_screen_daily_report": "מסך הדוח היומי המרוכז.",
+      "smrtcrm_screen_crm": "מסך ניהול הלקוחות.",
+      "smrtstudio_action_run_paid": "פעולה שמריצה הפקה בתשלום מול ספק חיצוני."
+    }
   },
   "whatsappAutoreply": {
     "title": "מענה אוטומטי בוואטסאפ",
@@ -1705,6 +1748,7 @@
     "orgs": "ארגונים",
     "apps": "אפליקציות",
     "superAdmins": "מנהלי-על",
+    "permissions": "הרשאות",
     "logs": "לוגים",
     "usage": "עלויות AI",
     "docs": "מסמכים",

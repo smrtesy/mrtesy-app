@@ -266,11 +266,54 @@
   "settingsTabs": {
     "apps": "Apps",
     "org": "Organization",
+    "permissions": "Permissions",
     "platform": "Platform",
     "noAppsEnabled": "No apps enabled for this organization",
     "openPlatformAdmin": "Open platform admin",
     "platformDescription": "System-level management — users, orgs, apps, logs and usage.",
     "voiceGuide": "Voice guide (smrtVoice)"
+  },
+  "permissions": {
+    "costly": "Paid",
+    "restricted": "Restricted",
+    "open": "Open",
+    "locked": {
+      "title": "Access restricted",
+      "body": "You don't have access to this area. Ask your organization admin to grant it.",
+      "bodyNamed": "You don't have access to \"{name}\". Ask your organization admin to grant it."
+    },
+    "orgSection": {
+      "title": "What's restricted in this org",
+      "subtitle": "Every app is open to members by default. Mark here only the specific things you want to restrict — anyone who needs access gets it from you."
+    },
+    "userSection": {
+      "title": "Per-user exceptions",
+      "subtitle": "Open a restricted item to a specific member without opening it to everyone.",
+      "pick": "Pick a member…",
+      "bypasses": "Owners and admins are unrestricted — they can access every area.",
+      "grantedTag": "Open to this user (exception)",
+      "blockedTag": "Blocked",
+      "grant": "Grant access",
+      "revoke": "Revoke access"
+    },
+    "admin": {
+      "title": "Permissions catalog",
+      "subtitle": "The master list of everything that can be restricted across the platform. The actual per-org restriction is set inside each org's settings.",
+      "defaultRestricted": "Default: restricted",
+      "defaultOpen": "Default: open"
+    },
+    "resources": {
+      "smrttask_screen_knowledge": "Knowledge base (smrtTask)",
+      "smrttask_screen_daily_report": "Daily report (smrtTask)",
+      "smrtcrm_screen_crm": "CRM screen (smrtCRM)",
+      "smrtstudio_action_run_paid": "Run paid production (smrtStudio)"
+    },
+    "resourceDesc": {
+      "smrttask_screen_knowledge": "The knowledge-base screen — questions, answers and team guidance.",
+      "smrttask_screen_daily_report": "The consolidated daily-report screen.",
+      "smrtcrm_screen_crm": "The customer management screen.",
+      "smrtstudio_action_run_paid": "An action that runs a paid production against an external provider."
+    }
   },
   "whatsappAutoreply": {
     "title": "WhatsApp auto-reply",
@@ -1705,6 +1748,7 @@
     "orgs": "Organizations",
     "apps": "Apps",
     "superAdmins": "Super Admins",
+    "permissions": "Permissions",
     "logs": "Logs",
     "usage": "AI Usage",
     "docs": "Docs",
