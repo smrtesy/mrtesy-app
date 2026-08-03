@@ -24,7 +24,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, cancelRun, runOneShot, BG_MODEL_FAST } from "./runner";
+import { executeRun, cancelRun, runOneShot, listAccountIds, BG_MODEL_FAST } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
@@ -56,9 +56,15 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const THREAD_COLS =
   "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial";
 
-/** The account ids the runner knows how to route (loadAccountToken). An empty
- *  string / null means "use the default", stored as NULL. */
-const ACCOUNTS = new Set(["primary", "automation"]);
+/** Is `account` one the runner can route to right now? The valid ids are the
+ *  runner's registry (listAccountIds — primary + the configured extras), so this
+ *  validation can never drift from what the switcher offers. An empty string /
+ *  null means "use the default", stored as NULL, and is always accepted. */
+async function isKnownAccount(account: string): Promise<boolean> {
+  if (!account) return true;
+  const ids = await listAccountIds();
+  return ids.includes(account);
+}
 
 function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -266,7 +272,8 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   const playbookId = str(body.playbook_id, 64) || null;
   if (playbookId && !UUID_RE.test(playbookId)) return res.status(400).json({ error: "invalid playbook_id" });
   const account = str(body.claude_account, 32);
-  if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
+  if (account && !(await isKnownAccount(account)))
+    return res.status(400).json({ error: "invalid claude_account" });
 
   // Auto-connect the repo: when the caller didn't pick one, default to the org's
   // primary repo so the workspace has real code from turn one — the backend clones
@@ -613,7 +620,8 @@ router.patch("/claude/threads/:id", async (req: Request, res: Response) => {
   }
   if (body.claude_account !== undefined) {
     const account = str(body.claude_account, 32);
-    if (account && !ACCOUNTS.has(account)) return res.status(400).json({ error: "invalid claude_account" });
+    if (account && !(await isKnownAccount(account)))
+      return res.status(400).json({ error: "invalid claude_account" });
     // Empty → NULL, which loadAccountToken reads as the primary account.
     patch.claude_account = account || null;
   }

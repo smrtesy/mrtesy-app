@@ -148,7 +148,8 @@ interface Thread {
   git_branch: string | null;
   playbook_id: string | null;
   /** Which Claude subscription account this thread runs on. Null = the primary
-   *  account (the default); "automation" = the second account. */
+   *  account (the default); any other id (e.g. "automation") is one of the extra
+   *  accounts the server's registry exposes. */
   claude_account: string | null;
   last_message_at: string;
   /** When the user marked this thread handled from the rail (green check). Null =
@@ -1632,11 +1633,14 @@ function renderTurns(
 
 /**
  * The header account switcher — shows which Claude subscription account the open
- * conversation runs on, and lets the user move it to the other account.
+ * conversation runs on, and lets the user move it to another account.
  *
- * Why it exists: two accounts are configured (primary + a second), and when one hits
- * its rolling usage limit the conversation should be movable to the one that still
- * has budget — without leaving the console. Compact by default (CLAUDE.md): a small
+ * Why it exists: several accounts can be configured (primary + one or more extras),
+ * and when one hits its rolling usage limit the conversation should be movable to one
+ * that still has budget — without leaving the console. NOTE: separate accounts only
+ * give separate budget when their tokens belong to genuinely separate subscriptions;
+ * two tokens minted from the same account share one limit. Compact by default
+ * (CLAUDE.md): a small
  * labelled icon button that opens a menu only on click. An account with no token
  * configured is listed but greyed out, so the user can see it exists yet cannot
  * route a thread to a credential that would silently fall back to the primary.
@@ -1654,8 +1658,15 @@ function AccountSwitcher({
 }) {
   const t = useTranslations("claudeChat");
   // Explicit id→key map (not a template key) so next-intl's typed keys still check.
+  // A third/Nth account the operator added (any id past the two built-ins) has no
+  // fixed translation — fall back to the raw id, which the operator can override
+  // with a CLAUDE_ACCOUNT_LABEL_<ID> secret that arrives as `a.label`.
   const defaultLabel = (id: string) =>
-    id === "automation" ? t("account.automation") : t("account.primary");
+    id === "primary"
+      ? t("account.primary")
+      : id === "automation"
+        ? t("account.automation")
+        : id;
   const labelFor = (a: Account) => a.label?.trim() || defaultLabel(a.id);
 
   const current = accounts.find((a) => a.id === value);

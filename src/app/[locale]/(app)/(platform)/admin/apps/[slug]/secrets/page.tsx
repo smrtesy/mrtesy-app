@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Check, Copy, Edit2, Eye, EyeOff, Loader2, Plus, Webhook, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
+import { ClaudeAccountsPanel } from "@/components/admin/ClaudeAccountsPanel";
 
 interface PlatformSecret {
   key: string;
@@ -142,6 +143,12 @@ export default function AdminAppSecretsPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* Claude subscription accounts — a managed list + one "add account" form,
+              so the scattered CLAUDE_CODE_OAUTH_TOKEN_<ID> / CLAUDE_ACCOUNT_LABEL_<ID>
+              / CLAUDE_ACCOUNTS secrets don't have to be hand-edited by name. Only on
+              the platform app that owns these credentials. */}
+          {slug === "smrttask" && data.editable && <ClaudeAccountsPanel />}
 
           <PlatformSection
             slug={slug}
