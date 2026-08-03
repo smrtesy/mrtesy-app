@@ -22,7 +22,11 @@ import invitesRouter from "./invites";
 import { slugify } from "../../platform/organizations/routes";
 
 const router = Router();
-router.use(requireAuth, requireSuperAdmin);
+// Path-scoped to "/admin" ON PURPOSE. This router is mounted with
+// app.use("/api", adminRouter), so a BARE router.use() here runs for EVERY
+// /api request that falls through to it — which 403'd every non-super-admin
+// on routers mounted after it (smrtTask, studio, inbox, …).
+router.use("/admin", requireAuth, requireSuperAdmin);
 
 // Invite sub-router mounted under /admin/orgs/:id/invites
 router.use("/admin/orgs/:id/invites", invitesRouter);

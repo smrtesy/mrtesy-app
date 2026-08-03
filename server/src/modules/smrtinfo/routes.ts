@@ -19,7 +19,11 @@ import { embedText } from "../../services/voyage";
 import { extractAndStore } from "./extract";
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrtinfo"));
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/info", requireAuth, requireOrg, requireApp("smrtinfo"));
 
 const FACT_COLUMNS =
   "id, scope, entity, attribute, value, effective_date, confidence, verified, source_type, source_url, source_message_id, created_at, updated_at";

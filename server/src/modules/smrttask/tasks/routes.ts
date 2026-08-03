@@ -72,7 +72,11 @@ function localToday(tz: string): string {
 // Every task route requires auth + active org + smrtTask enabled for that org.
 // attachTaskAccess resolves req.taskAccess ("full" | "lite") once for the whole
 // router so list filtering + the per-:id ownership guard below can read it.
-router.use(requireAuth, requireOrg, requireApp("smrttask"), attachTaskAccess);
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use(["/source-messages", "/tasks", "/work-calendar"], requireAuth, requireOrg, requireApp("smrttask"), attachTaskAccess);
 
 // GET /tasks/access — the caller's smrtTask access level. Deliberately NOT
 // behind requireFullTask: a lite (project-only) worker must be able to read

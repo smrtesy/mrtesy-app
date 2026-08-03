@@ -20,7 +20,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, describeAccounts } from "./runner";
+import { executeRun, describeAccounts, isRunLive, runEventBus, type LiveEvent } from "./runner";
 import { composePrompt } from "./playbooks";
 import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
 import { deployStatus } from "./deploy-status";
@@ -149,14 +149,22 @@ router.get("/claude/accounts", async (_req: Request, res: Response) => {
 
 router.get("/claude/runs", async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
+  // ?order=ended sorts by completion time (newest finished first) — what the
+  // tasks-desk activity bar needs: a long run CREATED hours ago that finishes
+  // NOW must surface at the top, which created_at ordering would bury.
+  const orderCol = req.query.order === "ended" ? "ended_at" : "created_at";
 
   const { data, error } = await db
     .from("claude_runs")
     // Kept as a single string literal: supabase-js infers the row shape by parsing
     // this at the type level, and a concatenated string degrades it to an error type.
-    .select("id, title, status, claude_account, repo, git_branch, playbook_id, user_prompt, session_id, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, started_at, ended_at, created_at")
+    // thread_id rides along so the tasks-screen activity bar can deep-link each
+    // finished run to its conversation (/claude?thread=<id>).
+    .select("id, thread_id, title, status, claude_account, repo, git_branch, playbook_id, user_prompt, session_id, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, started_at, ended_at, created_at")
     .eq("org_id", req.org!.id)
-    .order("created_at", { ascending: false })
+    // nullsFirst:false so still-running rows (ended_at null) sink to the tail
+    // under ?order=ended instead of crowding out the finished ones.
+    .order(orderCol, { ascending: false, nullsFirst: false })
     .limit(limit);
 
   if (error) {
@@ -276,6 +284,70 @@ router.get("/claude/runs/:id", async (req: Request, res: Response) => {
   }
 
   return res.json({ run, events: events ?? [] });
+});
+
+/**
+ * GET /api/claude/runs/:id/stream — live NDJSON tail of a running turn.
+ *
+ * Taps the runner's in-process event bus (runner.ts runEventBus), so output
+ * reaches the screen the moment the engine emits it — no DB batch (~500ms), no
+ * poll (~900ms). One JSON object per line, shaped exactly like the poll's
+ * events ({seq, kind, text, tool_name, created_at}), so the client merges both
+ * sources by seq. Events are already redacted at emit time.
+ *
+ * 204 when this process has no live child for the id — a run on another
+ * instance, or one that already finished. The client treats that as "no stream,
+ * keep polling", which is also the complete story on a horizontally-scaled
+ * backend: the stream is an accelerator, the poll is the authority.
+ */
+router.get("/claude/runs/:id/stream", async (req: Request, res: Response) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "run not found" });
+
+  // Org scope first — the bus is keyed by run id alone, so the ownership check
+  // must happen here, before any event is written.
+  const { data: run, error } = await db
+    .from("claude_runs")
+    .select("id, status")
+    .eq("id", req.params.id)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: "could not fetch run" });
+  if (!run) return res.status(404).json({ error: "run not found" });
+  if (!isRunLive(run.id)) return res.status(204).end();
+
+  res.status(200);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  // Railway's proxy buffers by default without this on some paths; harmless elsewhere.
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const onEvent = (ev: LiveEvent) => {
+    res.write(`${JSON.stringify(ev)}\n`);
+  };
+  const onEnd = () => cleanup(true);
+  // Keep intermediaries from idling the connection out during a long quiet tool
+  // call: a bare newline every 15s, which the client's line parser skips.
+  const heartbeat = setInterval(() => res.write("\n"), 15_000);
+
+  let done = false;
+  const cleanup = (endResponse: boolean) => {
+    if (done) return;
+    done = true;
+    clearInterval(heartbeat);
+    runEventBus.off(`ev:${run.id}`, onEvent);
+    runEventBus.off(`end:${run.id}`, onEnd);
+    if (endResponse) res.end();
+  };
+
+  runEventBus.on(`ev:${run.id}`, onEvent);
+  runEventBus.once(`end:${run.id}`, onEnd);
+  // Re-check AFTER subscribing: a run that finished in the gap between the
+  // isRunLive gate above and these listeners already fired its `end:` — no one
+  // would ever close this response. Now either the listener catches the end or
+  // this catches a run that is already gone.
+  if (!isRunLive(run.id)) return cleanup(true);
+  req.on("close", () => cleanup(false));
 });
 
 // ── GitHub ────────────────────────────────────────────────────────────────────

@@ -53,12 +53,45 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   `--resume` whose transcript is gone retries once as a fresh session with
   `resumed_session: null`. Instead of starting blank, the runner rebuilds the
   conversation from OUR DB — `buildThreadTranscript` (`transcript.ts`) reads each
-  prior turn's `claude_runs.prompt` + `result_summary` and the recovery path
-  prepends it to the fresh turn (in-memory only; never written back, so history
-  never nests). Same stateless re-feed claude.ai uses, sourced from durable rows
-  rather than the wiped on-disk transcript. The banner (`resumed_session` null on
-  a turn past the first) now reads "context restored from history", not "context
-  lost".
+  prior turn's CLEAN `user_prompt` (fallback `prompt`) + `result_summary`,
+  byte-budgeted (50 KB — chars lied: 60K Hebrew chars ≈ 120 KB brushed
+  MAX_ARG_STRLEN), and the recovery path re-wraps it through `composePrompt` so
+  the fresh session gets the env preamble + standing instructions back (they no
+  longer ride inside the rebuilt history). In-memory only; never written back,
+  so history never nests. The banner (`resumed_session` null on a turn past the
+  first) reads "context restored from history", not "context lost".
+- **Performance retrofit (2026-08-03, audit `docs/claude-console/
+  performance-audit-2026-08.md`):** (1) live screens poll the LIGHT
+  `GET /claude/threads/:id/live?run=&after=` (non-terminal runs + seq-incremental
+  events; full reload only on a turn's terminal edge) — poll cost no longer grows
+  with thread length; rail list refreshes at 5s, not 900ms. (2) `GET
+  /claude/runs/:id/stream` tails the runner's in-process `runEventBus` as NDJSON
+  for sub-second output (redacted at emit; 204 when the run isn't live in this
+  process — the poll stays the authority). (3) Run timeout raised 15→45 min
+  (heartbeat, not the ceiling, is the liveness signal). (4) Every re-execution
+  appends a replay-note to the stored prompt (recover.ts `markReplayed`) telling
+  the turn to check `git log`/DB state before repeating side effects. (5) A run
+  killed by the SUBSCRIPTION USAGE LIMIT is parked `queued` with
+  `error='usage-limit-wait:[until=<iso>; ]…'` (runner `USAGE_LIMIT_SENTINEL`).
+  When the CLI's message names the reset moment (`parseUsageResetTime`: epoch
+  after a pipe / ISO near "reset" / "resets at 3am (Zone)"), the recoverer
+  SLEEPS until it (+60s) and the screen shows the time (NY, `live.usageWaitUntil`);
+  otherwise it probes every ~15 min. Never consumes `resume_attempts`; gives up
+  6h past a known reset, 24h for blind parks, 3 days absolute. (6) Signed attachment URLs are cached in-process
+  (`signedUrlFor`). (7) Thread-GET event cap keeps the NEWEST 400 per turn.
+  (8) `CLAUDE_WORKSPACE_ROOT` relocates thread workspaces (point it at a Railway
+  Volume so redeploys stop wiping checkouts); pair with `CLAUDE_CONFIG_DIR` on
+  the same volume to keep engine sessions too — `trustWorkspace` honors it
+  (verified against the CLI binary: config dir = `CLAUDE_CONFIG_DIR ??
+  ~/.claude`, `.claude.json` inside it). (9) A thread turn that ran ≥2 min (or
+  failed) sends a completion push via `notify()` → Web Push trigger, deep link
+  `/claude?thread=<id>`; automation-account runs never notify.
+  (10) **Tasks-desk activity bar** (`src/components/claude/ClaudeActivityBar.tsx`,
+  mounted in `TasksPageClient`): EVERY terminal run (done/failed/canceled)
+  surfaces on /tasks — polls `GET /claude/runs?limit=30&order=ended` (the
+  `order=ended` sort exists for it), unseen = ended after a localStorage
+  watermark set from server end-times, deep-links via OpenTabLink; renders
+  NOTHING when nothing is unseen or for non-super-admins (compact-by-default).
 - **Thread split:** method A = `--fork-session` from the parent's session (in
   the parent's workspace — `workspace_thread_id`); method B = seed-context
   prepended to the child's first prompt.

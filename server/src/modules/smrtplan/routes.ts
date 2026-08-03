@@ -217,7 +217,27 @@ async function attachNeedsHandoff(orgId: string, taskRows: Row[]): Promise<Row[]
 }
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrtplan"));
+// Path-scoped ON PURPOSE — see the note in smrtstudio/routes.ts. A bare
+// router.use() here gates EVERY /api request that falls through to this router
+// (mounted as app.use("/api", smrtplanRouter)), not just the smrtPlan ones.
+// Every prefix this router serves must be listed here, or that prefix loses its
+// entitlement check.
+router.use(
+  [
+    "/plan",
+    "/plans",
+    "/plan-cells",
+    "/plan-dependencies",
+    "/plan-episodes",
+    "/plan-milestones",
+    "/plan-stages",
+    "/plan-tasks",
+    "/focus-sessions",
+  ],
+  requireAuth,
+  requireOrg,
+  requireApp("smrtplan"),
+);
 
 // Experiment scoring (video-lab) authed endpoints — inherit the auth/org/app
 // guards applied just above. See ./experiments.ts.

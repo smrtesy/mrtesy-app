@@ -26,7 +26,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
-import { requireAuth, requireOrg, requireApp } from "../../../middleware";
+import { requireAuth, requireOrg, requireApp, requireResource } from "../../../middleware";
 import { requireFullTask } from "../lib/access";
 import {
   computeReport,
@@ -40,7 +40,13 @@ import {
 import { weekdayNum } from "./hebdate";
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
+router.use(
+  requireAuth,
+  requireOrg,
+  requireApp("smrttask"),
+  requireFullTask,
+  requireResource("smrttask.screen.daily-report"),
+);
 
 const MAX_LABEL = 200;
 const MAX_ITEMS = 100;
