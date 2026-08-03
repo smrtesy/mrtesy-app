@@ -149,14 +149,22 @@ router.get("/claude/accounts", async (_req: Request, res: Response) => {
 
 router.get("/claude/runs", async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
+  // ?order=ended sorts by completion time (newest finished first) — what the
+  // tasks-desk activity bar needs: a long run CREATED hours ago that finishes
+  // NOW must surface at the top, which created_at ordering would bury.
+  const orderCol = req.query.order === "ended" ? "ended_at" : "created_at";
 
   const { data, error } = await db
     .from("claude_runs")
     // Kept as a single string literal: supabase-js infers the row shape by parsing
     // this at the type level, and a concatenated string degrades it to an error type.
-    .select("id, title, status, claude_account, repo, git_branch, playbook_id, user_prompt, session_id, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, started_at, ended_at, created_at")
+    // thread_id rides along so the tasks-screen activity bar can deep-link each
+    // finished run to its conversation (/claude?thread=<id>).
+    .select("id, thread_id, title, status, claude_account, repo, git_branch, playbook_id, user_prompt, session_id, result_summary, error, model, effort, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, started_at, ended_at, created_at")
     .eq("org_id", req.org!.id)
-    .order("created_at", { ascending: false })
+    // nullsFirst:false so still-running rows (ended_at null) sink to the tail
+    // under ?order=ended instead of crowding out the finished ones.
+    .order(orderCol, { ascending: false, nullsFirst: false })
     .limit(limit);
 
   if (error) {

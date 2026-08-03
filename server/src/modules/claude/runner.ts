@@ -443,6 +443,88 @@ export interface LiveEvent {
  * existing state machine (dispatch, cancel, screens) keeps working unchanged.
  */
 export const USAGE_LIMIT_SENTINEL = "usage-limit-wait:";
+/** When the reset moment could be parsed out of the CLI's message, it rides in
+ *  the sentinel as `usage-limit-wait:until=<iso>; …` — the recoverer then waits
+ *  for THAT moment instead of blind 15-minute probing, and the screen can show
+ *  the user when work will resume. Absent (unparseable message) → the recoverer
+ *  falls back to the 15-minute cadence. */
+export const USAGE_UNTIL_RE = /^usage-limit-wait:until=([0-9TZ:.+-]+);/;
+
+/**
+ * Extract the usage-window reset time from the CLI's failure text, when present.
+ *
+ * Three shapes are recognized (most-specific first):
+ *   1. "…usage limit reached|1750000000" — a unix epoch (s or ms) after a pipe,
+ *      the API's machine-readable form.
+ *   2. An ISO timestamp within a few words of "reset".
+ *   3. "…resets at 3am (America/New_York)" / "…reset at 11:30pm (Asia/Jerusalem)"
+ *      — a wall-clock time in a named zone; resolved to the NEXT instant whose
+ *      wall clock in that zone matches (minute-step scan over 26h — exact, and
+ *      immune to DST/offset arithmetic mistakes).
+ *
+ * Returns null for anything else, or for a value outside (now-5min, now+8d) —
+ * a nonsense parse must not schedule a retry into next year. Null simply means
+ * the recoverer keeps its blind 15-minute cadence, so a wrong *format* costs
+ * nothing; only a wrong *accepted value* would, hence the clamp.
+ */
+export function parseUsageResetTime(text: string, nowMs = Date.now()): Date | null {
+  const clamp = (d: Date): Date | null => {
+    const t = d.getTime();
+    if (!Number.isFinite(t)) return null;
+    if (t < nowMs - 5 * 60 * 1000 || t > nowMs + 8 * 24 * 60 * 60 * 1000) return null;
+    return d;
+  };
+
+  // Each pattern FALLS THROUGH on a rejected value (clamp null), so a stray
+  // 10-digit id after a pipe cannot mask a perfectly good "resets at …" later
+  // in the same text.
+  const epoch = text.match(/\|\s*(\d{10,13})\b/);
+  if (epoch) {
+    const n = Number(epoch[1]);
+    const d = clamp(new Date(epoch[1].length >= 13 ? n : n * 1000));
+    if (d) return d;
+  }
+
+  const iso = text.match(
+    /reset[^.\n]{0,40}?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?)/i,
+  );
+  if (iso) {
+    // A zoneless timestamp is read as UTC, not server-local time — the CLI's
+    // machine timestamps are UTC, and a non-UTC host would silently shift it.
+    const raw = iso[1].replace(" ", "T") + (iso[2] ? "" : "Z");
+    const d = clamp(new Date(raw));
+    if (d) return d;
+  }
+
+  const wall = text.match(/resets?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i);
+  if (wall) {
+    let hour = Number(wall[1]) % 12;
+    if (wall[3].toLowerCase() === "pm") hour += 12;
+    const minute = wall[2] ? Number(wall[2]) : 0;
+    const zone = wall[4].trim();
+    let fmt: Intl.DateTimeFormat;
+    try {
+      fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: zone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+    } catch {
+      return null; // an unknown zone name — don't guess
+    }
+    // Scan forward one minute at a time (≤26h ≈ 1560 checks, microseconds of
+    // work) for the first instant whose wall clock in `zone` matches.
+    const start = Math.ceil(nowMs / 60_000) * 60_000;
+    for (let t = start; t <= start + 26 * 60 * 60 * 1000; t += 60_000) {
+      const parts = fmt.formatToParts(new Date(t));
+      const h = Number(parts.find((p) => p.type === "hour")?.value);
+      const m = Number(parts.find((p) => p.type === "minute")?.value);
+      if ((h % 24) === hour && m === minute) return clamp(new Date(t));
+    }
+  }
+  return null;
+}
 /** Matched against the CLI's failure text. Narrow on purpose: an ordinary API
  *  error must NOT be retried in a loop — a broad match (e.g. bare "rate limit")
  *  would park a turn whose SHELL output merely mentioned "GitHub API rate limit"
@@ -1293,11 +1375,15 @@ async function executeRunBody(runId: string): Promise<void> {
   // nothing (or errored), fall through to the honest failed state instead.
   const usageLimited = !ok && spawnError === null && USAGE_LIMIT_RE.test(failureText);
   if (usageLimited) {
+    // When the message names the reset moment, carry it in the sentinel so the
+    // retry happens right after the window opens instead of blind 15-min probes.
+    const resetAt = parseUsageResetTime(failureText);
+    const untilPart = resetAt ? `until=${resetAt.toISOString()}; ` : "";
     const { data: parked, error: wErr } = await db
       .from("claude_runs")
       .update({
         status: "queued",
-        error: `${USAGE_LIMIT_SENTINEL} ${truncate(redactSecrets(failureText.trim()), 400)}`,
+        error: `${USAGE_LIMIT_SENTINEL}${untilPart} ${truncate(redactSecrets(failureText.trim()), 400)}`,
         started_at: null,
         ended_at: null,
         updated_at: new Date().toISOString(),

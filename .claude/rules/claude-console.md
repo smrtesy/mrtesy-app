@@ -72,9 +72,12 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   appends a replay-note to the stored prompt (recover.ts `markReplayed`) telling
   the turn to check `git log`/DB state before repeating side effects. (5) A run
   killed by the SUBSCRIPTION USAGE LIMIT is parked `queued` with
-  `error='usage-limit-wait: …'` (runner `USAGE_LIMIT_SENTINEL`) and retried every
-  ~15 min for up to 24h without consuming `resume_attempts`; the screen shows
-  "waiting for the window". (6) Signed attachment URLs are cached in-process
+  `error='usage-limit-wait:[until=<iso>; ]…'` (runner `USAGE_LIMIT_SENTINEL`).
+  When the CLI's message names the reset moment (`parseUsageResetTime`: epoch
+  after a pipe / ISO near "reset" / "resets at 3am (Zone)"), the recoverer
+  SLEEPS until it (+60s) and the screen shows the time (NY, `live.usageWaitUntil`);
+  otherwise it probes every ~15 min. Never consumes `resume_attempts`; gives up
+  6h past a known reset, 24h for blind parks, 3 days absolute. (6) Signed attachment URLs are cached in-process
   (`signedUrlFor`). (7) Thread-GET event cap keeps the NEWEST 400 per turn.
   (8) `CLAUDE_WORKSPACE_ROOT` relocates thread workspaces (point it at a Railway
   Volume so redeploys stop wiping checkouts); pair with `CLAUDE_CONFIG_DIR` on
@@ -83,6 +86,12 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   ~/.claude`, `.claude.json` inside it). (9) A thread turn that ran ≥2 min (or
   failed) sends a completion push via `notify()` → Web Push trigger, deep link
   `/claude?thread=<id>`; automation-account runs never notify.
+  (10) **Tasks-desk activity bar** (`src/components/claude/ClaudeActivityBar.tsx`,
+  mounted in `TasksPageClient`): EVERY terminal run (done/failed/canceled)
+  surfaces on /tasks — polls `GET /claude/runs?limit=30&order=ended` (the
+  `order=ended` sort exists for it), unseen = ended after a localStorage
+  watermark set from server end-times, deep-links via OpenTabLink; renders
+  NOTHING when nothing is unseen or for non-super-admins (compact-by-default).
 - **Thread split:** method A = `--fork-session` from the parent's session (in
   the parent's workspace — `workspace_thread_id`); method B = seed-context
   prepended to the child's first prompt.

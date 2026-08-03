@@ -1782,13 +1782,29 @@ function LiveRunStatus({ turn, onStop }: { turn: Turn; onStop: () => void }) {
   const t = useTranslations("claudeChat");
 
   if (turn.status !== "running") {
-    // queued, parked on the subscription usage window — the server retries it
-    // every ~15 minutes by itself (recover.ts); tell the user that, not "starting".
+    // queued, parked on the subscription usage window — the server resumes it by
+    // itself (recover.ts): at the reset moment when the CLI's message named one
+    // (shown here, in New York time), otherwise on a 15-minute probe. Either
+    // way, tell the user that — not "starting".
     if (turn.error?.startsWith(USAGE_WAIT_PREFIX)) {
+      // Anchored to the sentinel prefix (mirrors the server's USAGE_UNTIL_RE):
+      // an `until=` that merely appears inside the quoted CLI text is not a
+      // schedule.
+      const untilMatch = turn.error.match(/^usage-limit-wait:until=([0-9TZ:.+-]+);/);
+      const untilMs = untilMatch ? Date.parse(untilMatch[1]) : NaN;
+      const untilLabel = Number.isFinite(untilMs)
+        ? new Intl.DateTimeFormat("he-IL", {
+            timeZone: "America/New_York",
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(untilMs))
+        : null;
       return (
         <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500" dir="auto">
           <AlertTriangle className="size-3.5 shrink-0" />
-          <span>{t("live.usageWait")}</span>
+          <span>
+            {untilLabel ? t("live.usageWaitUntil", { time: untilLabel }) : t("live.usageWait")}
+          </span>
         </p>
       );
     }
