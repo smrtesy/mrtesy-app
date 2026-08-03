@@ -684,6 +684,27 @@
       "timeHint": "Adding a time turns this into an event — a reminder that shows up one working day before",
       "clearTime": "Remove time"
     },
+    "daySchedule": {
+      "title": "Schedule to a day",
+      "loading": "Loading availability…",
+      "legendFree": "Free",
+      "legendPartial": "Partial",
+      "legendFull": "Full",
+      "loadMedium": "{used}/{quota} medium on this day",
+      "loadBig": "{used}/{quota} big on this day",
+      "bumpedToday": "Today is full — jumped to the next free day",
+      "pastDeadline": "After the task's due date",
+      "addHint": "Schedule to a day",
+      "plannedHint": "Scheduled for {date} · click to change",
+      "remove": "Remove from schedule",
+      "commit": "Schedule"
+    },
+    "scheduled": {
+      "heading": "Scheduled ahead",
+      "summary": "{days, plural, one {# day} other {# days}} · {tasks, plural, one {# task} other {# tasks}}",
+      "sizeMedium": "Medium",
+      "sizeBig": "Big"
+    },
     "row": {
       "blockedHint": "Waiting for: {titles}",
       "reopen": "Reopen task",

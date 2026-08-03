@@ -33,12 +33,18 @@ export function HebrewCalendar({
   onSelect,
   min,
   max,
+  dayMeta,
   className,
 }: {
   value: string | null;
   onSelect: (iso: string) => void;
   min?: string;
   max?: string;
+  /** Optional per-day decoration (e.g. the day-scheduler's free/full colouring).
+   *  Returns a background `className` (applied only when the day is NOT the
+   *  selected one, so the primary-selected style always wins) and a hover
+   *  `title`. Callers that don't pass this get the plain calendar unchanged. */
+  dayMeta?: (iso: string) => { className?: string; title?: string } | undefined;
   className?: string;
 }) {
   const locale = useLocale();
@@ -214,16 +220,21 @@ export function HebrewCalendar({
             const disabled = !inRange(iso);
             const isSel = selected != null && iso === isoOf(selected);
             const isToday = iso === isoOf(today);
+            const meta = !disabled ? dayMeta?.(iso) : undefined;
             return (
               <button
                 key={iso}
                 type="button"
                 disabled={disabled}
                 onClick={() => onSelect(iso)}
+                title={meta?.title}
                 className={cn(
                   "flex h-8 items-center justify-center rounded-md text-[12.5px] tabular-nums transition-colors",
                   disabled && "cursor-not-allowed opacity-30",
                   !disabled && !isSel && "hover:bg-accent",
+                  // Day decoration (free/full tint) shows only when unselected —
+                  // the selected day keeps the solid primary style.
+                  !isSel && meta?.className,
                   isSel && "bg-primary font-semibold text-primary-foreground",
                   !isSel && isToday && "font-bold text-primary ring-1 ring-primary/40",
                 )}
