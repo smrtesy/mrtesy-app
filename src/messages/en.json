@@ -4592,6 +4592,15 @@
     "cancel": "Cancel",
     "saved": "Saved"
   },
+  "claudeActivity": {
+    "finished": "Claude finished",
+    "failed": "Claude run failed",
+    "canceled": "Claude run canceled",
+    "open": "Open",
+    "more": "+{n} more",
+    "dismiss": "Mark seen",
+    "tabLabel": "Claude"
+  },
   "claudeChat": {
     "interactive": {
       "picked": "I chose: {label}",
@@ -4653,7 +4662,8 @@
       "resumed": "resumed after a restart",
       "noOutput": "No response for {d} — may be stuck",
       "stopHint": "Stop and resend",
-      "usageWait": "Subscription usage window exhausted — the run will continue automatically once it resets (retried every 15 minutes, for up to a day)"
+      "usageWait": "Subscription usage window exhausted — the run will continue automatically once it resets (retried every 15 minutes, for up to a day)",
+      "usageWaitUntil": "Subscription usage window exhausted — the run will continue automatically around {time} (New York)"
     },
     "toolCount": "{count} tool calls",
     "effortDefault": "Effort: default",
