@@ -23,8 +23,15 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-/** Under the OS temp dir, never inside the deployed app directory. */
-const ROOT = path.join(os.tmpdir(), "smrtesy-claude-threads");
+/**
+ * Where thread workspaces live. Default: under the OS temp dir, never inside the
+ * deployed app directory. `CLAUDE_WORKSPACE_ROOT` overrides it so the operator
+ * can point this at a Railway Volume mount (e.g. /data/claude-threads) — then a
+ * redeploy (every push to main) no longer wipes every live conversation's
+ * checkout and working files. Without the volume, temp-dir behavior is unchanged.
+ */
+const ROOT =
+  process.env.CLAUDE_WORKSPACE_ROOT?.trim() || path.join(os.tmpdir(), "smrtesy-claude-threads");
 
 /** Thread ids are uuids from our own DB, but this is a path segment, so it is
  *  validated rather than trusted. */

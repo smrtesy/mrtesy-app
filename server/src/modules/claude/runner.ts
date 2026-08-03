@@ -21,15 +21,18 @@
  */
 
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { db, getAppSecret } from "../../db";
+import { notify } from "../../lib/platform/notify";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
 import { buildThreadTranscript } from "./transcript";
+import { composePrompt } from "./playbooks";
 import { mintAppAccess, revokeAppAccess, BROWSER_HELPER_PATH } from "./app-access";
 
 /**
@@ -256,7 +259,16 @@ function resolveCli(): string {
  */
 async function trustWorkspace(dir: string): Promise<void> {
   try {
-    const file = path.join(os.homedir(), ".claude.json");
+    // The CLI reads its home config from CLAUDE_CONFIG_DIR when set (verified
+    // against the binary: the config dir resolves as `CLAUDE_CONFIG_DIR ??
+    // join(homedir(), ".claude")` and `.claude.json` is written inside it). The
+    // child inherits the backend's env, so when the operator points the config
+    // dir at a Railway Volume (to keep engine sessions across deploys), the
+    // trust entry must be written THERE or it would never be seen.
+    const cfgDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+    const file = cfgDir
+      ? path.join(cfgDir, ".claude.json")
+      : path.join(os.homedir(), ".claude.json");
     let cfg: Record<string, unknown> = {};
     try {
       cfg = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
@@ -351,8 +363,12 @@ export function cancelRun(runId: string): boolean {
   return true;
 }
 
-/** Hard ceiling on a single run, so a hung process can't occupy the host forever. */
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+/** Hard ceiling on a single run, so a hung process can't occupy the host forever.
+ *  45 minutes, not the original 15: real turns (a full audit, a slow build+merge)
+ *  legitimately run past 15, and killing them meant the recoverer REPLAYED the
+ *  whole turn — duplicating side effects. Raising this is safe because liveness
+ *  is judged by the 20s heartbeat (recover.ts), never by this ceiling. */
+const DEFAULT_TIMEOUT_MS = 45 * 60 * 1000;
 /** The effective per-run ceiling, honoring the env override. Exported so the
  *  recoverer can reason about it (a live run is SIGKILLed by this, so anything
  *  stuck far past it has no process behind it). */
@@ -393,6 +409,46 @@ type PendingEvent = {
   tool_name: string | null;
   payload: unknown;
 };
+
+/**
+ * In-process live event bus — what the NDJSON stream route (routes.ts) taps so the
+ * screen can render output the moment it is parsed, without waiting for the DB
+ * batch flush (~500ms) + the client poll (~900ms). Emits per run:
+ *   `ev:<runId>`  a redacted, display-shaped event { seq, kind, text, tool_name, created_at }
+ *   `end:<runId>` the run reached a terminal state — the stream route closes on it.
+ * In-memory on purpose: correct for the single process that owns the child (the
+ * same single-instance assumption the cancel path and recoverer document), and a
+ * subscriber on another instance simply gets nothing and falls back to polling.
+ */
+export const runEventBus = new EventEmitter();
+// Many concurrent viewers of many runs are legitimate; the default 10 would warn.
+runEventBus.setMaxListeners(200);
+
+/** The display-shaped live event the bus emits — mirrors what the poll returns
+ *  from claude_run_events, so the client merges both sources by seq. */
+export interface LiveEvent {
+  seq: number;
+  kind: string;
+  text: string | null;
+  tool_name: string | null;
+  created_at: string;
+}
+
+/**
+ * The subscription window ran out mid-run. Stored as a machine-readable prefix on
+ * claude_runs.error while the row stays 'queued', so (a) the recoverer retries it
+ * on a slow cadence instead of burning its 2 resume attempts immediately, and (b)
+ * the screen can tell "waiting for the usage window" from "starting". A prefix on
+ * an existing column, not a new status value, so no migration is needed and every
+ * existing state machine (dispatch, cancel, screens) keeps working unchanged.
+ */
+export const USAGE_LIMIT_SENTINEL = "usage-limit-wait:";
+/** Matched against the CLI's failure text. Narrow on purpose: an ordinary API
+ *  error must NOT be retried in a loop — a broad match (e.g. bare "rate limit")
+ *  would park a turn whose SHELL output merely mentioned "GitHub API rate limit"
+ *  and replay it every 15 minutes for a day. The CLI phrases subscription
+ *  exhaustion as "Claude … usage limit reached" / "…limit will reset at…". */
+const USAGE_LIMIT_RE = /claude\s+(?:ai\s+)?usage limit|usage limit reached|limit will reset/i;
 
 function truncate(v: unknown, max = MAX_TEXT): string | null {
   if (typeof v !== "string") return null;
@@ -579,6 +635,9 @@ export async function executeRun(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] could not record failure:", error.message);
   } finally {
     inFlight.delete(runId);
+    // Whatever path ended this execution (finish, park, throw), tell any open
+    // live stream it is over so the route closes instead of idling to timeout.
+    runEventBus.emit(`end:${runId}`);
   }
 }
 
@@ -719,6 +778,9 @@ async function executeRunBody(runId: string): Promise<void> {
   // tree, which a chat turn has no business reading or touching.
   const cwd = run.repo && workDir ? path.join(workDir, run.repo.split("/")[1]) : workDir;
 
+  // Wall-clock start of the whole turn (clone and prep included) — what the
+  // completion push notification measures "was this long enough to notify" by.
+  const startedWallMs = Date.now();
   const { error: startError } = await db
     .from("claude_runs")
     .update({
@@ -1080,7 +1142,21 @@ async function executeRunBody(runId: string): Promise<void> {
           resultEvent = obj;
           if (typeof obj.result === "string") lastResult = obj.result;
         }
-        buffer.push(...mapLine(parsed, nextSeq));
+        const mapped = mapLine(parsed, nextSeq);
+        // Live push to any open stream BEFORE the DB batch — this is the whole
+        // point of the bus (sub-second output). Redacted per event, because the
+        // batch-level redaction below only covers what goes to the DB.
+        const emittedAt = new Date().toISOString();
+        for (const ev of mapped) {
+          runEventBus.emit(`ev:${runId}`, {
+            seq: ev.seq,
+            kind: ev.kind,
+            text: ev.text === null ? null : redactSecrets(ev.text),
+            tool_name: ev.tool_name,
+            created_at: emittedAt,
+          } satisfies LiveEvent);
+        }
+        buffer.push(...mapped);
         if (buffer.length >= FLUSH_EVERY) void flush();
       }
     });
@@ -1175,10 +1251,19 @@ async function executeRunBody(runId: string): Promise<void> {
     // on-disk transcript. Prepended to the in-memory promptText ONLY, deliberately
     // NOT written back to claude_runs: a later reconstruction must read the clean
     // user prompt so rebuilt history never nests inside itself and re-bloats.
+    //
+    // Re-composed through composePrompt on purpose: the rebuilt history is now the
+    // CLEAN user/assistant exchange (transcript.ts reads user_prompt, not the
+    // composed turn-1 prompt), so the environment preamble and standing
+    // instructions no longer ride along inside it — they must be re-attached here
+    // or the fresh session would wake with no orientation at all.
     if (run.thread_id) {
       const history = await buildThreadTranscript(run.thread_id, runId);
       if (history) {
-        promptText = `# רקע מהשיחה הקודמת (שוחזר מההיסטוריה)\n\n${history}\n\n---\n\n${promptText}`;
+        const seeded =
+          `# רקע מהשיחה הקודמת (שוחזר מההיסטוריה)\n\n${history}\n\n---\n\n${promptText}`;
+        const recomposed = await composePrompt(run.org_id, seeded, null);
+        promptText = recomposed.prompt;
       }
     }
     attempt = await runEngine(null);
@@ -1198,6 +1283,35 @@ async function executeRunBody(runId: string): Promise<void> {
       "unusual for a Claude credential. Check that the saved value is the token " +
       "printed by `claude setup-token`."
     : "";
+
+  // The subscription window ran out mid-turn. NOT a failure the user must resend:
+  // park the row back in 'queued' with the machine-readable sentinel on `error`,
+  // and the recoverer retries it every ~15 minutes until the window resets
+  // (recover.ts) — the same "arm the resume, don't react" idea as the long-task
+  // watchdog, applied to console turns. Guarded on status='running' so a cancel
+  // that landed meanwhile is never resurrected; if the guarded write matched
+  // nothing (or errored), fall through to the honest failed state instead.
+  const usageLimited = !ok && spawnError === null && USAGE_LIMIT_RE.test(failureText);
+  if (usageLimited) {
+    const { data: parked, error: wErr } = await db
+      .from("claude_runs")
+      .update({
+        status: "queued",
+        error: `${USAGE_LIMIT_SENTINEL} ${truncate(redactSecrets(failureText.trim()), 400)}`,
+        started_at: null,
+        ended_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", runId)
+      .eq("status", "running")
+      .select("id")
+      .maybeSingle();
+    if (wErr) console.error("[claude/runner] usage-limit park failed:", wErr.message);
+    if (parked) {
+      if (appAccess) void revokeAppAccess(appAccess.token);
+      return;
+    }
+  }
 
   await finish({
     status: ok ? "done" : "failed",
@@ -1244,7 +1358,44 @@ async function executeRunBody(runId: string): Promise<void> {
     const { error: tErr } = await db.from("claude_threads").update(patch).eq("id", run.thread_id);
     if (tErr) console.error("[claude/runner] thread update failed:", tErr.message);
   }
+
+  // Completion push — closes the one availability gap vs Claude Code on the web:
+  // a turn long enough that the user has walked away (>2 min), or any failure,
+  // reaches their phone instead of waiting to be noticed on screen. The
+  // `notifications` insert fans out to Web Push via the platform's AFTER INSERT
+  // trigger (lib/platform/notify.ts). Skipped for the automation account —
+  // background work must not ping the phone — and fire-and-forget: a
+  // notification failure never touches the turn's outcome.
+  const elapsedWallMs = Date.now() - startedWallMs;
+  const isAutomation = (run.claude_account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT;
+  if (run.thread_id && run.created_by && !isAutomation && (!ok || elapsedWallMs >= NOTIFY_MIN_MS)) {
+    void (async () => {
+      try {
+        const { data: tRow } = await db
+          .from("claude_threads")
+          .select("title")
+          .eq("id", run.thread_id)
+          .maybeSingle();
+        const threadTitle = tRow?.title?.trim() || run.prompt.slice(0, 60);
+        await notify(run.org_id, run.created_by, {
+          app_slug: "smrttask",
+          type: ok ? "success" : "warning",
+          title: ok ? "הרצת קלוד הסתיימה" : "הרצת קלוד נכשלה",
+          body: threadTitle,
+          link: `/claude?thread=${run.thread_id}`,
+          entity_type: "claude_thread",
+          entity_id: run.thread_id,
+        });
+      } catch (e) {
+        console.error("[claude/runner] completion notify failed:", e instanceof Error ? e.message : e);
+      }
+    })();
+  }
 }
+
+/** A successful turn shorter than this sends no completion push — the user is
+ *  almost certainly still looking at the screen. Failures always notify. */
+const NOTIFY_MIN_MS = 2 * 60 * 1000;
 
 /**
  * Background LLM calls route by task TYPE, never by guessing difficulty (the

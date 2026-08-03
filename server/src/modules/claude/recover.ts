@@ -46,7 +46,7 @@
  */
 
 import { db } from "../../db";
-import { executeRun, isRunLive, RUN_TIMEOUT_MS } from "./runner";
+import { executeRun, isRunLive, RUN_TIMEOUT_MS, USAGE_LIMIT_SENTINEL } from "./runner";
 import { dispatchNextWaiting } from "./threads";
 
 /** A run untouched this long with no in-process child is treated as orphaned. Well
@@ -67,13 +67,52 @@ const GAVE_UP_MESSAGE =
   "ההרצה נקטעה שוב ושוב (כנראה שרת ה-Claude עלה מחדש באמצע התור יותר מפעם אחת). " +
   "ניסינו להמשיך אותה אוטומטית ולא הצלחנו — שלח את ההודעה שוב.";
 
+/** How long a usage-limit-parked run waits between retries. The subscription
+ *  window resets on its own schedule we cannot read, so retry on a slow fixed
+ *  cadence: cheap when the window is still exhausted (the run fails fast and is
+ *  re-parked), and at most ~15 minutes late once it has reset. */
+const USAGE_RETRY_MS = 15 * 60 * 1000;
+/** A run parked on the usage limit for this long is given up — a window that
+ *  hasn't reset within a day is not a window problem. */
+const USAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const USAGE_GAVE_UP_MESSAGE =
+  "חלון השימוש במנוי לא התאפס במשך יממה, ולכן ההרצה לא הושלמה. שלח את ההודעה שוב.";
+
+/**
+ * Appended to a re-executed run's stored prompt (once — the includes() guard) so
+ * the replayed turn KNOWS it is a replay. A re-execution runs the same prompt
+ * from the top, and side effects the dead attempt already completed (a git push,
+ * an applied migration, a board write) would otherwise be repeated blindly. A
+ * prompt line is a mitigation, not a guarantee — but it costs nothing and points
+ * the model at the code-checkable evidence (git log, DB state) before it acts.
+ * Appended, not prepended: the runner's seed/history idempotency guards key off
+ * the prompt's PREFIX (runner.ts startsWith checks), which must stay intact.
+ */
+const REPLAY_NOTE_HEADER = "# הערת המשך אוטומטי: ההרצה הקודמת נקטעה באמצע";
+const REPLAY_NOTE =
+  `\n\n---\n\n${REPLAY_NOTE_HEADER}\n\n` +
+  "ייתכן שחלק מהפעולות כבר בוצעו לפני הקטיעה. לפני כל פעולה בעלת תופעות-לוואי " +
+  "(דחיפה ל-git, החלת מיגרציה, כתיבה ל-DB או ללוח) בדוק קודם מה כבר קיים — " +
+  "`git log`/`git status`, מצב הנתונים — ואל תחזור על פעולה שכבר הושלמה.";
+
+/** Append the replay note to the run's stored prompt, once. Best-effort: a
+ *  failure here must not block the resume itself. */
+async function markReplayed(runId: string, prompt: string | null): Promise<void> {
+  if (!prompt || prompt.includes(REPLAY_NOTE_HEADER)) return;
+  const { error } = await db
+    .from("claude_runs")
+    .update({ prompt: `${prompt}${REPLAY_NOTE}` })
+    .eq("id", runId);
+  if (error) console.error("[claude/recover] replay note failed:", error.message);
+}
+
 async function recoverOrphanedRuns(): Promise<void> {
   const cutoffMs = Date.now() - RESUME_STALE_MS;
   const cutoff = new Date(cutoffMs).toISOString();
 
   const { data: candidates, error } = await db
     .from("claude_runs")
-    .select("id, resume_attempts, thread_id, org_id")
+    .select("id, resume_attempts, thread_id, org_id, error, prompt, created_at")
     .in("status", ["running", "queued"])
     .lt("updated_at", cutoff)
     .order("updated_at", { ascending: true })
@@ -86,6 +125,67 @@ async function recoverOrphanedRuns(): Promise<void> {
   for (const run of candidates ?? []) {
     // Owned by this process (including the pre-spawn clone window) — not orphaned.
     if (isRunLive(run.id)) continue;
+
+    // A run parked on the subscription usage limit (runner.ts parks it 'queued'
+    // with the sentinel on `error`). Its own slow-cadence retry loop, SEPARATE
+    // from the orphan path below: retries do not consume resume_attempts (a
+    // window that resets in three hours needs a dozen tries), and the loop is
+    // bounded by AGE instead.
+    if ((run.error ?? "").startsWith(USAGE_LIMIT_SENTINEL)) {
+      const createdMs = Date.parse(run.created_at ?? "") || 0;
+      if (Date.now() - createdMs > USAGE_MAX_AGE_MS) {
+        const { error: gErr } = await db
+          .from("claude_runs")
+          .update({
+            status: "failed",
+            error: USAGE_GAVE_UP_MESSAGE,
+            ended_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", run.id)
+          .eq("status", "queued");
+        if (gErr) console.error("[claude/recover] usage give-up failed:", gErr.message);
+        continue;
+      }
+      const retryCutoff = new Date(Date.now() - USAGE_RETRY_MS).toISOString();
+      // Atomic claim, same shape as the orphan claim below: clear the sentinel so
+      // the runner sees a normal queued row; only one scan (and only after the
+      // retry delay) can take it. resume_attempts deliberately untouched.
+      const { data: claimed, error: cErr } = await db
+        .from("claude_runs")
+        .update({ error: null, updated_at: new Date().toISOString() })
+        .eq("id", run.id)
+        .eq("status", "queued")
+        .lt("updated_at", retryCutoff)
+        .select("id")
+        .maybeSingle();
+      if (cErr || !claimed) continue; // not yet time, or another scan took it
+      // The parked attempt's events would collide with the retry's seq 1..N on
+      // UNIQUE(run_id, seq) — clear them, exactly like the orphan path.
+      const { error: dErr } = await db.from("claude_run_events").delete().eq("run_id", run.id);
+      if (dErr) {
+        console.error("[claude/recover] could not clear usage-parked events:", dErr.message);
+        // Restore the sentinel the claim just cleared. Without it the row would
+        // look like an ordinary orphan on the next scan and be routed to the
+        // branch below — consuming resume_attempts (or failing outright at the
+        // cap), which the usage path promises never to do.
+        const { error: rsErr } = await db
+          .from("claude_runs")
+          .update({ error: run.error, updated_at: new Date().toISOString() })
+          .eq("id", run.id)
+          .eq("status", "queued");
+        if (rsErr) console.error("[claude/recover] sentinel restore failed:", rsErr.message);
+        continue; // retried on the next pass once the retry delay passes again
+      }
+      await markReplayed(run.id, run.prompt);
+      console.warn(`[claude/recover] retrying usage-limited run ${run.id}`);
+      void executeRun(run.id)
+        .then(() => (run.thread_id ? dispatchNextWaiting(run.thread_id, run.org_id) : undefined))
+        .catch((e) =>
+          console.error("[claude/recover] usage retry threw:", e instanceof Error ? e.message : e),
+        );
+      continue;
+    }
 
     const attempts = run.resume_attempts ?? 0;
 
@@ -148,6 +248,10 @@ async function recoverOrphanedRuns(): Promise<void> {
       console.error("[claude/recover] could not clear stale events, skipping re-exec:", dErr.message);
       continue;
     }
+
+    // The replayed turn should know it is a replay before it repeats a side
+    // effect the dead attempt already performed.
+    await markReplayed(run.id, run.prompt);
 
     console.warn(
       `[claude/recover] resuming orphaned run ${run.id} (attempt ${attempts + 1}/${MAX_RESUME_ATTEMPTS})`,
