@@ -18,7 +18,11 @@ import waRouter from "./routes/wa";
 
 const router = Router();
 
-router.use(requireAuth, requireOrg, requireApp("smrtbot"));
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/bot", requireAuth, requireOrg, requireApp("smrtbot"));
 
 // Health/ping — proves the chain resolves for smrtBot.
 router.get("/bot/health", (req: Request, res: Response) => {

@@ -27,7 +27,11 @@ import { createFixThread, correctionsAutoEnabled } from "./execute";
 const router = Router();
 
 // Every correction route requires auth + active org + smrtTask enabled.
-router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/corrections", requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 /**
  * Strip the server-owned keys out of a client-supplied `context`. `prompt_class`

@@ -281,7 +281,11 @@ const router = Router();
 // smrtvoice slug is accepted TRANSITIONALLY so the code deploy and the
 // membership migration don't have to land in the same instant; drop it to
 // requireApp("smrtstudio") once the migration has run everywhere.
-router.use(requireAuth, requireOrg, requireAnyApp("smrtstudio", "smrtvoice"));
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/voice", requireAuth, requireOrg, requireAnyApp("smrtstudio", "smrtvoice"));
 
 // Access model: anyone entitled to smrtStudio/smrtVoice gets the FULL
 // production workflow — creating and casting characters, cloning voices,

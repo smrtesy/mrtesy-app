@@ -30,7 +30,11 @@ import { parseSpreadsheetId, fetchSheetGrid } from "../../services/sheets";
 
 const router = Router();
 
-router.use(requireAuth, requireOrg, requireApp("smrtcrm"));
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/crm", requireAuth, requireOrg, requireApp("smrtcrm"));
 
 // ============================================================
 // SHARED FILTERING
