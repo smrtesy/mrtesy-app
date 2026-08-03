@@ -9,6 +9,7 @@
 import { Router } from "express";
 import organizationsRouter from "./organizations/routes";
 import membersRouter from "./members/routes";
+import permissionsRouter from "./permissions/routes";
 import appsRouter from "./apps/routes";
 import meRouter from "./me/routes";
 import messagingRouter from "./messaging/routes";
@@ -19,6 +20,7 @@ const router = Router();
 
 router.use(organizationsRouter);
 router.use(membersRouter);
+router.use(permissionsRouter);
 router.use(appsRouter);
 router.use(meRouter);
 router.use(messagingRouter);

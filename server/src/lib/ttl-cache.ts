@@ -36,4 +36,9 @@ export class TtlCache<V> {
   delete(key: string): void {
     this.map.delete(key);
   }
+
+  /** Drop every entry — used when a change can invalidate many keys at once. */
+  clear(): void {
+    this.map.clear();
+  }
 }

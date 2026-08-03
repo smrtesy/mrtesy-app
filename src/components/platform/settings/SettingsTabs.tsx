@@ -5,13 +5,14 @@ import { useParams, usePathname, useRouter, useSearchParams } from "next/navigat
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import { Building2, Shield, Layers } from "lucide-react";
+import { Building2, Shield, Layers, Lock } from "lucide-react";
 import { OrgSettingsClient } from "@/components/platform/org/OrgSettingsClient";
 import { AppsTabPanel } from "@/components/platform/settings/AppsTabPanel";
 import { PlatformTabPanel } from "@/components/platform/settings/PlatformTabPanel";
+import { PermissionsTabPanel } from "@/components/platform/settings/PermissionsTabPanel";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 
-type TabKey = "apps" | "org" | "platform";
+type TabKey = "apps" | "org" | "permissions" | "platform";
 
 interface Props {
   enabledApps: string[];
@@ -59,6 +60,7 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
   // Initial tab: explicit URL > query param > app context (if on /settings/apps/*) > apps default
   const urlTab: TabKey | null =
     pathname.includes("/settings/org") ? "org" :
+    pathname.includes("/settings/permissions") ? "permissions" :
     pathname.includes("/settings/platform") ? "platform" :
     pathname.includes("/settings/apps") ? "apps" :
     null;
@@ -73,13 +75,15 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
     // Update URL without full nav so deep-links work and refresh keeps the tab
     if (tab === "apps") router.replace(`/${locale}/settings`);
     else if (tab === "org") router.replace(`/${locale}/settings/org`);
+    else if (tab === "permissions") router.replace(`/${locale}/settings/permissions`);
     else if (tab === "platform") router.replace(`/${locale}/settings/platform`);
   }
 
   const tabs: Array<{ key: TabKey; label: string; icon: React.ElementType; show: boolean }> = [
-    { key: "apps",     label: t("apps"),     icon: Layers,    show: true },
-    { key: "org",      label: t("org"),      icon: Building2, show: !!canManageOrg },
-    { key: "platform", label: t("platform"), icon: Shield,    show: isAdmin },
+    { key: "apps",        label: t("apps"),        icon: Layers,    show: true },
+    { key: "org",         label: t("org"),         icon: Building2, show: !!canManageOrg },
+    { key: "permissions", label: t("permissions"), icon: Lock,      show: !!canManageOrg || isAdmin },
+    { key: "platform",    label: t("platform"),    icon: Shield,    show: isAdmin },
   ];
 
   return (
@@ -113,6 +117,7 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
           <AppsTabPanel enabledApps={enabledApps} appSlug={appSlug} />
         )}
         {activeTab === "org" && canManageOrg && <OrgSettingsClient />}
+        {activeTab === "permissions" && (canManageOrg || isAdmin) && <PermissionsTabPanel />}
         {activeTab === "platform" && isAdmin && <PlatformTabPanel />}
       </div>
 
