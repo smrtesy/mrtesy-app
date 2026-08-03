@@ -35,7 +35,11 @@ import {
 } from "./supabase";
 
 const router = Router();
-router.use(requireAuth, requireSuperAdmin);
+// Path-scoped to "/admin" ON PURPOSE. This router is mounted with
+// app.use("/api", adminRouter), so a BARE router.use() here runs for EVERY
+// /api request that falls through to it — which 403'd every non-super-admin
+// on routers mounted after it (smrtTask, studio, inbox, …).
+router.use("/admin", requireAuth, requireSuperAdmin);
 
 // Providers whose read+write connectors are wired up. All three are live now
 // (Railway phase 1, Vercel + Supabase phase 2/3).
