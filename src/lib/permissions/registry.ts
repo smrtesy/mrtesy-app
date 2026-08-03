@@ -38,6 +38,14 @@ export type RestrictableResource = {
    * approve → auto-run" flow will key off this. Inert in phase 1.
    */
   costly?: boolean;
+  /**
+   * Whether this resource is actually ENFORCED yet — i.e. a `ResourceGuard`
+   * wraps its screen AND a `requireResource` gates its API. `false` means it's
+   * in the catalog for visibility but restricting it would be a no-op, so the
+   * management UI shows it disabled ("coming soon") and the backend rejects a
+   * restrict toggle. Absent = true.
+   */
+  enforced?: boolean;
 };
 
 export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
@@ -48,6 +56,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     labelKey: "permissions.resources.smrttask_screen_knowledge",
     descriptionKey: "permissions.resourceDesc.smrttask_screen_knowledge",
     defaultRestricted: false,
+    enforced: true,
   },
   {
     key: "smrttask.screen.daily-report",
@@ -56,6 +65,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     labelKey: "permissions.resources.smrttask_screen_daily_report",
     descriptionKey: "permissions.resourceDesc.smrttask_screen_daily_report",
     defaultRestricted: false,
+    enforced: true,
   },
   {
     key: "smrtcrm.screen.crm",
@@ -64,6 +74,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     labelKey: "permissions.resources.smrtcrm_screen_crm",
     descriptionKey: "permissions.resourceDesc.smrtcrm_screen_crm",
     defaultRestricted: false,
+    enforced: false,
   },
   {
     key: "smrtstudio.action.run-paid",
@@ -73,6 +84,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     descriptionKey: "permissions.resourceDesc.smrtstudio_action_run_paid",
     defaultRestricted: false,
     costly: true,
+    enforced: false,
   },
 ];
 

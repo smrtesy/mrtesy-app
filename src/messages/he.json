@@ -275,6 +275,7 @@
   },
   "permissions": {
     "costly": "בתשלום",
+    "comingSoon": "בקרוב",
     "restricted": "מוגבל",
     "open": "פתוח",
     "locked": {

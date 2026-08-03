@@ -82,8 +82,10 @@ type RestrictableResource = {
 };
 ```
 
-הקטלוג מסונכרן לטבלה `restrictable_resources` (זריעה ממיגרציה + endpoint סנכרון),
-כדי ש-UI/audit יוכלו להציג תוויות ולהצטלב על המפתח. הקוד הוא מקור-האמת; הטבלה נגזרת.
+**עדכון-מימוש:** אין טבלת `restrictable_resources` — הקוד הוא מקור-האמת היחיד.
+`resource_key` בכל הטבלאות מאומת מול הקטלוג-בקוד בזמן-כתיבה בשרת (`isValidResourceKey`),
+כך שאין צורך ב-FK או בסנכרון-טבלה שעלול להיסחף. תוויות נפתרות ב-i18n. לכל משאב יש דגל
+`enforced` (חסר = true); משאב לא-נאכף מוצג ב-UI מושבת ("בקרוב") והשרת דוחה הגבלה שלו.
 
 ### 4.2 טבלאות שלב 1 (נבנות עכשיו — כולן לא-הרסניות)
 
@@ -180,8 +182,8 @@ middleware חדש `requireResource(key)` (אחרי `requireAuth`+`requireOrg`):
 
 ## 8. תוצרי שלב 1 (מה נבנה עכשיו)
 
-1. **מיגרציה** (לא-הרסנית): `restrictable_resources` (זרועה), `org_restrictions`,
-   `user_resource_grants`, `permission_audit_log` + מדיניות RLS מותאמות.
+1. **מיגרציה** (לא-הרסנית): `org_restrictions`, `user_resource_grants`,
+   `permission_audit_log` + מדיניות RLS מותאמות (הקטלוג בקוד — אין טבלת `restrictable_resources`).
 2. **קטלוג בקוד** `src/lib/permissions/registry.ts` — עם סט התחלתי של משאבים
    (כמה מסכים + פעולה מסוכנת אחת כרפרנס), לא ממצה.
 3. **שרת:** `requireResource` + עוזר-הכרעה + ביטול-מטמון; מודול חדש

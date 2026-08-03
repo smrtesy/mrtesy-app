@@ -275,6 +275,7 @@
   },
   "permissions": {
     "costly": "Paid",
+    "comingSoon": "Coming soon",
     "restricted": "Restricted",
     "open": "Open",
     "locked": {

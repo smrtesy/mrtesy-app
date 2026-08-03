@@ -16,6 +16,7 @@ type CatalogResource = {
   descriptionKey: string | null;
   defaultRestricted: boolean;
   costly: boolean;
+  enforced: boolean;
   restricted: boolean;
   explicit: boolean;
 };
@@ -171,18 +172,24 @@ export function PermissionsTabPanel() {
                   {r.appSlug} · {r.key}
                 </div>
               </div>
-              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm">
-                <span className="text-muted-foreground">
-                  {r.restricted ? t("permissions.restricted") : t("permissions.open")}
+              {r.enforced ? (
+                <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">
+                    {r.restricted ? t("permissions.restricted") : t("permissions.open")}
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={r.restricted}
+                    disabled={busyKey === r.key}
+                    onChange={(e) => toggleRestriction(r, e.target.checked)}
+                  />
+                </label>
+              ) : (
+                <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {t("permissions.comingSoon")}
                 </span>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4"
-                  checked={r.restricted}
-                  disabled={busyKey === r.key}
-                  onChange={(e) => toggleRestriction(r, e.target.checked)}
-                />
-              </label>
+              )}
             </div>
           ))}
         </div>

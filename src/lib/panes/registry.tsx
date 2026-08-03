@@ -253,7 +253,11 @@ const PANE_SCREENS: PaneScreen[] = [
       <KnowledgeCenter />
     </ResourceGuard>
   ) },
-  { match: (p) => p === "/daily-report", render: () => <DailyReportClient /> },
+  { match: (p) => p === "/daily-report", render: () => (
+    <ResourceGuard resourceKey="smrttask.screen.daily-report" labelKey="permissions.resources.smrttask_screen_daily_report">
+      <DailyReportClient />
+    </ResourceGuard>
+  ) },
   { match: (p) => p === "/day-tools", render: () => <DayToolsClient /> },
   { match: (p) => p === "/log", render: (locale) => <LogPane locale={locale} /> },
   { match: (p) => p === "/crm", render: () => <CrmPane /> },

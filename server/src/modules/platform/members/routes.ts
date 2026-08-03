@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import { requireAuth, requireOrg, requireRole, type Role } from "../../../middleware";
 import { sendInviteEmail } from "../../../lib/email";
+import { invalidatePermissions } from "../../../lib/permissions/resolve";
 
 const router = Router();
 
@@ -484,15 +485,17 @@ router.delete("/org/members/:userId",
     // resource-restriction exceptions. All three key off (org_id, user_id) and
     // would otherwise linger after the member is gone (and silently re-apply if
     // they rejoin).
-    const cleanups: [string, Promise<{ error: { message: string } | null }>][] = [
-      ["user_app_access", db.from("user_app_access").delete().eq("org_id", req.org!.id).eq("user_id", userId)],
-      ["app_user_access", db.from("app_user_access").delete().eq("org_id", req.org!.id).eq("user_id", userId)],
-      ["user_resource_grants", db.from("user_resource_grants").delete().eq("org_id", req.org!.id).eq("user_id", userId)],
-    ];
-    for (const [table, p] of cleanups) {
-      const { error: cleanupErr } = await p;
+    for (const table of ["user_app_access", "app_user_access", "user_resource_grants"] as const) {
+      const { error: cleanupErr } = await db
+        .from(table)
+        .delete()
+        .eq("org_id", req.org!.id)
+        .eq("user_id", userId);
       if (cleanupErr) console.error(`[org/members] ${table} cleanup failed:`, cleanupErr.message);
     }
+    // Drop cached permission state so a re-join within the 60s TTL doesn't
+    // resurrect the removed member's old resource exceptions.
+    invalidatePermissions(req.org!.id, userId);
 
     res.json({ ok: true });
   },

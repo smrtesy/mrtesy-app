@@ -23,6 +23,7 @@ import { requireAuth, requireOrg, requireRole } from "../../../middleware";
 import {
   RESTRICTABLE_RESOURCES,
   isValidResourceKey,
+  getResource,
 } from "../../../lib/permissions/registry";
 import {
   computeRestrictedSet,
@@ -97,6 +98,8 @@ router.get(
         descriptionKey: r.descriptionKey ?? null,
         defaultRestricted: r.defaultRestricted,
         costly: !!r.costly,
+        // A resource is enforced unless explicitly marked otherwise.
+        enforced: r.enforced !== false,
         restricted: isRestrictedForOrg(orgMap, r.key),
         explicit: orgMap.has(r.key),
       }));
@@ -123,6 +126,13 @@ router.put(
     }
     if (typeof restricted !== "boolean") {
       return res.status(400).json({ error: "restricted must be a boolean" });
+    }
+    // Reject RESTRICTING a resource that isn't enforced yet — the toggle would
+    // be a silent no-op (no ResourceGuard / requireResource gates it). Clearing
+    // a restriction (restricted=false) is always allowed, so a stale row can be
+    // removed if one ever exists.
+    if (restricted && getResource(resource_key)?.enforced === false) {
+      return res.status(400).json({ error: "resource is not enforceable yet" });
     }
 
     const { error } = await db

@@ -34,6 +34,14 @@ export async function getRestrictedResourcesForUser(
       .is("revoked_at", null),
   ]);
 
+  // Fail CLOSED: if we can't read the org's restrictions or the user's grants,
+  // don't silently treat the user as unrestricted (that would leak a restricted
+  // screen). Block every enforced resource until the next successful read; the
+  // backend requireResource is the real gate, so this only affects visibility.
+  if (restrictionsRes.error || grantsRes.error) {
+    return RESTRICTABLE_RESOURCES.filter((r) => r.enforced !== false).map((r) => r.key);
+  }
+
   const orgMap = new Map<string, boolean>();
   for (const row of restrictionsRes.data ?? []) {
     orgMap.set(row.resource_key as string, row.restricted as boolean);

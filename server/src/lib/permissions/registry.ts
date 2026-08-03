@@ -22,6 +22,10 @@ export type RestrictableResource = {
   descriptionKey?: string;
   defaultRestricted: boolean;
   costly?: boolean;
+  /** Whether the resource is actually enforced (guard + requireResource wired).
+   *  false = catalog-only; the management UI disables it and the backend
+   *  rejects a restrict toggle. Absent = true. */
+  enforced?: boolean;
 };
 
 export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
@@ -32,6 +36,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     labelKey: "permissions.resources.smrttask_screen_knowledge",
     descriptionKey: "permissions.resourceDesc.smrttask_screen_knowledge",
     defaultRestricted: false,
+    enforced: true,
   },
   {
     key: "smrttask.screen.daily-report",
@@ -40,6 +45,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     labelKey: "permissions.resources.smrttask_screen_daily_report",
     descriptionKey: "permissions.resourceDesc.smrttask_screen_daily_report",
     defaultRestricted: false,
+    enforced: true,
   },
   {
     key: "smrtcrm.screen.crm",
@@ -48,6 +54,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     labelKey: "permissions.resources.smrtcrm_screen_crm",
     descriptionKey: "permissions.resourceDesc.smrtcrm_screen_crm",
     defaultRestricted: false,
+    enforced: false,
   },
   {
     key: "smrtstudio.action.run-paid",
@@ -57,6 +64,7 @@ export const RESTRICTABLE_RESOURCES: RestrictableResource[] = [
     descriptionKey: "permissions.resourceDesc.smrtstudio_action_run_paid",
     defaultRestricted: false,
     costly: true,
+    enforced: false,
   },
 ];
 

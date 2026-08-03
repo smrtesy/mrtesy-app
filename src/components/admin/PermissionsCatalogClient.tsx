@@ -56,7 +56,12 @@ export function PermissionsCatalogClient() {
                       {r.kind} · {r.key}
                     </div>
                   </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">
+                  <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                    {r.enforced === false && (
+                      <span className="rounded bg-muted px-2 py-0.5 font-medium">
+                        {t("permissions.comingSoon")}
+                      </span>
+                    )}
                     {r.defaultRestricted
                       ? t("permissions.admin.defaultRestricted")
                       : t("permissions.admin.defaultOpen")}
