@@ -41,6 +41,15 @@ const MAX_CHARS_PER_REQUEST = 12_000;
 const COOLDOWN_MS = 70_000;
 let requestTimes: number[] = [];
 let cooldownUntil = 0;
+// True when the LAST embed call made no request at all because we were cooling
+// down or out of rate budget. The caller must not count that as a failed
+// attempt for the rows involved — nothing was actually tried for them.
+let lastEmbedDeferred = false;
+
+/** Did the last embedTexts() skip the API entirely (cooldown / rate budget)? */
+export function wasLastEmbedDeferred(): boolean {
+  return lastEmbedDeferred;
+}
 
 /** Requests still counting against the rolling-minute window. */
 function recentRequests(now: number): number {
@@ -143,11 +152,14 @@ export async function embedTexts(
   // Respect the free tier BEFORE spending a request: a 429 costs the whole
   // batch, so skipping this tick is strictly better than being rejected.
   const now = Date.now();
+  lastEmbedDeferred = false;
   if (now < cooldownUntil) {
+    lastEmbedDeferred = true;
     lastEmbedError = `voyage cooling down for ${Math.ceil((cooldownUntil - now) / 1000)}s after a rate-limit`;
     return results;
   }
   if (recentRequests(now) >= MAX_RPM) {
+    lastEmbedDeferred = true;
     lastEmbedError = `voyage rate budget spent (${MAX_RPM}/min) — deferring to the next tick`;
     return results;
   }

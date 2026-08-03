@@ -19,6 +19,7 @@
 
 import { db } from "../../../db";
 import { indexBatch, type IndexOneResult } from "./indexer";
+import { wasLastEmbedDeferred } from "../../../services/voyage";
 
 interface QueueRow {
   source_type: string;
@@ -94,6 +95,11 @@ async function runDrain(limit: number): Promise<DrainResult> {
       // to search_documents, so keyword search still finds it.
       if (res === "error" || res === "embed_failed") {
         failed++;
+        // A chunk we never sent (Voyage cooldown / rate budget spent) is NOT a
+        // failed attempt — nothing was tried for these rows. Counting it would
+        // burn all 5 attempts in 5 minutes of throttling and drop the whole
+        // backlog's vectors without ever asking for them.
+        if (res === "embed_failed" && wasLastEmbedDeferred()) continue;
         const attempts = (r.attempts ?? 0) + 1;
         if (attempts < MAX_ATTEMPTS) {
           const { error: bumpErr } = await db
