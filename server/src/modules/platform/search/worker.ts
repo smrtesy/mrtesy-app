@@ -9,7 +9,9 @@
  * limits, instead of one request per row.
  *
  * An item that errors or whose embedding came back null is LEFT in the queue to
- * retry; an item whose row is gone ("missing") is cleared.
+ * retry, up to MAX_ATTEMPTS — then it is dropped so it cannot stall the backlog
+ * behind it (its TEXT is already indexed; only the vector is lost). An item
+ * whose row is gone ("missing") is cleared.
  *
  * Race guard: a queue row is deleted only if its enqueued_at is unchanged since
  * we read it — so a re-enqueue that lands mid-processing is not lost.
@@ -22,6 +24,8 @@ interface QueueRow {
   source_type: string;
   source_id: string;
   enqueued_at: string;
+  /** Failed drain attempts so far (see MAX_ATTEMPTS). */
+  attempts?: number | null;
 }
 
 export interface DrainResult {
@@ -34,6 +38,11 @@ export interface DrainResult {
 // Texts per Voyage request. 100 × ~a few hundred tokens stays well under
 // Voyage's per-request token ceiling.
 const EMBED_BATCH = 32;
+
+// Drop a row from the queue once it has failed this many drains. Bounded so a
+// permanently-failing item (a source row the embedder always rejects, a text
+// the API won't accept) can never stall the backlog behind it.
+const MAX_ATTEMPTS = 5;
 
 // In-process guard against overlapping drains. pg_cron's net.http_post is
 // fire-and-forget, so the next minute's tick can fire while this drain is still
@@ -54,7 +63,7 @@ export async function drainQueue(limit = 500): Promise<DrainResult> {
 async function runDrain(limit: number): Promise<DrainResult> {
   const { data, error } = await db
     .from("search_index_queue")
-    .select("source_type, source_id, enqueued_at")
+    .select("source_type, source_id, enqueued_at, attempts")
     .order("enqueued_at", { ascending: true })
     .limit(limit);
   if (error) {
@@ -77,13 +86,34 @@ async function runDrain(limit: number): Promise<DrainResult> {
       const res: IndexOneResult = results.get(`${r.source_type}:${r.source_id}`) ?? "error";
 
       // "error" (fetch/upsert failure) and "embed_failed" (Voyage transient)
-      // both stay in the queue so the row is retried on a later drain.
+      // stay in the queue so the row is retried on a later drain — but only up
+      // to MAX_ATTEMPTS. Without that cap a permanently-failing row is retried
+      // every minute forever and, drained oldest-first, holds the whole backlog
+      // behind it (exactly what stalled the index for four days on Voyage 429s).
+      // Giving up costs only the vector: indexBatch already wrote the row's TEXT
+      // to search_documents, so keyword search still finds it.
       if (res === "error" || res === "embed_failed") {
         failed++;
-        continue;
+        const attempts = (r.attempts ?? 0) + 1;
+        if (attempts < MAX_ATTEMPTS) {
+          const { error: bumpErr } = await db
+            .from("search_index_queue")
+            .update({ attempts })
+            .eq("source_type", r.source_type)
+            .eq("source_id", r.source_id)
+            .eq("enqueued_at", r.enqueued_at);
+          if (bumpErr) console.error("[search/worker] attempts bump failed:", bumpErr.message);
+          continue;
+        }
+        console.error(
+          `[search/worker] giving up on ${r.source_type}:${r.source_id} after ${attempts} attempts (${res}) — text is indexed, vector is not`,
+        );
+        // fall through to the delete below so it stops blocking the queue
       }
+      // Anything that reached here after failing MAX_ATTEMPTS was already
+      // counted in `failed` — don't count it a second time as processed.
       if (res === "missing") missing++;
-      else processed++;
+      else if (res !== "error" && res !== "embed_failed") processed++;
 
       const { error: delErr } = await db
         .from("search_index_queue")
