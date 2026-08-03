@@ -194,7 +194,15 @@ export async function embedTexts(
       lastEmbedError = `voyage ${resp.status} (${inputs.length} inputs): ${body.slice(0, 300)}`;
       // Back off on a rate-limit so the next tick doesn't walk straight into
       // another 429 (which is what kept the queue stuck for four days).
-      if (resp.status === 429) cooldownUntil = Date.now() + COOLDOWN_MS;
+      if (resp.status === 429) {
+        cooldownUntil = Date.now() + COOLDOWN_MS;
+        // A rate-limit rejection is not the row's fault and gives it no real
+        // chance, so it must not count against that row's attempt cap — same
+        // reasoning as a pre-emptively skipped tick. Otherwise, on the free
+        // tier (3 RPM), every backlog row burns its 5 attempts on 429s and
+        // loses its vector for good.
+        lastEmbedDeferred = true;
+      }
       return results; // whole batch failed → all null (caller retries)
     }
 
