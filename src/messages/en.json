@@ -4585,7 +4585,8 @@
       "steps": "{n} steps",
       "resumed": "resumed after a restart",
       "noOutput": "No response for {d} — may be stuck",
-      "stopHint": "Stop and resend"
+      "stopHint": "Stop and resend",
+      "usageWait": "Subscription usage window exhausted — the run will continue automatically once it resets (retried every 15 minutes, for up to a day)"
     },
     "toolCount": "{count} tool calls",
     "effortDefault": "Effort: default",
