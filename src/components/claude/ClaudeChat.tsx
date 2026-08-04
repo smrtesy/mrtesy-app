@@ -642,15 +642,17 @@ export function ClaudeChat() {
       const known = new Set(cur.map((t) => t.id));
       // A run this screen doesn't know (sent from another tab / the recoverer) or
       // the watched turn reaching a terminal state → one full reload for the
-      // canonical view (attachments, split proposal, usage figures).
+      // canonical view (attachments, split proposal).
       const unknown = r.runs.some((x) => !known.has(x.id));
       const execPatch = exec ? r.runs.find((x) => x.id === exec.id) : undefined;
       const finished = execPatch && !(LIVE as readonly string[]).includes(execPatch.status);
-      if (unknown || finished) {
-        void loadThread(id);
-        void loadThreads();
-        return;
-      }
+      // Apply the incremental patches to the turns we already know FIRST — always,
+      // even on the terminal edge. The patch carries the turn's status AND its
+      // final usage (input/output tokens), so doing this before the reload is what
+      // advances the header token counter the moment a turn ends. Previously the
+      // terminal edge returned early and leaned on loadThread alone; when that
+      // reload lost a ticket race its result was dropped, freezing the counter
+      // after the first turn until a manual refresh (the bug this fixes).
       setTurns((prev) =>
         prev.map((t) => {
           const patch = r.runs.find((x) => x.id === t.id);
@@ -675,6 +677,12 @@ export function ClaudeChat() {
           return { ...t, ...patch, events, live_text };
         }),
       );
+      // Then the canonical reload for anything the light patch can't carry
+      // (attachments, split proposal, a run this screen didn't know about).
+      if (unknown || finished) {
+        void loadThread(id);
+        void loadThreads();
+      }
     } catch {
       // A poll blip — the next tick retries; the turn runs on regardless.
     }
