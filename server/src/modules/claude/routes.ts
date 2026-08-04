@@ -24,7 +24,7 @@ import { executeRun, describeAccounts, isRunLive, runEventBus, type LiveEvent } 
 import { composePrompt } from "./playbooks";
 import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
 import { deployStatus } from "./deploy-status";
-import { transcribeAudio } from "../../gemini";
+import { transcribeAudio, generateText } from "../../gemini";
 
 // The auth chain (requireAuth → requireOrg → requireSuperAdmin) is installed once
 // in index.ts for the whole module, so it is NOT repeated here.
@@ -412,14 +412,58 @@ router.get("/claude/deploy-status", async (req: Request, res: Response) => {
 /**
  * POST /api/claude/transcribe — { audio_base64, mime_type } → { text }
  *
- * Same Hebrew-aware Gemini transcription the WhatsApp composer uses, so dictation
- * behaves identically in both places instead of being a second implementation.
+ * Two-stage: (1) same Hebrew-aware Gemini transcription the WhatsApp composer
+ * uses, so dictation transcribes identically in both places; (2) a TIDY pass
+ * (`tidyDictation`) that reorganizes the raw spoken transcript into a clean,
+ * ordered bullet list before it lands in the composer — because dictation to
+ * Claude is a prompt, and a rambling voice note makes a rambling prompt. The
+ * tidy pass ORGANIZES, it does not summarize: every instruction/detail is kept.
  *
- * ⚠️ COST: this is a paid Gemini call per dictation (CLAUDE.md cost-approval rule).
- * It is user-initiated — one call per press of the mic — and the screen states as
- * much next to the button. Nothing here loops or batches.
+ * ⚠️ COST: this is now TWO paid Gemini calls per dictation (transcribe + tidy;
+ * CLAUDE.md cost-approval rule). Both are user-initiated — one pair per press of
+ * the mic — and the screen states as much next to the button. Nothing loops or
+ * batches. The tidy call is text-only and cheap (~$0.003 for a typical note).
+ * If the tidy pass fails for any reason, the raw transcript is returned as-is so
+ * a spoken message is never lost to a cleanup error.
  */
 const MAX_AUDIO_BASE64 = 12_000_000; // ~9MB of audio: minutes of speech, not hours.
+
+/** Turn a raw spoken transcript into an ordered bullet list — organize, never
+ *  summarize. Returns the raw text unchanged if the Gemini call fails or comes
+ *  back empty, so a dictation is never lost to a cleanup error. */
+async function tidyDictation(raw: string): Promise<string> {
+  const trimmed = raw.trim();
+  if (!trimmed) return raw;
+  const prompt =
+    "קיבלת תמלול גולמי של הקלטה קולית. המשתמש הכתיב אותה כדי לשלוח אותה כהודעה/פרומפט לעוזר בינה מלאכותית. " +
+    "הדיבור זורם ולא מסודר: יש גמגום, מילות מילוי, חזרות, כפילויות, והתחלות-כוזבות, ולפעמים דבר שנאמר בהתחלה שייך לפי ההקשר למקום אחר.\n\n" +
+    "המשימה שלך: לארגן מחדש את התמלול לרשימת נקודות מסודרת — בלי לאבד שום פרט.\n\n" +
+    "חוקים מחייבים:\n" +
+    "• זו עריכה וארגון, לא סיכום. אל תקצר תוכן, אל תשמיט אף הוראה/בקשה/פרט/דוגמה/מספר/שם/קישור. כל מה שנאמר חייב להופיע בפלט.\n" +
+    "• הפוך כל רעיון/הוראה/בקשה נפרדת לנקודה משלה. פרטים ששייכים לרעיון — נקודות-משנה מתחתיו.\n" +
+    "• סדר את הנקודות בסדר הגיוני. דבר שנאמר בהתחלה ושייך לפי ההקשר למקום אחר — העבר אותו למקומו הנכון.\n" +
+    "• אחד כפילויות: דבר שנאמר פעמיים — נקודה אחת. הסר גמגום, \"אֶה\", מילות מילוי, והתחלות-כוזבות.\n" +
+    "• אל תוסיף מידע, אל תפרש, אל תענה על הבקשה, אל תמלא פערים משלך. רק ארגן את מה שנאמר.\n" +
+    "• שמור על שפת המקור (עברית/אנגלית/יידיש). אל תתרגם. שמור קישורים במלואם, מילה במילה.\n" +
+    "• אם קטע סומן [לא ברור] — השאר אותו כך.\n\n" +
+    "פלט: אך ורק רשימת הנקודות (עם תבליטים \"-\"). בלי הקדמה, בלי כותרת, בלי הערות סיום. הפלט נכנס ישירות לתיבת ההודעה.\n\n" +
+    "התמלול הגולמי:\n---\n" +
+    trimmed +
+    "\n---";
+  try {
+    const tidied = (
+      await generateText(prompt, {
+        maxOutputTokens: 8192,
+        component: "claude.dictation-tidy",
+        throwOnTruncate: true,
+      })
+    ).trim();
+    return tidied || raw;
+  } catch (e) {
+    console.error("[claude/transcribe] tidy pass failed, returning raw:", e instanceof Error ? e.message : e);
+    return raw;
+  }
+}
 
 router.post("/claude/transcribe", async (req: Request, res: Response) => {
   const { audio_base64, mime_type } = (req.body ?? {}) as {
@@ -434,7 +478,8 @@ router.post("/claude/transcribe", async (req: Request, res: Response) => {
   }
   const cleaned = audio_base64.replace(/^data:[^;]+;base64,/, "");
   try {
-    const text = await transcribeAudio(cleaned, mime_type || "audio/webm");
+    const raw = await transcribeAudio(cleaned, mime_type || "audio/webm");
+    const text = await tidyDictation(raw);
     return res.json({ text });
   } catch (e) {
     return res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
