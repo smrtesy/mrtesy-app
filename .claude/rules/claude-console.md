@@ -86,6 +86,21 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   ~/.claude`, `.claude.json` inside it). (9) A thread turn that ran ≥2 min (or
   failed) sends a completion push via `notify()` → Web Push trigger, deep link
   `/claude?thread=<id>`; automation-account runs never notify.
+  (11) **Word-by-word streaming**: runs pass `--include-partial-messages`
+  (verified against the 2.1.220 binary); `stream_event` text deltas are NEVER
+  stored (they would flood claude_run_events) — they ride the live NDJSON
+  stream as `kind:"delta"`, seq 0, and the client renders them as the turn's
+  `live_text` tail, reset whenever the completed assistant block arrives. The
+  client opens the stream already at 'queued' (isRunLive covers the pre-spawn
+  window; 204 retried ~12×700ms).
+  (12) **Disk pressure valve** (`workspace.ts`): every threadWorkspace() call
+  statfs-checks the workspace filesystem; <4GB free → prune re-creatable build
+  artifacts (node_modules/.next/dist/.turbo) from checkouts idle >1h; <2GB →
+  also delete whole OLDEST workspaces idle >30min until headroom returns (costs
+  those threads their engine session; the DB rebuild covers it). The hourly
+  sweep also prunes day-old artifacts. Exists because a PERSISTENT workspace
+  volume keeps node_modules/.next (~1.5GB per build-running thread) forever —
+  redeploys used to wipe them as a side effect.
   (10) **Tasks-desk activity bar** (`src/components/claude/ClaudeActivityBar.tsx`,
   mounted in `TasksPageClient`): EVERY terminal run (done/failed/canceled)
   surfaces on /tasks — polls `GET /claude/runs?limit=30&order=ended` (the
