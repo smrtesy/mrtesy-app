@@ -163,7 +163,7 @@ interface Thread {
    *  when it came from the corrections flow. Null for ordinary chats. */
   task_serial?: string | null;
   /** True when the thread has a run executing/queued right now — the rail's live
-   *  (pulsing green) status dot. Set by GET /claude/threads. */
+   *  (pulsing amber/brown) status dot. Set by GET /claude/threads. */
   live?: boolean;
   /** The newest run's status (done/failed/…) — the rail's resting dot colour when
    *  not live. Null when the thread has never run. */
@@ -1662,14 +1662,14 @@ function railThreadTitle(thread: Thread, untitled: string): string {
   return title || untitled;
 }
 
-/** The live/last-status dot at the head of a rail row. Pulsing green while a turn
- *  runs; otherwise a resting colour for the newest run's outcome. */
+/** The live/last-status dot at the head of a rail row. Pulsing amber (brown) while a
+ *  turn runs; otherwise a resting colour for the newest run's outcome. */
 function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTranslations> }) {
   if (thread.live) {
     return (
       <span className="relative flex size-2 shrink-0" title={t("dot.live")} aria-label={t("dot.live")}>
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-ok opacity-75" />
-        <span className="relative inline-flex size-2 rounded-full bg-status-ok" />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-800 opacity-75" />
+        <span className="relative inline-flex size-2 rounded-full bg-amber-800" />
       </span>
     );
   }
