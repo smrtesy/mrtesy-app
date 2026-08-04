@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle, Mail, RefreshCw, X } from "lucide-react";
+import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle, Mail, RefreshCw, X, LogIn, Copy } from "lucide-react";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 import { useOrgMembers, type OrgMember } from "@/lib/api/use-org-members";
 import { personLabel } from "@/lib/smrtplan/people";
@@ -58,6 +58,13 @@ export function OrgSettingsClient() {
   // App bundle a project-only worker gets: task list + read-only plan context.
   const PROJECT_ONLY_APPS = ["smrttask", "smrtplan"];
   const [editingAppsFor, setEditingAppsFor] = useState<string | null>(null);
+  // "Sign in as employee" preview: a one-time link the manager opens in an
+  // incognito window to see exactly what a member (esp. a no-email employee)
+  // will see, before connecting them.
+  const [previewFor, setPreviewFor] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewCopied, setPreviewCopied] = useState(false);
 
   // Populate inputs when active org loads or switches
   useEffect(() => {
@@ -253,6 +260,36 @@ export function OrgSettingsClient() {
       toast.error((e as Error).message);
     } finally {
       setSavingErrorHandler(false);
+    }
+  }
+
+  async function handlePreview(userId: string) {
+    setPreviewFor(userId);
+    setPreviewUrl(null);
+    setPreviewCopied(false);
+    setPreviewLoading(true);
+    try {
+      const { url } = await api<{ url: string }>(`/api/org/members/${userId}/preview-link`, {
+        method: "POST",
+        body: { locale },
+      });
+      setPreviewUrl(url);
+    } catch (e) {
+      toast.error((e as Error).message || tOrg("previewFailed"));
+      setPreviewFor(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function handleCopyPreview() {
+    if (!previewUrl) return;
+    try {
+      await navigator.clipboard.writeText(previewUrl);
+      setPreviewCopied(true);
+      toast.success(tOrg("previewCopied"));
+    } catch {
+      /* clipboard blocked — the input stays selectable as a fallback */
     }
   }
 
@@ -469,6 +506,23 @@ export function OrgSettingsClient() {
                       ) : (
                         <Badge variant="outline" className="text-[10px] uppercase shrink-0">{m.role}</Badge>
                       )}
+                      {/* Preview-as: regular members only. Never for owner/admin —
+                          minting a session as them would be privilege escalation
+                          (the backend enforces this too). */}
+                      {canManage && !unrestricted && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="shrink-0 h-8 w-8"
+                          title={tOrg("previewAs")}
+                          disabled={previewLoading && previewFor === m.user_id}
+                          onClick={() => handlePreview(m.user_id)}
+                        >
+                          {previewLoading && previewFor === m.user_id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <LogIn className="h-3.5 w-3.5" />}
+                        </Button>
+                      )}
                       {canManage && (
                         <Button
                           size="icon"
@@ -480,6 +534,46 @@ export function OrgSettingsClient() {
                         </Button>
                       )}
                     </div>
+
+                    {/* Preview-as-employee link (one-time, open in incognito) */}
+                    {canManage && previewFor === m.user_id && previewUrl && (
+                      <div className="mt-2 rounded-md border bg-muted/40 p-2.5 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-medium flex items-center gap-1">
+                            <LogIn className="h-3 w-3" />
+                            {tOrg("previewTitle")}
+                          </span>
+                          <button
+                            type="button"
+                            title={tOrg("previewClose")}
+                            onClick={() => { setPreviewFor(null); setPreviewUrl(null); }}
+                            className="shrink-0 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">{tOrg("previewInstructions")}</p>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            readOnly
+                            value={previewUrl}
+                            dir="ltr"
+                            onFocus={(e) => e.currentTarget.select()}
+                            className="flex-1 min-w-0 rounded border bg-background px-1.5 py-1 text-[11px] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0 h-7 gap-1 text-[11px]"
+                            onClick={handleCopyPreview}
+                          >
+                            <Copy className="h-3 w-3" />
+                            {previewCopied ? tOrg("previewCopied") : tOrg("previewCopy")}
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">{tOrg("previewExpires")}</p>
+                      </div>
+                    )}
 
                     {/* Per-user app access (managers only) */}
                     {canManage && (

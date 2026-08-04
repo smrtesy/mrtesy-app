@@ -1480,7 +1480,15 @@
     "setEmailPlaceholder": "הוסף אימייל לכניסה…",
     "projectOnlyToggle": "עובד פרויקטים בלבד",
     "projectOnlyHint": "רואה ב-smrtTask רק משימות שהוקצו לו (מפלאן או ממשתמש אחר) + צפייה בתוכנית. בלי חיבור מקורות, תיבה, פרויקטים או סריקה.",
-    "projectOnlyBadge": "פרויקטים בלבד"
+    "projectOnlyBadge": "פרויקטים בלבד",
+    "previewAs": "היכנס כעובד (תצוגה)",
+    "previewTitle": "תצוגת עובד — בחלון בסתר",
+    "previewInstructions": "פתחו חלון גלישה בסתר (Ctrl+Shift+N, ובמק Cmd+Shift+N) והדביקו את הקישור. הוא מחבר אתכם כעובד — בדיוק כמו שהוא יראה — בלי לפגוע בחשבון שלכם.",
+    "previewExpires": "הקישור בתוקף 5 דקות, לשימוש חד-פעמי.",
+    "previewCopy": "העתק קישור",
+    "previewCopied": "הקישור הועתק",
+    "previewClose": "סגור",
+    "previewFailed": "יצירת קישור התצוגה נכשלה"
   },
   "projectsEdit": {
     "nameRequired": "שם נדרש",
