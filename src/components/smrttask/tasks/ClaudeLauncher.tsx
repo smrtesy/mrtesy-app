@@ -7,29 +7,24 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
+import { useOpenTab } from "@/components/platform/layout/OpenTabLink";
 import { toast } from "sonner";
 import type { Task } from "@/types/task";
 
 /**
  * "Work with Claude" launcher — a quiet Bot icon in the task-detail action row
  * that expands (compact, collapsed-by-default) to:
- *   1. open claude.ai/code in a popup window beside the app (claude.ai blocks
- *      in-page iframes via X-Frame-Options, so a separate window is the closest
- *      the browser allows), marking the task "waiting on Claude" so the user can
- *      move on to other work;
- *   2. copy the task's context (serial, title, description, verbatim links) to
- *      paste into Claude;
- *   3. clear the flag once the user sees Claude finished.
+ *   1. open a NEW chat in the BUILT-IN Claude console (server/src/modules/claude),
+ *      seeded with the task's context, and mark the task "in progress with Claude"
+ *      (status → in_progress + claude_thread_id) so the user can move on;
+ *   2. copy the task's context (serial, title, description, verbatim links) — a
+ *      manual escape hatch;
+ *   3. clear the waiting flag once the user marks Claude finished.
  *
- * Completion is signalled by claude.ai's own browser notifications — this panel
- * nudges the user to enable them so they don't have to babysit the Claude window.
+ * Claude works the task in-app and, when done, offers to mark it completed — so the
+ * loop closes without the user leaving the app. Runs on the subscription (zero paid
+ * API tokens).
  */
-
-// Module-level so a re-open reuses the same window across detail mounts, instead
-// of spawning a fresh (and reloaded) Claude tab each time.
-let claudeWindow: Window | null = null;
-
-const CLAUDE_CODE_URL = "https://claude.ai/code";
 
 /** Build the paste-ready context. URLs are emitted verbatim (deep links), never
  *  paraphrased down to a domain — see CLAUDE.md "preserve deep links". */
@@ -70,56 +65,43 @@ export function ClaudeLauncher({
   onOptimistic?: (patch: Partial<Task>) => void;
 }) {
   const t = useTranslations("claude");
+  const openTab = useOpenTab();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [opening, setOpening] = useState(false);
   const waiting = !!task.claude_waiting_since;
 
-  function openClaude() {
-    // window.open MUST run synchronously inside the click (a later call, after an
-    // await, loses the user gesture and gets blocked as a popup). PATCH after.
-    if (claudeWindow && !claudeWindow.closed) {
-      claudeWindow.focus();
-    } else {
-      const w = 1000;
-      const h = Math.min((typeof screen !== "undefined" ? screen.availHeight : 900) - 40, 900);
-      const left = Math.max(0, window.screenX + window.outerWidth - w);
-      const top = window.screenY + 40;
-      // No `noopener`: we deliberately keep the returned reference so a later
-      // click focuses the existing Claude window instead of reloading a new one.
-      claudeWindow = window.open(
-        CLAUDE_CODE_URL,
-        "smrtesy-claude",
-        `popup=yes,width=${w},height=${h},left=${left},top=${top}`,
-      );
+  async function openInClaude() {
+    setOpening(true);
+    // Opening the task's existing chat again (re-open) — no need to spawn a new one.
+    if (waiting && task.claude_thread_id) {
+      openTab(`/${locale}/claude?thread=${task.claude_thread_id}`, t("tabLabel"));
+      setOpen(false);
+      setOpening(false);
+      return;
     }
-    setOpen(false);
-
-    if (!waiting) {
-      const since = new Date().toISOString();
-      // Also move the task to "in progress" — the Claude-Code session report
-      // (POST /claude-session/task-report) attaches only to a task the user has
-      // marked in_progress, and opening this launcher used to leave the task in
-      // inbox, so reports silently fell back to an inbox proposal instead of
-      // landing on the card (2026-07). Handing a task to Claude IS starting it.
-      // Only advance from a not-yet-started state; never pull a task back out of
-      // a completion status.
-      const advance = task.status === "inbox" || task.status === "snoozed";
-      const prevStatus = task.status;
-      onOptimistic?.({ claude_waiting_since: since, ...(advance ? { status: "in_progress" } : {}) });
-      api(`/api/tasks/${task.id}`, {
-        method: "PATCH",
-        body: { claude_waiting_since: since, ...(advance ? { status: "in_progress" } : {}) },
-      })
-        .then(() => {
-          toast.success(t("dispatched"));
-          onUpdate();
-        })
-        .catch((e) => {
-          // Roll back the optimistic changes so the open detail doesn't show a
-          // state the DB never persisted.
-          onOptimistic?.({ claude_waiting_since: null, ...(advance ? { status: prevStatus } : {}) });
-          toast.error(e instanceof Error ? e.message : "Error");
-        });
+    // Handing a task to Claude IS starting it — the server advances a not-yet-started
+    // task to in_progress; mirror that in the optimistic snapshot so the open detail
+    // reflects it before the refetch lands.
+    const advance = task.status === "inbox" || task.status === "snoozed";
+    const since = new Date().toISOString();
+    try {
+      const { thread_id } = await api<{ thread_id: string }>(`/api/tasks/${task.id}/claude-thread`, {
+        method: "POST",
+      });
+      onOptimistic?.({
+        claude_waiting_since: since,
+        claude_thread_id: thread_id,
+        ...(advance ? { status: "in_progress" } : {}),
+      });
+      openTab(`/${locale}/claude?thread=${thread_id}`, t("tabLabel"));
+      toast.success(t("dispatched"));
+      setOpen(false);
+      onUpdate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    } finally {
+      setOpening(false);
     }
   }
 
@@ -135,8 +117,11 @@ export function ClaudeLauncher({
   async function markDone() {
     setBusy(true);
     try {
-      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: { claude_waiting_since: null } });
-      onOptimistic?.({ claude_waiting_since: null });
+      await api(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        body: { claude_waiting_since: null, claude_thread_id: null },
+      });
+      onOptimistic?.({ claude_waiting_since: null, claude_thread_id: null });
       toast.success(t("markedDone"));
       setOpen(false);
       onUpdate();
@@ -176,7 +161,12 @@ export function ClaudeLauncher({
           {t("title")}
         </div>
 
-        <Button size="sm" className="w-full justify-center gap-1.5" onClick={openClaude}>
+        <Button
+          size="sm"
+          className="w-full justify-center gap-1.5"
+          onClick={openInClaude}
+          disabled={opening}
+        >
           <Bot className="h-4 w-4" />
           {waiting ? t("openAgain") : t("open")}
         </Button>
@@ -202,8 +192,7 @@ export function ClaudeLauncher({
           </div>
         )}
 
-        <p className="text-[11px] leading-snug text-muted-foreground">{t("notifyHint")}</p>
-        <p className="text-[10px] leading-snug text-muted-foreground/70">{t("openHint")}</p>
+        <p className="text-[11px] leading-snug text-muted-foreground">{t("consoleHint")}</p>
       </PopoverContent>
     </Popover>
   );

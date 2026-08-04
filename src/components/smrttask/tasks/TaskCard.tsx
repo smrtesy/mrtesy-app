@@ -31,10 +31,14 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDateOnly } from "@/lib/date";
 import { taskActionNuggets } from "@/lib/smrttask/links";
+import { api } from "@/lib/api/client";
+import { toast } from "sonner";
+import { useOpenTab } from "@/components/platform/layout/OpenTabLink";
 import { LinkifiedText } from "@/components/smrttask/common/LinkifiedText";
 import { LinkActions } from "@/components/smrttask/common/LinkActions";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
+import { ClaudeWorkingBadge } from "@/components/smrttask/tasks/ClaudeWorkingBadge";
 import type { Task } from "@/types/task";
 
 interface TaskCardProps {
@@ -95,7 +99,29 @@ export function TaskCard({
 }: TaskCardProps) {
   const project = task.projects ?? null;
   const t = useTranslations("tasks");
+  const tClaude = useTranslations("claude");
+  const openTab = useOpenTab();
   const title = locale === "he" && task.title_he ? task.title_he : task.title;
+
+  // Hand the task to the built-in Claude console: open a seeded thread and jump to
+  // it in a new tab. Mirrors the task-detail ClaudeLauncher (the card is a shortcut).
+  // If a chat is already open on this task, just re-open it. The card refreshes on
+  // the list's next poll — the opened tab is the immediate feedback.
+  async function openInClaude() {
+    if (task.claude_thread_id) {
+      openTab(`/${locale}/claude?thread=${task.claude_thread_id}`, tClaude("tabLabel"));
+      return;
+    }
+    try {
+      const { thread_id } = await api<{ thread_id: string }>(`/api/tasks/${task.id}/claude-thread`, {
+        method: "POST",
+      });
+      openTab(`/${locale}/claude?thread=${thread_id}`, tClaude("tabLabel"));
+      toast.success(tClaude("dispatched"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error");
+    }
+  }
   // Description follows the display language too: `description` is the
   // English/default slot, `description_he` the Hebrew one (mirrors title/title_he).
   const description = locale === "en" ? task.description : task.description_he || task.description;
@@ -166,6 +192,7 @@ export function TaskCard({
           {title}
         </h3>
         <div className="flex items-center gap-1 shrink-0">
+          <ClaudeWorkingBadge task={task} locale={locale} />
           {task.suggested_duplicate_of && (
             <Badge
               variant="outline"
@@ -318,11 +345,8 @@ export function TaskCard({
             color="blue"
             onClick={(e) => {
               e.stopPropagation();
-              // Open claude.ai/new with context
-              window.open(
-                `https://claude.ai/new?q=${encodeURIComponent(task.description || title)}`,
-                "_blank"
-              );
+              // Open a seeded thread in the BUILT-IN Claude console (not claude.ai).
+              void openInClaude();
             }}
           >
             <MessageCircle />

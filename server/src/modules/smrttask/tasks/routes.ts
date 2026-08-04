@@ -28,6 +28,7 @@ import { attachTaskAccess, requireFullTask } from "../lib/access";
 import { emitEvent } from "../../../lib/platform";
 import { simpleCall, parseJsonResponse } from "../../../anthropic";
 import { nextOccurrence, isValidRecurrenceRule, normalizeRecurrence } from "./recurrence";
+import { createTaskThread } from "./claude-handoff";
 
 const router = Router();
 
@@ -141,8 +142,10 @@ const UPDATABLE_FIELDS = new Set([
   // "Returned from snooze" chip — UI clears it (→ null) on first interaction.
   "woke_from_snooze_at",
   // "Waiting on Claude" chip — UI sets it (→ now) when a task is handed off to
-  // claude.ai/code, and clears it (→ null) when the user marks Claude finished.
-  "claude_waiting_since",
+  // the built-in Claude console, and clears it (→ null) when the user marks
+  // Claude finished. `claude_thread_id` links the task to that console thread
+  // (set by POST /tasks/:id/claude-thread; UI clears it → null on "finished").
+  "claude_waiting_since", "claude_thread_id",
   // Undo of a snooze: the UI PATCHes { status: "inbox", snoozed_until: null }
   // to pull a task back out of snooze (the auto-snooze undo window, and the
   // "wake up now" action). snooze_count is intentionally NOT touched here.
@@ -1051,7 +1054,15 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   if (block) return res.status(block.status).json({ error: block.error });
   const { data, error } = await db
     .from("tasks")
-    .update({ status: "archived", completed_at: now, status_changed_at: now })
+    // Clear the Claude handoff flags on completion: a task Claude just closed (or
+    // any completed task) must not keep showing the "בתהליך עם קלוד" badge / chip.
+    .update({
+      status: "archived",
+      completed_at: now,
+      status_changed_at: now,
+      claude_thread_id: null,
+      claude_waiting_since: null,
+    })
     .eq("organization_id", req.org!.id)
     .eq("id", req.params.id)
     .select("id, status, completed_at, recurrence_rule, recurrence_until, recurrence_parent_id, due_date, due_time, reminder_at, title, title_he, description, priority, task_type, size, context, project_id, tags, checklist")
@@ -1144,6 +1155,84 @@ router.post("/tasks/:id/complete", async (req: Request, res: Response) => {
   }
 
   res.json({ task: data, next_task: nextTask });
+});
+
+/**
+ * POST /tasks/:id/claude-thread — hand this task to the built-in Claude console.
+ *
+ * Opens a NEW thread (server/src/modules/claude) seeded with the task context and
+ * runs its first turn, links the thread to the task (`claude_thread_id`), and marks
+ * the task waiting-on-Claude (+ advances a not-yet-started task to in_progress).
+ * Returns { thread_id } so the client can open the chat in a new tab. Runs on the
+ * subscription — zero paid API tokens (see claude-handoff.ts).
+ */
+router.post("/tasks/:id/claude-thread", async (req: Request, res: Response) => {
+  const { data: task, error: findErr } = await db
+    .from("tasks")
+    .select(
+      "id, serial_display, title, title_he, description, status, claude_thread_id, task_materials, linked_drive_docs, source_messages(source_url)",
+    )
+    .eq("organization_id", req.org!.id)
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (findErr) return res.status(500).json({ error: findErr.message });
+  if (!task) return res.status(404).json({ error: "task not found in this org" });
+
+  // Idempotency: if this task already has a live Claude thread, return it instead
+  // of spawning a second one. Guards the double-tap race — a card re-tapped before
+  // the list poll refreshes still sees claude_thread_id=null locally, so without
+  // this the server would open a duplicate thread (duplicate subscription work) and
+  // orphan the first. A deleted/archived thread falls through to a fresh one.
+  if (task.claude_thread_id) {
+    const { data: existing } = await db
+      .from("claude_threads")
+      .select("id, archived_at")
+      .eq("id", task.claude_thread_id as string)
+      .eq("org_id", req.org!.id)
+      .maybeSingle();
+    if (existing && !existing.archived_at) {
+      return res.status(200).json({ thread_id: existing.id });
+    }
+  }
+
+  // Deep links verbatim — never paraphrased to a domain (CLAUDE.md).
+  const urls: string[] = [];
+  const pushUrl = (u?: string | null) => {
+    const v = (u ?? "").trim();
+    if (v && !urls.includes(v)) urls.push(v);
+  };
+  for (const m of (task.task_materials as Array<{ url?: string | null }> | null) ?? []) pushUrl(m?.url);
+  for (const d of (task.linked_drive_docs as Array<{ url?: string | null }> | null) ?? []) pushUrl(d?.url);
+  pushUrl((task.source_messages as { source_url?: string | null } | null)?.source_url);
+
+  const threadId = await createTaskThread(req.org!.id, req.user!.id, {
+    id: task.id as string,
+    serial: (task.serial_display as string | null) ?? null,
+    // Hebrew title preferred, mirroring buildContext in ClaudeLauncher.
+    title: ((task.title_he as string | null)?.trim() || (task.title as string) || "").trim(),
+    description: (task.description as string | null) ?? null,
+    urls,
+  });
+  if (!threadId) return res.status(500).json({ error: "could not open Claude thread" });
+
+  // Link the thread + mark waiting-on-Claude. Advance to in_progress only from a
+  // not-yet-started state — never pull a task back out of a completion status.
+  const now = new Date().toISOString();
+  const advance = task.status === "inbox" || task.status === "snoozed";
+  const patch: Record<string, unknown> = { claude_thread_id: threadId, claude_waiting_since: now };
+  if (advance) {
+    patch.status = "in_progress";
+    patch.status_changed_at = now;
+  }
+  const { error: updErr } = await db
+    .from("tasks")
+    .update(patch)
+    .eq("organization_id", req.org!.id)
+    .eq("id", task.id);
+  // Best-effort: the thread is already open. Surface the error, don't fail the tap.
+  if (updErr) console.error("[tasks/claude-thread] task update failed:", updErr.message);
+
+  res.status(201).json({ thread_id: threadId });
 });
 
 /** POST /tasks/:id/snooze */
