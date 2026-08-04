@@ -223,6 +223,11 @@ interface Turn {
   updated_at?: string | null;
   /** How many times the recoverer auto-continued this turn after a restart. */
   resume_attempts?: number | null;
+  /** CLIENT-ONLY: the in-progress assistant text streamed as token deltas
+   *  (kind:"delta" on the live stream) — the growing tail of the bubble. Reset
+   *  whenever a completed assistant block (which contains it) arrives. Never
+   *  sent by the server. */
+  live_text?: string;
   events: TurnEvent[];
   attachments: {
     id: string;
@@ -452,7 +457,16 @@ export function ClaudeChat() {
     }
   }, []);
 
+  /** Monotonic ticket for full thread loads. Loads are triggered from several
+   *  places (thread switch, send, terminal edge, the poll's unknown-run path)
+   *  and their responses can complete OUT OF ORDER — a stale response applying
+   *  last would replace the turns with an older snapshot, making a message the
+   *  screen already showed vanish until the next refresh. Only the response
+   *  holding the NEWEST ticket may apply. */
+  const loadSeqRef = useRef(0);
+
   const loadThread = useCallback(async (id: string) => {
+    const ticket = ++loadSeqRef.current;
     try {
       const r = await api<{
         thread: Thread;
@@ -464,6 +478,8 @@ export function ClaudeChat() {
       // Ignored when the user has already switched away: a slow response for the
       // previous thread must not paint over the one now on screen.
       if (activeIdRef.current !== id) return;
+      // Ignored when a NEWER load was issued meanwhile (see loadSeqRef).
+      if (ticket !== loadSeqRef.current) return;
       setThread(r.thread);
       setTurns(r.turns ?? []);
       setSplitProposal(r.split_proposal ?? null);
@@ -556,11 +572,13 @@ export function ClaudeChat() {
     setProjectOpen(false);
     setDecomposeOpen(false);
     setDecomposeProposal(null);
+    // Clear the conversation area IMMEDIATELY on a switch — showing thread A's
+    // turns under thread B's title while B loads is exactly the "messages
+    // vanished / came back" confusion, and it also stops the live poll from
+    // reading A's turns as if they were B's.
+    setThread(null);
+    setTurns([]);
     if (activeId) void loadThread(activeId);
-    else {
-      setThread(null);
-      setTurns([]);
-    }
   }, [activeId, loadThread]);
 
   // Poll only while a turn is actually moving. A finished conversation is static,
@@ -591,11 +609,16 @@ export function ClaudeChat() {
     );
     const lastSeq =
       exec && exec.events.length > 0 ? exec.events[exec.events.length - 1].seq : 0;
+    const ticketAtStart = loadSeqRef.current;
     try {
       const r = await api<{ runs: LiveRunPatch[]; events: TurnEvent[] }>(
         `/api/claude/threads/${id}/live?run=${exec?.id ?? ""}&after=${lastSeq}`,
       );
       if (activeIdRef.current !== id) return;
+      // A full load was issued while this tick was in flight — its snapshot is
+      // newer than what this tick read; merging on top could resurrect stale
+      // statuses. Skip; the next tick works from the fresh snapshot.
+      if (ticketAtStart !== loadSeqRef.current) return;
       const known = new Set(cur.map((t) => t.id));
       // A run this screen doesn't know (sent from another tab / the recoverer) or
       // the watched turn reaching a terminal state → one full reload for the
@@ -619,12 +642,17 @@ export function ClaudeChat() {
           // stale `after=` and interleave two attempts on screen; reset instead.
           const reExecuted =
             patch.status === "queued" && !patch.started_at && t.events.length > 0;
+          const merging = !reExecuted && exec && t.id === exec.id;
           const events = reExecuted
             ? []
-            : exec && t.id === exec.id
+            : merging
               ? mergeEvents(t.events, r.events)
               : t.events;
-          return { ...t, ...patch, events };
+          // A completed assistant block arriving via the poll contains the
+          // streamed deltas — drop the live tail so the text isn't doubled.
+          const blockDone = merging && r.events.some((e) => e.kind === "assistant");
+          const live_text = reExecuted || blockDone ? "" : t.live_text;
+          return { ...t, ...patch, events, live_text };
         }),
       );
     } catch {
@@ -656,18 +684,36 @@ export function ClaudeChat() {
    * of after flush+poll (~1.4s worst case). Merged by seq into the same list the
    * poll feeds; 204 / any error just means "no stream — the poll has it".
    */
+  // Opened as soon as a turn is EXECUTING (queued included, not just running):
+  // isRunLive on the server is true from the moment executeRun claims the row,
+  // so connecting during 'queued' catches the very first engine output instead
+  // of waiting for a poll to report 'running'. A 204 (not claimed yet / other
+  // instance) is retried briefly, then left to the poll.
   const streamRunId =
-    turns.find((x) => x.status === "running" && !x.id.startsWith("pending-"))?.id ?? null;
+    turns.find(
+      (x) =>
+        (EXECUTING as readonly string[]).includes(x.status) &&
+        !x.id.startsWith("pending-") &&
+        // A turn parked on the usage window sits 'queued' for hours with no
+        // process — 12 retry probes per mount would all 204 for nothing.
+        !x.error?.startsWith(USAGE_WAIT_PREFIX),
+    )?.id ?? null;
   useEffect(() => {
     if (!streamRunId) return;
     const ctrl = new AbortController();
     let gone = false;
     void (async () => {
       try {
-        const res = await apiStream(`/api/claude/runs/${streamRunId}/stream`, {
-          signal: ctrl.signal,
-        });
-        if (res.status !== 200 || !res.body) return;
+        let res: Response | null = null;
+        for (let attempt = 0; attempt < 12 && !gone; attempt++) {
+          res = await apiStream(`/api/claude/runs/${streamRunId}/stream`, {
+            signal: ctrl.signal,
+          });
+          if (res.status === 200 && res.body) break;
+          res = null;
+          await new Promise((r) => setTimeout(r, 700));
+        }
+        if (!res?.body || gone) return;
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
@@ -678,20 +724,37 @@ export function ClaudeChat() {
           const lines = buf.split("\n");
           buf = lines.pop() ?? "";
           const evs: TurnEvent[] = [];
+          let deltaText = "";
           for (const ln of lines) {
             const s = ln.trim();
             if (!s) continue; // the server's keep-alive newline
             try {
               const ev = JSON.parse(s) as TurnEvent;
-              if (typeof ev?.seq === "number") evs.push(ev);
+              if (ev?.kind === "delta") {
+                // A token-level fragment of the block being written — the
+                // growing tail of the bubble, never a stored event.
+                if (ev.text) deltaText += ev.text;
+              } else if (typeof ev?.seq === "number" && ev.seq > 0) {
+                evs.push(ev);
+              }
             } catch {
               // A torn line mid-chunk — the remainder rides in `buf`.
             }
           }
-          if (evs.length > 0) {
+          if (evs.length > 0 || deltaText) {
+            // A completed assistant block supersedes the deltas that built it —
+            // its stored text contains them, so the live tail resets to what
+            // arrived AFTER it in this same ordered batch.
+            const blockDone = evs.some((e) => e.kind === "assistant");
             setTurns((prev) =>
               prev.map((t) =>
-                t.id === streamRunId ? { ...t, events: mergeEvents(t.events, evs) } : t,
+                t.id === streamRunId
+                  ? {
+                      ...t,
+                      events: evs.length > 0 ? mergeEvents(t.events, evs) : t.events,
+                      live_text: blockDone ? deltaText : (t.live_text ?? "") + deltaText,
+                    }
+                  : t,
               ),
             );
           }
@@ -1928,6 +1991,9 @@ function toolDetail(ev: TurnEvent): string | null {
 
 /** Name what the turn is doing right now, from its newest stored event. */
 function activityLabel(turn: Turn, t: ReturnType<typeof useTranslations>): string {
+  // Token deltas are flowing — the model is writing RIGHT NOW, whatever the
+  // last stored event was (stored events lag the live tail by a block).
+  if (turn.live_text) return t("live.writing");
   const ev = turn.events.length > 0 ? turn.events[turn.events.length - 1] : null;
   if (!ev) return t("live.starting");
   if (ev.kind === "tool_use") {
@@ -2064,12 +2130,17 @@ function TurnView({
       if (ev.kind === "assistant" && ev.text) texts.push(ev.text);
       else if (ev.kind === "tool_use" && ev.tool_name) toolNames.push(ev.tool_name);
     }
+    // The live tail: the assistant block currently being written, streamed as
+    // token deltas — appended after the completed blocks so the bubble grows
+    // word-by-word. Cleared (upstream) the moment the completed block arrives.
+    const liveTail = (turn.live_text ?? "").trim();
+    if (liveTail) texts.push(liveTail);
     // result_summary is the engine's final answer. Preferred when the streamed
     // assistant text is empty (a turn that only used tools), so the bubble is
     // never blank on a turn that did finish.
     const joined = texts.join("\n\n").trim();
     return { answer: joined || (turn.result_summary ?? "").trim(), tools: toolNames };
-  }, [turn.events, turn.result_summary]);
+  }, [turn.events, turn.result_summary, turn.live_text]);
 
   const live = turn.status === "queued" || turn.status === "running";
   const waiting = turn.status === "waiting";
