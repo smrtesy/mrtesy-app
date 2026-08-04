@@ -4587,6 +4587,7 @@
   },
   "claudeDrawer": {
     "title": "Claude",
+    "untitled": "New chat",
     "openFull": "Open full screen",
     "close": "Close",
     "loading": "Loading Claude…"

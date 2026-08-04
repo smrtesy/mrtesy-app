@@ -31,6 +31,7 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { api, apiStream, ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { isEmbeddedPane } from "@/lib/navigate";
 import { AnswerContent } from "./interactive/AnswerContent";
 import { CopyButton } from "@/components/common/CopyButton";
 import { ChatComposer } from "./ChatComposer";
@@ -256,6 +258,26 @@ export function ClaudeChat() {
   // sits in the top-inline-end corner; reserve room so the end-most header
   // button (settings) clears it. No reserve on the standalone /claude route.
   const inPane = useOptionalPaneNav() != null;
+  // Whether THIS ClaudeChat runs inside the floating drawer's iframe (?embed=1 /
+  // framed). Drives the postMessage bridge with the drawer chrome: the drawer,
+  // being a separate top-window document, otherwise can't reach the open chat.
+  // Starts false so SSR and first client render agree; flips after mount.
+  const [embedded, setEmbedded] = useState(false);
+  useEffect(() => {
+    setEmbedded(isEmbeddedPane());
+  }, []);
+  // The Claude account the user last picked (localStorage). A NEW chat opens on
+  // it instead of the primary default — the user's request. Read once on mount.
+  const LAST_ACCOUNT_KEY = "claude-last-account";
+  const [lastAccount, setLastAccount] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(LAST_ACCOUNT_KEY);
+      if (v) setLastAccount(v);
+    } catch {
+      /* localStorage unavailable — the primary default still applies */
+    }
+  }, []);
   const [renaming, setRenaming] = useState<string | null>(null);
   /** The free-text task router ("עדכון"). It lost its sidebar button to the chat,
    *  so it lives here — inside the collapsed panel, not as new permanent chrome. */
@@ -321,6 +343,17 @@ export function ClaudeChat() {
   // must be able to claim it BEFORE the auto-open effect fires.
   const autoOpenedRef = useRef(false);
 
+  // Reset to a blank composer — the shared body of "new chat" (the ?new param, the
+  // two new-chat buttons, and the drawer's per-open new-chat message). Claims the
+  // auto-open guard so the open-latest effect and the rail poll don't yank a thread
+  // back in. Does NOT touch deepLinkedRef, so a later ?thread deep-link still wins.
+  const resetToNewChat = useCallback(() => {
+    autoOpenedRef.current = true;
+    setActiveId(null);
+    activeIdRef.current = null;
+    setTurns([]);
+  }, []);
+
   // The Claude button opens a NEW chat: it navigates to /claude?new=<timestamp>,
   // and this effect resets to the blank composer. Keyed on the VALUE so every
   // click is fresh (openTab dedupes the tab by path and only updates its href —
@@ -334,10 +367,7 @@ export function ClaudeChat() {
     const fresh = screenSearch.get("new");
     if (!fresh || fresh === newParamRef.current) return;
     newParamRef.current = fresh;
-    autoOpenedRef.current = true; // suppress open-latest on arrival
-    setActiveId(null);
-    activeIdRef.current = null;
-    setTurns([]);
+    resetToNewChat();
     // Consume the param OUT of the URL: it is a one-shot command, and left in
     // place it persists (workspace localStorage / mobile history), replaying
     // "blank chat" on every reload and burying continue-where-you-left-off.
@@ -345,7 +375,7 @@ export function ClaudeChat() {
     params.delete("new");
     const q = params.toString();
     screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
-  }, [screenSearch, screenRouter, screenPathname]);
+  }, [screenSearch, screenRouter, screenPathname, resetToNewChat]);
 
   /** The inspect-mode seed: the user marked an element somewhere in the app and
    *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
@@ -654,11 +684,69 @@ export function ClaudeChat() {
     };
   }, [streamRunId]);
 
-  useEffect(() => {
+  const scrollToBottom = useCallback(() => {
     // nearest, not the default: scrollIntoView on a pane-embedded screen otherwise
     // scrolls the ancestor pane too, yanking the whole workspace.
     bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
-  }, [turns.length, hasLive]);
+  }, []);
+  useEffect(() => {
+    scrollToBottom();
+  }, [turns.length, hasLive, scrollToBottom]);
+  // Coming back to the Claude tab (un-minimized / re-focused) jumps to the latest
+  // messages — the bottom is what the user wants on return, not wherever they'd
+  // scrolled to. rAF so the paint after the tab shows has laid the content out.
+  useEffect(() => {
+    const onVis = () => {
+      if (!document.hidden) requestAnimationFrame(scrollToBottom);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [scrollToBottom]);
+
+  // Bridge to the drawer chrome hosting this chat in an iframe (bugs 1/3/5/8): the
+  // drawer is a separate top-window document, so it drives new-chat / seed / scroll
+  // via postMessage, and receives the live thread title back for its slim header.
+  useEffect(() => {
+    if (!embedded) return;
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || e.source !== window.parent) return;
+      const d = e.data as { type?: string } | null;
+      if (!d || typeof d !== "object") return;
+      if (d.type === "claude-drawer:new") {
+        resetToNewChat();
+      } else if (d.type === "claude-drawer:seed") {
+        // The mark was captured in the top window; the seed sits in the shared
+        // sessionStorage — read and apply it into THIS open drawer chat.
+        try {
+          const raw = sessionStorage.getItem("smrtesy-claude-inspect-seed");
+          if (raw) {
+            sessionStorage.removeItem("smrtesy-claude-inspect-seed");
+            applySeed(JSON.parse(raw) as { text?: string });
+          }
+        } catch {
+          /* malformed / blocked — no-op */
+        }
+      } else if (d.type === "claude-drawer:shown") {
+        requestAnimationFrame(scrollToBottom);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [embedded, resetToNewChat, applySeed, scrollToBottom]);
+
+  // Report the open thread's title up to the drawer's compact header. Empty string
+  // for a fresh/untitled chat — the drawer shows its own placeholder then.
+  useEffect(() => {
+    if (!embedded) return;
+    try {
+      window.parent.postMessage(
+        { type: "claude-chat:title", title: thread?.title?.trim() || "" },
+        window.location.origin,
+      );
+    } catch {
+      /* cross-origin parent — ignored */
+    }
+  }, [embedded, thread?.title]);
 
   // The org's default model/effort for new chats. Read once on mount; a failure is
   // ambient (the app's built-in default stays in effect).
@@ -707,6 +795,9 @@ export function ClaudeChat() {
         body: {
           model: defaultModel ?? DEFAULT_MODEL,
           ...(defaultEffort ? { effort: defaultEffort } : {}),
+          // The last-picked account is the new-chat default (bug 10); an explicit
+          // per-session pick in `pending` still wins over it.
+          ...(lastAccount ? { claude_account: lastAccount } : {}),
           ...pending,
         },
       });
@@ -720,7 +811,7 @@ export function ClaudeChat() {
       toast.error(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [activeId, pending, defaultModel, defaultEffort]);
+  }, [activeId, pending, defaultModel, defaultEffort, lastAccount]);
 
   const send = useCallback(
     async (message: string, attachmentIds: string[]) => {
@@ -908,6 +999,20 @@ export function ClaudeChat() {
 
   const title = thread?.title?.trim() || t("untitled");
 
+  /** Open a thread (or a fresh chat when id is null). On mobile the rail is a
+   *  full-screen overlay covering the chat, so picking closes it to reveal the
+   *  conversation; on desktop the rail stays open beside the chat. matchMedia is
+   *  read at click time (event handler, not render) — no hydration mismatch. */
+  const pickThread = useCallback((id: string | null) => {
+    setActiveId(id);
+    if (id === null) setTurns([]);
+    try {
+      if (window.matchMedia("(max-width: 767.98px)").matches) setListOpen(false);
+    } catch {
+      /* no matchMedia (SSR) — desktop side-by-side needs no close */
+    }
+  }, []);
+
   // "כמות טוקנים בשימוש" — the conversation's own consumption, summed from what the
   // engine reported per turn. Shown as a quiet chip in the header; the tooltip
   // carries the exact split.
@@ -923,18 +1028,16 @@ export function ClaudeChat() {
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Thread list — a rail, closed by default. */}
+      {/* Thread list — a rail, closed by default. Full-screen on mobile (covers the
+          chat), a fixed-width column beside the chat on desktop (md+). */}
       {listOpen && (
-        <aside className="flex w-60 shrink-0 flex-col border-e">
+        <aside className="flex w-full shrink-0 flex-col border-e md:w-60">
           <div className="flex items-center gap-1 border-b p-2">
             <Button
               size="sm"
               variant="ghost"
               className="h-8 flex-1 justify-start gap-1.5 text-xs"
-              onClick={() => {
-                setActiveId(null);
-                setTurns([]);
-              }}
+              onClick={() => pickThread(null)}
             >
               <MessageSquarePlus className="size-4" />
               {t("newChat")}
@@ -964,6 +1067,18 @@ export function ClaudeChat() {
                 {regrouping ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
               </Button>
             )}
+            {/* Mobile-only close: the rail covers the chat here, and the header's
+                toggle button is hidden with it, so the rail carries its own close. */}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 md:hidden"
+              onClick={() => setListOpen(false)}
+              aria-label={t("hideList")}
+              title={t("hideList")}
+            >
+              <X className="size-4" />
+            </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
@@ -971,7 +1086,7 @@ export function ClaudeChat() {
             ) : threads.length === 0 ? (
               <p className="p-2 text-xs text-muted-foreground">{t("noThreads")}</p>
             ) : grouped ? (
-              renderGroupedRail(threads, topics, activeId, t, setActiveId, remove, (id, h) =>
+              renderGroupedRail(threads, topics, activeId, t, pickThread, remove, (id, h) =>
                 void setHandled(id, h),
               )
             ) : (
@@ -980,7 +1095,7 @@ export function ClaudeChat() {
                   key={x.id}
                   thread={x}
                   active={activeId === x.id}
-                  onOpen={() => setActiveId(x.id)}
+                  onOpen={() => pickThread(x.id)}
                   onRemove={() => void remove(x.id)}
                   onToggleHandled={() => void setHandled(x.id, !x.handled_at)}
                   t={t}
@@ -991,10 +1106,10 @@ export function ClaudeChat() {
         </aside>
       )}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", listOpen && "hidden md:flex")}>
         {/* Header: the title, and two quiet buttons. Everything configurable is
             behind the second one. */}
-        <div className={cn("flex items-center gap-1 border-b p-2", inPane && "pe-10")}>
+        <div className={cn("sticky top-0 z-20 flex items-center gap-1 border-b bg-background p-2", inPane && "pe-10")}>
           <Button
             size="sm"
             variant="ghost"
@@ -1059,9 +1174,22 @@ export function ClaudeChat() {
           {accounts.length > 0 && (
             <AccountSwitcher
               accounts={accounts}
-              value={thread?.claude_account ?? (pending.claude_account as string | undefined) ?? DEFAULT_ACCOUNT}
+              value={
+                thread?.claude_account ??
+                (pending.claude_account as string | undefined) ??
+                lastAccount ??
+                DEFAULT_ACCOUNT
+              }
               disabled={!!runningTurn}
               onChange={(id) => {
+                // Remember it as the new-chat default (bug 10) — before the thread
+                // write, so it sticks even if that fails.
+                setLastAccount(id);
+                try {
+                  window.localStorage.setItem(LAST_ACCOUNT_KEY, id);
+                } catch {
+                  /* localStorage unavailable — session-only memory still applies */
+                }
                 if (activeId) void patchThread({ claude_account: id });
                 else setPending((p) => ({ ...p, claude_account: id }));
               }}
@@ -1265,7 +1393,11 @@ export function ClaudeChat() {
           {turns.length === 0 ? (
             <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
           ) : (
-            <div className="mx-auto flex max-w-3xl flex-col gap-3">
+            // Keyed by the thread so switching conversations remounts cleanly,
+            // while WITHIN a thread the turns stay keyed by turn_index (below) —
+            // the optimistic bubble and its server row share that key, so send no
+            // longer remounts the whole list (the flicker, bug 7).
+            <div key={activeId ?? "new"} className="mx-auto flex max-w-3xl flex-col gap-3">
               {renderTurns(
                 turns,
                 children,
@@ -1595,7 +1727,7 @@ function renderTurns(
     if (!turn.moved_to_thread_id) {
       out.push(
         <TurnView
-          key={turn.id}
+          key={turn.turn_index}
           turn={turn}
           hadPriorDoneTurn={seenPriorDone}
           onCancelWaiting={onCancelWaiting}
