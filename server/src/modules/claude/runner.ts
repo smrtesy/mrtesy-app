@@ -1032,6 +1032,12 @@ async function executeRunBody(runId: string): Promise<void> {
    */
   const buildArgs = (resume: string | null, fork = false): string[] => {
     const a = ["-p", promptText, "--output-format", "stream-json", "--verbose"];
+    // Token-level deltas ride the stream as `stream_event` lines (verified
+    // against the 2.1.220 binary: the flag requires --print + stream-json,
+    // both present here). They feed the live NDJSON stream ONLY — the stdout
+    // handler never stores them — which is what turns the console bubble from
+    // paragraph-at-a-time into word-by-word, like claude.ai.
+    a.push("--include-partial-messages");
     // THE line that makes a thread a conversation: resume the engine session the
     // thread already owns, so this turn sees every earlier turn. Without it each
     // message would start from nothing and the chat would have no memory.
@@ -1108,6 +1114,11 @@ async function executeRunBody(runId: string): Promise<void> {
       redact(redact(redact(redact(s, ghToken), internalSecret || null), token), appAccess?.token ?? null),
       supabaseTokenClean,
     );
+  /** The same secrets, as a list — the delta holdback (flushDeltas) needs to
+   *  recognize a secret's PREFIX at a chunk boundary, which the whole-string
+   *  redact above cannot do on a fragment. */
+  const secretList = [ghToken, internalSecret || null, token, appAccess?.token ?? null, supabaseTokenClean]
+    .filter((s): s is string => typeof s === "string" && s.length > 0);
 
   const flush = async () => {
     if (buffer.length === 0) return;
@@ -1155,6 +1166,45 @@ async function executeRunBody(runId: string): Promise<void> {
     // no stderr and a null exit code, so it has to be captured here or the run
     // would be recorded as an unexplained "exit code null".
     let spawnError: string | null = null;
+
+    // Word-by-word deltas, held back just enough that a secret split across
+    // two deltas can never leave the server: the cut point is walked back past
+    // any suffix that matches a PREFIX of a known secret, and what is emitted
+    // goes through redactSecrets like every stored row. Force-flushed at block
+    // end and at process close (the tail is tiny either way).
+    let deltaPending = "";
+    const flushDeltas = (force: boolean): void => {
+      if (!deltaPending) return;
+      let cut = deltaPending.length;
+      if (!force) {
+        let moved = true;
+        while (moved && cut > 0) {
+          moved = false;
+          for (const s of secretList) {
+            const maxK = Math.min(s.length - 1, cut);
+            for (let k = maxK; k > 0; k--) {
+              if (deltaPending.startsWith(s.slice(0, k), cut - k)) {
+                cut -= k;
+                moved = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (cut <= 0) return;
+      const out = redactSecrets(deltaPending.slice(0, cut));
+      deltaPending = deltaPending.slice(cut);
+      if (out) {
+        runEventBus.emit(`ev:${runId}`, {
+          seq: 0,
+          kind: "delta",
+          text: out,
+          tool_name: null,
+          created_at: new Date().toISOString(),
+        } satisfies LiveEvent);
+      }
+    };
 
     const child = spawn(bin, args, {
       cwd: cwd || run.cwd || process.cwd(),
@@ -1220,6 +1270,30 @@ async function executeRunBody(runId: string): Promise<void> {
         }
         const obj = parsed as Record<string, unknown>;
         if (!sessionId && typeof obj.session_id === "string") sessionId = obj.session_id;
+        // Partial-message deltas (--include-partial-messages): live-stream them
+        // and NOTHING else — a delta per token stored to claude_run_events
+        // would flood the table (the completed block still arrives as a normal
+        // assistant event below, and THAT is stored). kind:"delta", seq:0 —
+        // the client renders them as the growing tail of the answer bubble and
+        // never merges them into the stored-event list. Emission goes through
+        // flushDeltas, which holds back any tail that could be the PREFIX of a
+        // known secret split across deltas — the plain redact can only catch a
+        // secret it sees whole.
+        if (obj.type === "stream_event") {
+          // A sub-agent's (Task tool) inner stream — not the main answer.
+          if (obj.parent_tool_use_id) continue;
+          const sev = obj.event as Record<string, unknown> | undefined;
+          if (sev?.type === "content_block_delta") {
+            const d = sev.delta as Record<string, unknown> | undefined;
+            if (d?.type === "text_delta" && typeof d.text === "string" && d.text) {
+              deltaPending += d.text;
+              flushDeltas(false);
+            }
+          } else if (sev?.type === "content_block_stop") {
+            flushDeltas(true);
+          }
+          continue;
+        }
         if (obj.type === "result") {
           resultEvent = obj;
           if (typeof obj.result === "string") lastResult = obj.result;
@@ -1271,6 +1345,8 @@ async function executeRunBody(runId: string): Promise<void> {
     // Off the registry the moment the process is gone, so a later cancel reports
     // "nothing running" instead of signalling a recycled pid.
     running.delete(runId);
+    // Whatever tail the holdback still held — the process is done, flush it.
+    flushDeltas(true);
     if (stdoutRest.trim()) {
       buffer.push({
         seq: nextSeq(),

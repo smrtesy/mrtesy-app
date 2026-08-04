@@ -199,6 +199,19 @@ async function primaryRepoForOrg(orgId: string): Promise<string | null> {
   return best;
 }
 
+/** A deterministic fallback title from the thread's first user message — the
+ *  first non-empty line, clipped. So a thread whose AI title never landed (the
+ *  one-shot returned null on a usage-limit / timeout, or it is an old thread that
+ *  predates titling and will never get a new turn) still reads as something in the
+ *  rail instead of a blank "ללא כותרת". The AI title, when it exists, always wins. */
+function firstLinePreview(s: string | null | undefined): string {
+  const line = (s ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .find(Boolean);
+  return (line ?? "").slice(0, 80);
+}
+
 // ── list / create ─────────────────────────────────────────────────────────────
 
 router.get("/claude/threads", async (req: Request, res: Response) => {
@@ -250,10 +263,33 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
       if (r.thread_id && !lastStatus.has(r.thread_id)) lastStatus.set(r.thread_id, r.status);
     }
   }
+
+  // First user message per thread — the deterministic title fallback (see
+  // firstLinePreview). Fetched ONLY for the threads that lack an AI title, so the
+  // response never carries prompt text we won't use. turn_index=1 is the first turn
+  // (turnIndex = prior count + 1), so this is exactly one row per thread — no cap.
+  const firstPrompt = new Map<string, string>();
+  const untitledIds = rows.filter((r) => !(r.title ?? "").trim()).map((r) => r.id);
+  if (untitledIds.length > 0) {
+    const { data: firstRows, error: fErr } = await db
+      .from("claude_runs")
+      .select("thread_id, user_prompt")
+      .in("thread_id", untitledIds)
+      .eq("turn_index", 1);
+    if (fErr) console.error("[claude/threads] first-prompt failed:", fErr.message);
+    for (const r of firstRows ?? []) {
+      // user_prompt only: `prompt` carries the composed env preamble, which would
+      // make a garbage title. A row with no clean user_prompt just stays untitled.
+      if (r.thread_id) firstPrompt.set(r.thread_id, firstLinePreview(r.user_prompt));
+    }
+  }
+
   const threads = rows.map((r) => ({
     ...r,
     live: liveSet.has(r.id),
     last_status: lastStatus.get(r.id) ?? null,
+    // Only when the AI title is absent; the client uses it as the rail fallback.
+    preview: (r.title ?? "").trim() ? null : firstPrompt.get(r.id) || null,
   }));
   return res.json({ threads });
 });
