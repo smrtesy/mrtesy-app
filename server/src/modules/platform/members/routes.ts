@@ -268,6 +268,61 @@ router.patch("/org/members/:userId/email",
   });
 
 /**
+ * POST /org/members/:userId/preview-link — mint a one-time, short-lived link the
+ * manager opens in a CLEAN/incognito window to preview the app AS this member
+ * (impersonation preview). Its main use: check a no-email placeholder employee's
+ * view before giving them a real login email.
+ *
+ * We only create the token here (gated to owner/admin, target must be a member of
+ * THIS org). The token is consumed once by the Next.js `/api/preview` route, which
+ * mints the real session and sets the auth cookies on that window only — the
+ * manager's own session is never touched. Cookies are per-browser-profile, so the
+ * link MUST be opened in an incognito window (or a different browser) to avoid
+ * clobbering the manager's login; the UI instructs exactly that.
+ */
+router.post("/org/members/:userId/preview-link",
+  requireAuth, requireOrg, requireRole("owner", "admin"),
+  async (req: Request, res: Response) => {
+    const { userId } = req.params;
+    const locale = req.body?.locale === "en" ? "en" : "he";
+    // Target must be a member of THIS org.
+    const { data: m } = await db
+      .from("org_members").select("user_id, role")
+      .eq("org_id", req.org!.id).eq("user_id", userId).maybeSingle();
+    if (!m) return res.status(404).json({ error: "member not found" });
+    // SECURITY: preview mints a REAL session as the target. Restrict it to
+    // regular members (the feature's purpose — previewing a worker's view). Minting
+    // as an owner/admin would let an admin escalate to owner within the org; minting
+    // as a super-admin would grant platform-wide admin (super_admins keys off the
+    // user_id the session belongs to). Both are blocked here.
+    if (m.role !== "member") {
+      return res.status(403).json({ error: "preview is only available for regular members" });
+    }
+    const { data: sa } = await db
+      .from("super_admins").select("user_id").eq("user_id", userId).maybeSingle();
+    if (sa) return res.status(403).json({ error: "preview is not available for this member" });
+
+    const expires_at = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutes
+    const { data: tok, error } = await db
+      .from("member_preview_tokens")
+      .insert({
+        org_id: req.org!.id,
+        target_user_id: userId,
+        created_by: req.user!.id,
+        expires_at,
+      })
+      .select("token")
+      .single();
+    if (error || !tok) return res.status(500).json({ error: error?.message ?? "failed to create preview token" });
+
+    // FRONTEND_URL may be a comma-separated CORS list — the first entry is the
+    // canonical app origin, which is where the /api/preview route lives.
+    const appUrl = (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0].trim();
+    const url = `${appUrl}/api/preview?token=${tok.token}&locale=${locale}`;
+    res.json({ url, expires_at });
+  });
+
+/**
  * POST /org/members — add a member by email, optionally with a set of apps.
  *
  * `app_slugs` (string[]) — which apps to enable for this user. Only meaningful

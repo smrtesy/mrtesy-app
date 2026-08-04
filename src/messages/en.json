@@ -1480,7 +1480,15 @@
     "setEmailPlaceholder": "Add login email…",
     "projectOnlyToggle": "Project-only worker",
     "projectOnlyHint": "In smrtTask they see only tasks assigned to them (from a plan or another user) + a read-only plan view. No source connections, inbox, projects or scan.",
-    "projectOnlyBadge": "Project-only"
+    "projectOnlyBadge": "Project-only",
+    "previewAs": "Sign in as employee (preview)",
+    "previewTitle": "Employee preview — in an incognito window",
+    "previewInstructions": "Open an incognito window (Ctrl+Shift+N, or Cmd+Shift+N on Mac) and paste the link. It signs you in as the employee — exactly what they'll see — without touching your own account.",
+    "previewExpires": "The link is valid for 5 minutes, one-time use.",
+    "previewCopy": "Copy link",
+    "previewCopied": "Link copied",
+    "previewClose": "Close",
+    "previewFailed": "Failed to create the preview link"
   },
   "projectsEdit": {
     "nameRequired": "Name is required",
