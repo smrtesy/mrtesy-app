@@ -8,8 +8,11 @@
  * behind the header's settings button, not here — a composer that grows a toolbar
  * stops being a place to type.
  *
- * Enter sends, Shift+Enter makes a newline. The mic is icon-only: it sits beside
- * Send and a word there would be permanent chrome.
+ * Enter sends, Shift+Enter makes a newline — on a physical keyboard (desktop). On
+ * touch devices (phones/tablets) Enter just drops a newline and ONLY the Send
+ * button sends, because on a phone the on-screen return key is how you make a new
+ * line and there's no Shift to hold. The mic is icon-only: it sits beside Send and
+ * a word there would be permanent chrome.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -113,6 +116,13 @@ export function ChatComposer({
   const [uploading, setUploading] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Touch devices (coarse primary pointer) get newline-on-Enter; only the Send
+  // button sends. Resolved on the client after mount — SSR defaults to false, so
+  // desktop's Enter-to-send is the pre-hydration behavior.
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch(window.matchMedia?.("(pointer: coarse)").matches ?? false);
+  }, []);
 
   // The inspect-mode seed lands in the input ready to complete. Only while the
   // input is empty — a seed must never overwrite something the user typed.
@@ -216,6 +226,10 @@ export function ChatComposer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
+            // On touch devices Enter is a plain newline — only the Send button
+            // sends. Skip all the Enter handling below so the textarea's default
+            // (insert newline) runs.
+            if (isTouch && e.key === "Enter") return;
             // isComposing checked so an IME's confirmation Enter doesn't send a
             // half-typed word.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
