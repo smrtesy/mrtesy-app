@@ -366,8 +366,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
       {/* Floating account avatar on mobile — sits in the top-end corner of
           the viewport and overlays the page area without consuming a
-          dedicated header row. */}
-      <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40">
+          dedicated header row. Next to it (admin-only) the same F/B/DB
+          system-status dots the desktop sidebar shows, so the deploy/DB
+          health is visible on mobile too. */}
+      <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40 flex items-center gap-2">
+        {isAdmin && <SystemStatusStrip interactive />}
         <UserAvatarLink size="sm" />
       </div>
 
