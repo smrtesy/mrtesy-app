@@ -45,6 +45,14 @@ const MAX_ROWS_PX = 360;
 /** ~3 lines: the box starts tall, like Claude Code, not a single cramped row. */
 const MIN_ROWS_PX = 76;
 
+// Per-thread draft. What you typed and didn't send stays tied to THIS chat:
+// switching chats loads that chat's draft (or an empty box), sending clears it.
+// Kept in localStorage (survives a page refresh, mirrors how Claude Code keeps
+// drafts) keyed by thread id — "new" before the thread exists; ClaudeChat carries
+// that "new" draft onto the real id the moment ensureThread mints one.
+const DRAFT_PREFIX = "claude:draft:";
+const draftKey = (id: string | null) => `${DRAFT_PREFIX}${id ?? "new"}`;
+
 export interface StagedAttachment {
   id: string;
   filename: string;
@@ -124,6 +132,43 @@ export function ChatComposer({
     setIsTouch(window.matchMedia?.("(pointer: coarse)").matches ?? false);
   }, []);
 
+  // Which chat the current `text` belongs to. `undefined` until the load effect
+  // has run once, so the save effect below can't persist an empty initial render
+  // over a real stored draft.
+  const loadedForRef = useRef<string | null | undefined>(undefined);
+
+  // Load this chat's draft into the box when the active chat changes (and on
+  // mount). Placed BEFORE the seed effect so a stored draft is never clobbered by
+  // a seed (the seed's functional update sees the just-loaded text and stands down
+  // when it is non-empty).
+  useEffect(() => {
+    const id = threadId ?? null;
+    if (loadedForRef.current === id) return;
+    loadedForRef.current = id;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(draftKey(id));
+    } catch {
+      /* storage unavailable — fall back to an empty box */
+    }
+    setText(saved ?? "");
+  }, [threadId]);
+
+  // Persist the box to the active chat's draft as it changes. Guarded on the load
+  // effect having run (loadedForRef set), so the first empty render can't wipe a
+  // saved draft, and keyed off loadedForRef — not threadId — so a chat switch
+  // writes under the chat the text actually belongs to, never the one just left.
+  useEffect(() => {
+    const id = loadedForRef.current;
+    if (id === undefined) return;
+    try {
+      if (text) localStorage.setItem(draftKey(id), text);
+      else localStorage.removeItem(draftKey(id));
+    } catch {
+      /* storage full / blocked — a lost draft is acceptable, a crash is not */
+    }
+  }, [text]);
+
   // The inspect-mode seed lands in the input ready to complete. Only while the
   // input is empty — a seed must never overwrite something the user typed.
   useEffect(() => {
@@ -146,12 +191,20 @@ export function ChatComposer({
     const message = text.trim();
     if ((!message && staged.length === 0) || busy) return;
     const sentStaged = staged;
+    const draftId = loadedForRef.current ?? null;
     // Cleared before awaiting so a second Enter cannot double-send — but PUT BACK
     // if the send fails. Losing what the user typed to a dropped connection or a
     // 409 is the worst outcome here; the attachment ids are unrecoverable once the
     // chips are gone.
     setText("");
     setStaged([]);
+    // Drop the draft synchronously — before onSend()→ensureThread can migrate a
+    // "new" draft onto the fresh id — so a just-sent message never reappears.
+    try {
+      localStorage.removeItem(draftKey(draftId));
+    } catch {
+      /* storage unavailable */
+    }
     try {
       await onSend(message, sentStaged.map((x) => x.id));
     } catch {
