@@ -40,6 +40,7 @@ import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SaveAsInfoButton } from "@/components/smrttask/common/SaveAsInfoButton";
 import { ClaudeLauncher } from "@/components/smrttask/tasks/ClaudeLauncher";
+import { ClaudeWorkingBadge } from "@/components/smrttask/tasks/ClaudeWorkingBadge";
 import { ContextButton } from "@/components/smrttask/tasks/ContextPanel";
 import { DueDateChip } from "@/components/smrttask/tasks/DueDateChip";
 import { AssigneeButton } from "@/components/smrttask/tasks/AssigneeButton";
@@ -448,6 +449,7 @@ export function TaskDetail({ task, locale, open, onClose, onUpdate, onDelete, on
                   }}
                 />
               </div>
+              <ClaudeWorkingBadge task={effectiveTask} locale={locale} />
               {savedFlash && (
                 <span className="text-[10px] text-status-ok">{tDetail("savedFlash")}</span>
               )}

@@ -96,9 +96,12 @@ export interface Task {
   context?: "home" | "work" | "outside" | null;
   /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
   woke_from_snooze_at?: string | null;
-  /** Set when the task is handed off to Claude (opened via claude.ai/code); null
-   *  once the user marks Claude finished. Drives the "waiting on Claude" chip. */
+  /** Set when the task is handed off to Claude (opened in the built-in console);
+   *  null once the user marks Claude finished. Drives the "waiting on Claude" chip. */
   claude_waiting_since?: string | null;
+  /** The in-app Claude console thread currently working on this task — set when the
+   *  user taps "עבודה עם קלוד". Deep-links the "בתהליך עם קלוד" badge to that chat. */
+  claude_thread_id?: string | null;
   seen_at: string | null;
   last_interaction_at: string | null;
   completed_at: string | null;

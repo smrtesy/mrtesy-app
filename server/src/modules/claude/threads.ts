@@ -175,7 +175,7 @@ function maybeSweep(): void {
  * which for a typical org is the platform repo. Null when the org configured none —
  * then a new chat simply has no repo, exactly as before.
  */
-async function primaryRepoForOrg(orgId: string): Promise<string | null> {
+export async function primaryRepoForOrg(orgId: string): Promise<string | null> {
   const { data, error } = await db
     .from("claude_playbooks")
     .select("repo")
