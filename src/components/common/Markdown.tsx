@@ -29,7 +29,7 @@
  * repo's deep-link rule, and open in a new tab.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, type ReactElement, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -48,6 +48,18 @@ import { cn } from "@/lib/utils";
  * touching what any element MEANS.
  */
 export type MarkdownDensity = "doc" | "chat";
+
+/**
+ * A caller-supplied renderer for a resolved (absolute / in-app) link — NOT
+ * anchor links, which stay in-document. The default renders a plain
+ * new-tab `<a>`; a caller like the Claude console passes `MarkdownTabLink` so
+ * an in-app deep link opens as a workspace tab instead of a new browser window.
+ */
+export type MarkdownLinkComponent = (props: {
+  href: string;
+  className?: string;
+  children: ReactNode;
+}) => ReactElement;
 
 /** Per-level heading classes. Two columns of the same table, so a change to the
  *  document scale is visibly a change to one of two densities, not a diff
@@ -298,7 +310,12 @@ function Table({ children }: { children: ReactNode }) {
  * the result so element identity stays stable across re-renders and nothing
  * remounts (which would drop a code block's "copied" state).
  */
-function buildComponents(labels: Labels, density: MarkdownDensity, linkBase?: string): Components {
+function buildComponents(
+  labels: Labels,
+  density: MarkdownDensity,
+  linkBase?: string,
+  LinkComponent?: MarkdownLinkComponent,
+): Components {
   const h = HEADINGS[density];
   // Chat bubbles are narrower and stacked; a doc page breathes. Everything below
   // that carries a vertical margin reads it from here so the two densities stay
@@ -348,12 +365,23 @@ function buildComponents(labels: Labels, density: MarkdownDensity, linkBase?: st
       // plain text when there is no base to rebuild it from.
       const resolved = resolveHref(href, linkBase);
       if (!resolved) return <>{children}</>;
+      const linkClass =
+        "text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary [overflow-wrap:anywhere]";
+      // A caller-supplied renderer handles real navigation targets (in-app vs
+      // external); anchors stay in-document and never route through it.
+      if (LinkComponent && !resolved.startsWith("#")) {
+        return (
+          <LinkComponent href={resolved} className={linkClass}>
+            {children}
+          </LinkComponent>
+        );
+      }
       return (
         <a
           href={resolved}
           target={resolved.startsWith("#") ? undefined : "_blank"}
           rel="noopener noreferrer"
-          className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary [overflow-wrap:anywhere]"
+          className={linkClass}
         >
           {children}
         </a>
@@ -501,9 +529,23 @@ export interface MarkdownProps {
    * `"chat"` is the same structure tightened to sit inside a message bubble.
    */
   density?: MarkdownDensity;
+  /**
+   * Custom renderer for resolved (non-anchor) links. Omit for the default
+   * new-tab `<a>`; pass `MarkdownTabLink` so in-app deep links open as
+   * workspace tabs. Must be a stable reference (a module-level component) —
+   * it participates in the component-map memo key.
+   */
+  linkComponent?: MarkdownLinkComponent;
 }
 
-export function Markdown({ children, className, dir, linkBase, density = "doc" }: MarkdownProps) {
+export function Markdown({
+  children,
+  className,
+  dir,
+  linkBase,
+  density = "doc",
+  linkComponent,
+}: MarkdownProps) {
   const t = useTranslations("markdown");
   const text = children ?? "";
 
@@ -518,8 +560,9 @@ export function Markdown({ children, className, dir, linkBase, density = "doc" }
         },
         density,
         linkBase,
+        linkComponent,
       ),
-    [t, density, linkBase],
+    [t, density, linkBase, linkComponent],
   );
 
   if (!text.trim()) return null;
