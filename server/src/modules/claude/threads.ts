@@ -958,6 +958,22 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
       .catch((e) => console.error("[claude/threads] executeRun threw:", e instanceof Error ? e.message : e));
   }
 
+  // Title the thread EARLY — ~10s in, while the first turn is still running —
+  // instead of only after it completes (the chain above). A long first turn used
+  // to leave the rail blank ("ללא כותרת") for minutes; now the title lands within
+  // ~10s from the opening message. Only for the first turn (turnIndex 1); later
+  // turns are already titled and re-sharpen via the chain. This is deliberately
+  // decoupled from executeRun and fully detached — the HTTP response already went
+  // out (res.json below), and it's a short Haiku one-shot on the subscription, so
+  // it never blocks or slows the chat's own output. `.unref()` keeps a pending
+  // timer from holding the process open. TITLE_AT_TURNS includes 1, so the chain's
+  // post-completion call re-sharpens this once the full answer exists.
+  if (turnIndex === 1) {
+    setTimeout(() => {
+      void maybeTitle(thread.id, orgId).catch(() => {});
+    }, 10_000).unref();
+  }
+
   return res.status(201).json({ run });
 });
 
