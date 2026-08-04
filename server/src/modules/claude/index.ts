@@ -48,3 +48,6 @@ export { claudeActionM2MRouter } from "./actions-routes";
 // x-cron-secret gated — mounted OUTSIDE the super-admin chain like claudeActionM2MRouter,
 // because the caller is a console run's hook / push step with the shared secret, not a JWT.
 export { default as claudeDeployQueueRouter } from "./deploy-queue";
+// The coalescing deploy coordinator — started once from server/src/index.ts after
+// listen. Inert unless DEPLOY_QUEUE_ENABLED=1. docs/claude-console/deploy-queue-plan.md.
+export { startDeployCoordinator } from "./deploy-coordinator";
