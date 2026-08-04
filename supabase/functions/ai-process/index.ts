@@ -2876,6 +2876,11 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             actor: "system",
           });
           if (reanchorActivityError) console.error("task_activities re-anchor insert failed:", reanchorActivityError);
+          // Keep thread_memory pointed at the tracker so a reply on this thread
+          // is recognized in real time by Path 1 (line ~3251) instead of only at
+          // the 48h wake — see the sibling comment at the create branch below.
+          const reanchorTk = threadKey(msg);
+          if (reanchorTk) await upsertThreadMemory(msg.user_id, reanchorTk, { related_task_id: threadFu.id, last_message_id: msg.id });
         }
         const { error: followupMsgReanchorError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
         if (followupMsgReanchorError) console.error("source_messages followup re-anchor update failed:", followupMsgReanchorError);
@@ -2903,6 +2908,14 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           actor: "system",
         });
         if (followupCreatedActivityError) console.error("task_activities insert failed:", followupCreatedActivityError);
+        // Register thread memory for the tracker, exactly like every other task
+        // creation path already does (line ~2708). Without this, a reply on the
+        // thread finds no thread_memory row, Path 1's real-time link+auto-close
+        // (line ~3251, ~1231) never fires, and the reply spins off an unrelated
+        // new task while the tracker sits open forever (the T1832/S258 bug: DSS
+        // replied confirming the matter closed, but the follow-up was never told).
+        const tk = threadKey(msg);
+        if (tk) await upsertThreadMemory(msg.user_id, tk, { related_task_id: newTask.id, last_message_id: msg.id });
       }
     }
     const { error: followupMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
