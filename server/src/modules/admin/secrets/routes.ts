@@ -174,8 +174,8 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
       const key = ctxKey(t);
       if (!railwayCache.has(key)) railwayCache.set(key, await railwayReadVariables(specOf(t)));
     } else if (t.provider === "vercel") {
-      const key = t.target_ref ?? "";
-      if (t.target_ref && !vercelCache.has(key)) {
+      const key = t.target_ref ?? ""; // "" → resolves to the pinned VERCEL_PROJECT_ID
+      if (!vercelCache.has(key)) {
         vercelCache.set(key, await vercelProjectEnvNames(t.target_ref));
       }
     } else if (t.provider === "supabase") {
@@ -220,19 +220,15 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
           }
         }
       } else if (t.provider === "vercel") {
-        if (!t.target_ref) {
-          configured = false;
-          hint = "This Vercel target needs the project id (set it as the target's service id).";
-        } else {
-          const read = vercelCache.get(t.target_ref);
-          if (read) {
-            configured = read.configured;
-            hint = read.hint;
-            providerError = read.error;
-            if (read.names) {
-              present = read.names.includes(t.env_var_name);
-              matches = null; // Vercel values are encrypted — presence only.
-            }
+        // target_ref may be empty — the connector falls back to VERCEL_PROJECT_ID.
+        const read = vercelCache.get(t.target_ref ?? "");
+        if (read) {
+          configured = read.configured;
+          hint = read.hint;
+          providerError = read.error;
+          if (read.names) {
+            present = read.names.includes(t.env_var_name);
+            matches = null; // Vercel values are encrypted — presence only.
           }
         }
       } else if (t.provider === "supabase") {

@@ -1822,7 +1822,7 @@
     "targetRef": "מזהה שירות (רשות)",
     "targetRefPlaceholder": "מזהה שירות Railway — ריק = השירות היחיד",
     "targetRefVercel": "מזהה פרויקט Vercel",
-    "targetRefVercelPlaceholder": "מזהה פרויקט Vercel (חובה)",
+    "targetRefVercelPlaceholder": "רשות — ריק = פרויקט ברירת המחדל של הפלטפורמה",
     "targetRefSupabase": "לא נדרש ל-Supabase",
     "add": "הוסף",
     "removeTarget": "הסר יעד",

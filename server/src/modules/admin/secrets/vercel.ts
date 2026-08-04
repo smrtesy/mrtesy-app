@@ -23,6 +23,22 @@ import {
 
 const API = "https://api.vercel.com";
 
+/**
+ * Resolve the Vercel project id for a target: its own `target_ref` if set,
+ * otherwise the pinned `VERCEL_PROJECT_ID` the platform already holds. This is
+ * the minimum-effort rule — a single-project account never has to re-enter an id
+ * the system already knows. Null only when neither the target nor the env is set.
+ */
+export async function resolveVercelProjectId(targetRef: string | null): Promise<string | null> {
+  const own = typeof targetRef === "string" ? targetRef.trim() : "";
+  if (own) return own;
+  const pinned = await providerSecret("VERCEL_PROJECT_ID");
+  return pinned?.trim() || null;
+}
+
+const NO_PROJECT_HINT =
+  "This Vercel target has no project id — set it on the target, or set VERCEL_PROJECT_ID so it is used by default.";
+
 function targetLabel(target: unknown): string | null {
   if (Array.isArray(target)) return target.join(", ") || null;
   if (typeof target === "string") return target;
@@ -67,10 +83,14 @@ export interface VercelReadResult {
 /** Read the env-var names of ONE Vercel project — for per-target presence in the
  *  managed-secrets mirror. Vercel values are encrypted, so this is presence-only
  *  (no value fingerprint / match). */
-export async function vercelProjectEnvNames(projectId: string): Promise<VercelReadResult> {
+export async function vercelProjectEnvNames(targetRef: string | null): Promise<VercelReadResult> {
   const token = await providerSecret("VERCEL_TOKEN");
   if (!token) {
     return { configured: false, hint: `Set VERCEL_TOKEN under ${SECRET_LOCATION}.` };
+  }
+  const projectId = await resolveVercelProjectId(targetRef);
+  if (!projectId) {
+    return { configured: false, hint: NO_PROJECT_HINT };
   }
   const teamId = await providerSecret("VERCEL_TEAM_ID");
   const teamQ = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
@@ -115,7 +135,7 @@ export interface VercelWriteResult {
  *     target } inherits all settings and rebuilds with the new env.
  */
 export async function vercelUpsertEnv(
-  projectId: string | null,
+  targetRef: string | null,
   envVarName: string,
   value: string,
   environment: string,
@@ -124,12 +144,9 @@ export async function vercelUpsertEnv(
   if (!token) {
     return { ok: false, configured: false, hint: `Set VERCEL_TOKEN under ${SECRET_LOCATION}.` };
   }
+  const projectId = await resolveVercelProjectId(targetRef);
   if (!projectId) {
-    return {
-      ok: false,
-      configured: false,
-      hint: "This Vercel target needs the project id (set it as the target's service id).",
-    };
+    return { ok: false, configured: false, hint: NO_PROJECT_HINT };
   }
   const teamId = await providerSecret("VERCEL_TEAM_ID");
   const teamParam = teamId ? `&teamId=${encodeURIComponent(teamId)}` : "";
