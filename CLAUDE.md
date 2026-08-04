@@ -224,6 +224,17 @@ that flow unless the trigger phrase is present at the start.
 
 ## smrtTask session proposals (Stop hook)
 
+> **DISABLED as of 2026-08-04 (user experiment).** The `Stop` hook entry for
+> `.claude/hooks/smrttask-session-proposal.sh` was **removed from
+> `.claude/settings.json`** at the user's request, to test whether dropping the
+> per-turn summary block makes long console chats feel faster. Consequence
+> while disabled: console sessions no longer file/refresh a smrtTask "הצעה", and
+> there is no safety-net trace either. The hook **scripts are kept in the repo
+> unchanged** — re-enabling is one entry back under `hooks.Stop` in
+> `settings.json` (put it before `longtask-guard.sh`). Do **not** re-add it
+> unless the user asks. Everything below documents the mechanism as it works
+> **when enabled**, for that re-enable.
+
 **Requirement:** every Claude Code chat in this repo must leave a trace in
 smrtTask. When a chat here stops, a "הצעה" (proposal) is filed into the
 user's smrtTask inbox summarizing the session: the topic discussed, where it
