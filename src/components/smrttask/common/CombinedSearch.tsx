@@ -13,6 +13,7 @@ import { SerialBadge } from "@/components/smrttask/common/SerialBadge";
 import { SourceLink } from "@/components/smrttask/common/SourceLink";
 import { TaskDetail } from "@/components/smrttask/tasks/TaskDetail";
 import { EventsPanel } from "@/components/smrttask/tasks/EventsPanel";
+import { useAppAccess } from "@/contexts/AppAccessContext";
 import type { Task } from "@/types/task";
 
 // Rich select so result cards (and the TaskDetail sheet they open) can render
@@ -68,6 +69,9 @@ function splitBuckets(rows: Task[]): Buckets {
 export function CombinedSearch({ locale, onUpdate, children }: CombinedSearchProps) {
   const t = useTranslations("tasks.search");
   const tTasks = useTranslations("tasks");
+  // A project-only ("lite") worker has no calendar/sources, so the events agenda
+  // (which fetches /api/events) doesn't apply to them and would 403. Hide it.
+  const { taskAccess } = useAppAccess();
   const supabase = createClient();
   const [query, setQuery] = useState("");
   const [includeArchive, setIncludeArchive] = useState(false);
@@ -219,10 +223,13 @@ export function CombinedSearch({ locale, onUpdate, children }: CombinedSearchPro
           />
           {t("includeArchive")}
         </label>
-        {/* Events entry point — coming-week agenda, beside the search field. */}
-        <div className="ms-auto">
-          <EventsPanel locale={locale} />
-        </div>
+        {/* Events entry point — coming-week agenda, beside the search field.
+            Hidden for project-only (lite) workers: they have no calendar. */}
+        {taskAccess !== "lite" && (
+          <div className="ms-auto">
+            <EventsPanel locale={locale} />
+          </div>
+        )}
       </div>
 
       {results === null ? (

@@ -1,0 +1,193 @@
+{
+  "_about": "מאגר-הזהב (T3) — 20 פניות-שירות אמיתיות לשירות ai chochom. נכרה מהיסטוריית הפתרונות שבנינו ב-smrtesy (9 אפליקציות + 54 מסמכי-פתרון + 3 תוכניות smrtPlan) לפי קלט T3. כל פתרון-אמת מופה ל'פנייה' בסגנון שחבר-קהילה היה כותב.",
+  "status": "draft_pending_classification_approval",
+  "note_status": "הסיווג (classification) הוא הצעת קלוד בלבד — ההכרעה היא של חנוך. אחרי אישור/תיקון: status=locked, דחיפה ל-main, וסימון T3 כמושלם. הרף המדויק חינם/תשלום נקבע ב-D5/T9; הסיווג כאן הוא אמת-עבודה לבדיקות, ניתן לכיול.",
+  "generated_date": "2026-08-04",
+  "classification_values": {
+    "free": "חינם — פתרון פשוט/טיפ שאפשר לתת מיד",
+    "short": "קצר בתשלום — פתרון ממוקד שדורש חשיבה/הרכבה",
+    "business": "עסקי-מורכב — מערכת/ליווי רב-חלקי"
+  },
+  "cases": [
+    {
+      "id": "shabbos-scheduling",
+      "language": "he",
+      "inquiry": "אני קובע לעצמי משימות ותאריכים, וכל הזמן מגלה שקבעתי משהו על שבת או יום-טוב וצריך להזיז הכל ידני. יש דרך שהמערכת פשוט תדע מתי אסור לי לעבוד?",
+      "classification": "free",
+      "classification_rationale": "הגדרה/טיפ בודד — נותנים מיד.",
+      "solution_summary": "אינטגרציית לוח עברי (hebcal) + ימי-עבודה שמכבדת שבת/חג ומזיזה תאריכים אוטומטית.",
+      "source": "src/lib/hebcal.ts, src/lib/workdays.ts"
+    },
+    {
+      "id": "day-method",
+      "language": "he",
+      "inquiry": "אני מעמיס עשרים משימות ליום ואז לא מסיים כלום ומתייאש. איך יודעים כמה ריאלי לעשות ביום אחד?",
+      "classification": "free",
+      "classification_rationale": "שיטה שאפשר להסביר במשפט — חינם.",
+      "solution_summary": "שיטת 'מהיר·3·1' — כל המשימות המהירות + 3 בינוניות + 1 גדולה ליום; כלי-יום שמרכיב יום ריאלי.",
+      "source": "docs/day-tools-plan.md"
+    },
+    {
+      "id": "hebrew-dictation",
+      "language": "he",
+      "inquiry": "אני חושב הרבה יותר מהר ממה שאני מקליד, בטח בעברית עם מקלדת מבלבלת. אני רק רוצה לדבר ושזה יֵצא כתוב נכון.",
+      "classification": "free",
+      "classification_rationale": "המלצת-כלי + הגדרה — חינם.",
+      "solution_summary": "הכתבה/תמלול קולי לעברית עם מעבר-ליטוש שהופך דיבור לטקסט מסודר.",
+      "source": "commit df11594 dictation-tidy-pass, מסך /transcription-experiment"
+    },
+    {
+      "id": "daily-summary",
+      "language": "he",
+      "inquiry": "בסוף היום אני לא זוכר מה בעצם עשיתי ולא יודע אם התקדמתי או רק כיביתי שריפות. אני צריך שמשהו יסכם לי את היום.",
+      "classification": "short",
+      "classification_rationale": "דורש חיבור למקור-המשימות — פתרון ממוקד.",
+      "solution_summary": "דוח-יומי אוטומטי שמרכיב סיכום של מה נסגר/קרה ומה בוער למחר, מעל מערכת המשימות.",
+      "source": "docs/daily-report-plan.md, מסכי /daily-report /day-tools"
+    },
+    {
+      "id": "schedule-free-day",
+      "language": "he",
+      "inquiry": "כשאני דוחף משימה גדולה להיום והיום כבר מלא, אני נתקע — אין לי דרך פשוטה להגיד 'תעשה את זה ביום חמישי הבא' ולראות מתי יש לי מקום.",
+      "classification": "short",
+      "classification_rationale": "הרכבה סביב לוח-הימים — ממוקד.",
+      "solution_summary": "תאריך-עבודה לכל משימה בינונית/גדולה + לוח ימים שמראה עומס ומאפשר לשבץ ליום עתידי פנוי.",
+      "source": "docs/task-scheduling-calendar-plan.md"
+    },
+    {
+      "id": "non-generic-design",
+      "language": "he",
+      "inquiry": "כל דבר שאני מעצב יוצא נראה גנרי כמו תבנית שכולם משתמשים בה. אני רוצה משהו ייחודי שמדבר לקהילה שלי, אבל אין לי עין של מעצב.",
+      "classification": "short",
+      "classification_rationale": "סשן ייעוץ קצר סביב כלי — ממוקד.",
+      "solution_summary": "מחולל רעיונות-עיצוב לא-גנריים לפי מתודולוגיית-עיגון, עם גלריה ואפשרות 'בחר-מכל-אחד' למיזוג.",
+      "source": "docs/smrtdesign-plan.md, docs/design-process.md"
+    },
+    {
+      "id": "workclock-ritual",
+      "language": "he",
+      "inquiry": "היום שלי מתפזר לי בין האצבעות — אני מתחיל בלי כיוון, נשאב לדברים, ופתאום נגמר היום בלי שהתקדמתי בעיקר. אני צריך מבנה ליום שלם.",
+      "classification": "business",
+      "classification_rationale": "מערכת התנהגותית רב-חלקית — עסקי.",
+      "solution_summary": "'שעון עבודה' — טקס בוקר מודרך שקובע פוקוס, שעון-על שרץ כל היום, ומצב ריצה עם הגבלות-זמן מסלימות עד סגירת יום.",
+      "source": "docs/workclock-plan.md"
+    },
+    {
+      "id": "goal-to-plan",
+      "language": "he",
+      "inquiry": "יש לי מטרה גדולה בראש — פרויקט שלם — אבל אני לא יודע מאיפה להתחיל ובאיזה סדר לעשות את הדברים, וזה משתק אותי.",
+      "classification": "business",
+      "classification_rationale": "ליווי פרויקט מקצה-לקצה — עסקי-מורכב.",
+      "solution_summary": "מנוע-תכנון שמפרק מטרה לשלבים ומשימות עם מטריצת-תלויות ולוחות-זמנים.",
+      "source": "אפליקציית smrtplan, docs/smrtplan-overview.md"
+    },
+    {
+      "id": "content-studio",
+      "language": "he",
+      "inquiry": "אני צריך להפיק תוכן לקהילה — הקראה קולית, תמונות, אפילו סרטון — אבל אין לי תקציב לאולפן ולא ידע טכני להפיק לבד.",
+      "classification": "business",
+      "classification_rationale": "הקמת צינור-הפקה — עסקי.",
+      "solution_summary": "סטודיו-תוכן שמנהל צינור מלא (פרויקט→סקריפט→קול/תמונה/וידאו) דרך מנוע ה-AI, עם קטלוג מודלים.",
+      "source": "אפליקציית smrtstudio, docs/studio-build-plan.md"
+    },
+    {
+      "id": "facts-buried",
+      "language": "he",
+      "inquiry": "כל המידע החשוב — מספרי טלפון, כתובות, פרטים על אנשים — קבור לי אי-שם בתוך אלפי הודעות, ואני מחפש שוב ושוב את אותם דברים.",
+      "classification": "business",
+      "classification_rationale": "חילוץ עובדות + אינדוקס מתמשך — מערכת.",
+      "solution_summary": "מרכז מידע (smrtInfo) שמחלץ עובדות רלוונטיות אוטומטית מכל מה שנקלט (בלי זבל) לאינדקס אחד שאפשר לשאול.",
+      "source": "docs/info-center-plan.md, אפליקציית smrtinfo"
+    },
+    {
+      "id": "quick-ai-question",
+      "language": "en",
+      "inquiry": "I have one small question about how AI could help me with a specific thing at work. I don't want to book a meeting or pay for anything — I just need a simple answer I can apply right now.",
+      "classification": "free",
+      "classification_rationale": "A single quick answer — free.",
+      "solution_summary": "Free path: smart form to an immediate solution plus an email, with a behind-the-scenes human-review mode.",
+      "source": "תוכנית 'בניית שרות יעוץ', משימה 'מסלול החינם'"
+    },
+    {
+      "id": "pre-push-habit",
+      "language": "en",
+      "inquiry": "I keep shipping code and only find out later that something broke. I don't have a consistent habit of checking things before I send it out.",
+      "classification": "free",
+      "classification_rationale": "A checklist/tip handed over as-is — free.",
+      "solution_summary": "A short, fixed pre-push checklist you drop into any project as an instructions file and run before every push.",
+      "source": "docs/pre-push-protocol.md"
+    },
+    {
+      "id": "sms-self-notes",
+      "language": "en",
+      "inquiry": "I text myself reminders to my own number when something pops into my head on the go, just like I do on WhatsApp. But those notes just vanish and never become a task — I sent 8 in a row and none of them got picked up.",
+      "classification": "short",
+      "classification_rationale": "Focused capture fix — short.",
+      "solution_summary": "Detect an SMS the user sends to their own number as a task-note and ingest it into the task pipeline like a WhatsApp note.",
+      "source": "docs/sms-self-note-capture-plan.md"
+    },
+    {
+      "id": "dedup-and-link",
+      "language": "en",
+      "inquiry": "The same to-do lands on my list two or three times because several people messaged me about it, and I can't tell which project each thing belongs to.",
+      "classification": "short",
+      "classification_rationale": "Focused dedup + linking logic — short.",
+      "solution_summary": "Update an existing task instead of creating a duplicate when a new message touches the same matter, plus auto-link tasks to projects.",
+      "source": "docs/plan-2a-2b-flow.md"
+    },
+    {
+      "id": "forgot-followup",
+      "language": "en",
+      "inquiry": "I ask someone to get back to me or handle something, then forget about it completely — and only two weeks later I remember that nobody ever closed the loop.",
+      "classification": "short",
+      "classification_rationale": "Focused reminder/follow-up logic — short.",
+      "solution_summary": "A follow-up mechanism that spots open requests still waiting on a real-world outcome and brings them back to you.",
+      "source": "docs/pending-outcome-followup-plan.md"
+    },
+    {
+      "id": "key-chaos",
+      "language": "en",
+      "inquiry": "I've got API keys and passwords scattered across notes and emails, and every time I change one I forget where else it's set and something breaks.",
+      "classification": "short",
+      "classification_rationale": "Focused one-time setup — short.",
+      "solution_summary": "A managed-secrets registry — add a key once, store it in the vault, and auto-propagate to every target with drift tracking.",
+      "source": "docs/managed-secrets-plan.md, אפליקציית smrtvault"
+    },
+    {
+      "id": "messages-to-tasks",
+      "language": "en",
+      "inquiry": "All day long requests pour in — someone on WhatsApp, another email, a text — and without noticing, things fall through the cracks and I forget what people asked me to do.",
+      "classification": "business",
+      "classification_rationale": "Multi-source extraction pipeline — business.",
+      "solution_summary": "An engine that auto-extracts tasks from Gmail/WhatsApp/Drive/Calendar/SMS into one review-ready list.",
+      "source": "אפליקציית smrttask, docs/tasks-unification-spec.md"
+    },
+    {
+      "id": "find-anything",
+      "language": "en",
+      "inquiry": "I know I talked about something somewhere — an email, a task, a note — but I don't remember the exact word, and normal search never finds it.",
+      "classification": "business",
+      "classification_rationale": "Cross-system semantic index — business.",
+      "solution_summary": "One semantic search across the whole system that finds things by meaning, not word-overlap, grouped in a single tab.",
+      "source": "docs/global-search-plan.md, search_documents"
+    },
+    {
+      "id": "kids-video",
+      "language": "en",
+      "inquiry": "There's almost no quality animated content for our kids that speaks our language and our values — they end up watching foreign stuff. I dream of a weekly 10-12 minute kids drama series, with recurring characters they know, in Hebrew and English.",
+      "classification": "business",
+      "classification_rationale": "Full production pipeline / ongoing project — business.",
+      "solution_summary": "An AI video-production pilot: 3D, character consistency, lipsync, Hebrew text layers — for a weekly kids drama.",
+      "source": "תוכנית 'פיילוט וידאו ילדים ב-AI' (video-lab)"
+    },
+    {
+      "id": "screen-applicants",
+      "language": "en",
+      "inquiry": "I posted a job and got a pile of applicants — I can't read them all seriously, and I'm afraid I'll hire the wrong person because I missed the good ones.",
+      "classification": "business",
+      "classification_rationale": "Multi-step hiring system — business.",
+      "solution_summary": "A screening rubric + scoring table and a skill that auto-ranks applicants, with a paid trial task and blind ranking to pick the top 3.",
+      "source": "תוכנית 'גיוס אסטרטג-מפעיל שיווק US'"
+    }
+  ]
+}

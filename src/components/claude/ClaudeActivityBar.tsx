@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { Bot, Check, ChevronDown, ChevronUp, X, AlertTriangle } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { OpenTabLink } from "@/components/platform/layout/OpenTabLink";
+import { useAppAccess } from "@/contexts/AppAccessContext";
 import { cn } from "@/lib/utils";
 
 /**
@@ -57,6 +58,11 @@ function readSeen(): number {
 export function ClaudeActivityBar() {
   const t = useTranslations("claudeActivity");
   const locale = useLocale();
+  // The bar is a super-admin/console affordance. Gate the FETCH on it too (not
+  // just the render): a non-admin member — e.g. a project-only worker — would
+  // otherwise fire /api/claude/runs and log a 403 in the browser console on
+  // every tasks visit. No admin flag → no request, no noise.
+  const { isAdmin } = useAppAccess();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [seenTs, setSeenTs] = useState<number>(0);
   const [open, setOpen] = useState(false);
@@ -78,16 +84,16 @@ export function ClaudeActivityBar() {
   }, []);
 
   useEffect(() => {
-    if (!available) return;
+    if (!available || !isAdmin) return;
     void load();
     const id = setInterval(() => {
       if (typeof document === "undefined" || document.visibilityState === "visible") void load();
     }, POLL_MS);
     return () => clearInterval(id);
-  }, [load, available]);
+  }, [load, available, isAdmin]);
 
   const unseen = runs.filter((r) => Date.parse(r.ended_at!) > seenTs);
-  if (!available || unseen.length === 0) return null;
+  if (!isAdmin || !available || unseen.length === 0) return null;
 
   const newest = unseen[0];
   const timeFmt = new Intl.DateTimeFormat(locale === "en" ? "en-US" : "he-IL", {

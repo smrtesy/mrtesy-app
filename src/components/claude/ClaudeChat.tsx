@@ -402,6 +402,24 @@ export function ClaudeChat() {
     screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
   }, [screenSearch, screenRouter, screenPathname, resetToNewChat]);
 
+  // The mobile Claude button opens the THREAD LIST (rail), not a new chat:
+  // /claude?list=<timestamp> → open the rail. Keyed on the VALUE (like ?new)
+  // so every tap re-opens it even if the user already closed it. The
+  // continue-where-you-left-off effect still runs underneath; on mobile the
+  // rail is a full-screen overlay so it covers that chat until the user picks
+  // one. Consumed out of the URL so it doesn't re-fire on reload.
+  const listParamRef = useRef<string | null>(null);
+  useEffect(() => {
+    const wantList = screenSearch.get("list");
+    if (!wantList || wantList === listParamRef.current) return;
+    listParamRef.current = wantList;
+    setListOpen(true);
+    const params = new URLSearchParams(screenSearch.toString());
+    params.delete("list");
+    const q = params.toString();
+    screenRouter.replace(q ? `${screenPathname}?${q}` : screenPathname);
+  }, [screenSearch, screenRouter, screenPathname]);
+
   /** The inspect-mode seed: the user marked an element somewhere in the app and
    *  landed here. Applied from sessionStorage on mount (the chat wasn't open when
    *  the mark happened) AND from a live window event (it was — a mount-time read

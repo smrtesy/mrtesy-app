@@ -73,10 +73,14 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   the turn to check `git log`/DB state before repeating side effects. (5) A run
   killed by the SUBSCRIPTION USAGE LIMIT is parked `queued` with
   `error='usage-limit-wait:[until=<iso>; ]…'` (runner `USAGE_LIMIT_SENTINEL`).
-  When the CLI's message names the reset moment (`parseUsageResetTime`: epoch
-  after a pipe / ISO near "reset" / "resets at 3am (Zone)"), the recoverer
-  SLEEPS until it (+60s) and the screen shows the time (NY, `live.usageWaitUntil`);
-  otherwise it probes every ~15 min. Never consumes `resume_attempts`; gives up
+  Detection (`detectUsageLimit`/`USAGE_LIMIT_RE`) matches BOTH the old wording
+  ("Claude … usage limit reached" / "limit will reset") and the current CLI
+  form ("You've hit your weekly|session limit · resets …") — kept narrow to
+  "your weekly|session|usage limit" so an ordinary API rate-limit line is never
+  parked. When the message names the reset moment (`parseUsageResetTime`: epoch
+  after a pipe / ISO near "reset" / dated "resets Aug 5, 10am (Zone)" / time-only
+  "resets [at] 3am (Zone)"), the recoverer SLEEPS until it (+60s) and the screen
+  shows the time (NY, `live.usageWaitUntil`); otherwise it probes every ~15 min. Never consumes `resume_attempts`; gives up
   6h past a known reset, 24h for blind parks, 3 days absolute. (6) Signed attachment URLs are cached in-process
   (`signedUrlFor`). (7) Thread-GET event cap keeps the NEWEST 400 per turn.
   (8) `CLAUDE_WORKSPACE_ROOT` relocates thread workspaces (point it at a Railway
