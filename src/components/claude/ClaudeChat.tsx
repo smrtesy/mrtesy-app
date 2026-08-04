@@ -1231,7 +1231,14 @@ export function ClaudeChat() {
             {listOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
           </Button>
 
-          {renaming !== null ? (
+          {embedded ? (
+            // In the drawer, the slim header ABOVE the iframe already shows the
+            // thread title (bridged via `claude-chat:title`). Rendering the title
+            // again here produced the redundant double placeholder the user saw —
+            // "שיחה חדשה" over "ללא כותרת". Drop the internal title in embed; keep a
+            // flex spacer so the rail toggle and the account/config controls stay put.
+            <div className="min-w-0 flex-1" />
+          ) : renaming !== null ? (
             <Input
               autoFocus
               value={renaming}
