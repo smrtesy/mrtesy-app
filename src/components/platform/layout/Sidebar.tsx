@@ -366,11 +366,9 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
       {/* Floating account avatar on mobile — sits in the top-end corner of
           the viewport and overlays the page area without consuming a
-          dedicated header row. Next to it (admin-only) the same F/B/DB
-          system-status dots the desktop sidebar shows, so the deploy/DB
-          health is visible on mobile too. */}
+          dedicated header row. (The F/B/DB system-status dots live inside the
+          "עוד" bottom sheet, not here — kept off the always-on chrome.) */}
       <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40 flex items-center gap-2">
-        {isAdmin && <SystemStatusStrip interactive />}
         <UserAvatarLink size="sm" />
       </div>
 
@@ -686,7 +684,12 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
         <SheetContent side="bottom" className="flex max-h-[85vh] flex-col rounded-t-xl pb-[env(safe-area-inset-bottom)]">
           <SheetHeader className="shrink-0">
-            <SheetTitle className="text-start">{t("more")}</SheetTitle>
+            {/* "עוד" title on the (RTL) start/right; admin-only F/B/DB status
+                dots on the end/left of the same row — tap them for details. */}
+            <div className="flex items-center justify-between gap-2">
+              <SheetTitle className="text-start">{t("more")}</SheetTitle>
+              {isAdmin && <SystemStatusStrip interactive />}
+            </div>
           </SheetHeader>
           <div className="mt-4 min-h-0 flex-1 space-y-1 overflow-y-auto pb-2">
             {moreSections.map((section, i) => (
