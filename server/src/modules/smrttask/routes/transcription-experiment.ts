@@ -464,7 +464,9 @@ function audioExtForMime(mime: string | null | undefined): string {
 // a router with side effects and exporting an internal helper would
 // pull along its module initialization.
 async function downloadMetaMediaById(mediaId: string, token: string): Promise<{ base64: string; mimeType: string }> {
-  const apiVersion = (await getAppSecret("smrttask", "META_API_VERSION", "META_API_VERSION")) || "v23.0";
+  // v25.0 — the only version DualHook's proxy relays (older versions 404); also
+  // valid direct-to-Meta. See docs/whatsapp-dualhook-outbound-migration.md.
+  const apiVersion = (await getAppSecret("smrttask", "META_API_VERSION", "META_API_VERSION")) || "v25.0";
   const base = whatsappApiBase();
   const bearer = whatsappBearer(token);
   const metaRes = await fetch(`${base}/${apiVersion}/${mediaId}`, {

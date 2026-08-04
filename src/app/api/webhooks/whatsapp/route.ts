@@ -401,7 +401,9 @@ async function resolveConnection(
 }
 
 async function getMetaApiVersion(db: SupabaseAdmin): Promise<string> {
-  return (await getAppSecret(db, "smrttask", "META_API_VERSION", "META_API_VERSION")) ?? "v21.0";
+  // v25.0 — the only version DualHook's proxy relays (older versions 404); also
+  // valid direct-to-Meta. See docs/whatsapp-dualhook-outbound-migration.md.
+  return (await getAppSecret(db, "smrttask", "META_API_VERSION", "META_API_VERSION")) ?? "v25.0";
 }
 
 /**

@@ -11,7 +11,10 @@
 import { metaErrorSummary } from "../../lib/meta-errors";
 import { whatsappApiBase, whatsappBearer } from "../../lib/whatsapp-endpoint";
 
-const META_API_VERSION = "v23.0";
+// v25.0 — the only version DualHook's proxy relays (older versions 404 on
+// api.dualhook.com); v25.0 is also valid direct-to-Meta. See
+// docs/whatsapp-dualhook-outbound-migration.md.
+const META_API_VERSION = "v25.0";
 const MIN_GAP_MS = 500; // minimum gap between messages on the same number
 const MAX_RETRIES = 3;
 
