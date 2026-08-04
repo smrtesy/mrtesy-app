@@ -315,6 +315,50 @@ This overrides the "never push to a different branch without explicit
 permission" line in the harness's git-branch instructions — that explicit
 permission is now standing for `main`.
 
+## Deploy queue — server/** changes ship through `scripts/ship.sh` (mrtesy-app only)
+
+**This section is mrtesy-app-specific** — it does NOT sync to the other two
+repos, because it exists for one problem only this repo has: the in-app Claude
+console runner lives inside the Railway `server/` process, and every push to
+`main` that touches `server/**` redeploys that process, which `SIGTERM`s every
+other live console run. Frontend/docs pushes don't redeploy the backend, so
+they're unaffected. Full design: `docs/claude-console/deploy-queue-plan.md`.
+
+**Do not push `main` by hand — call the shipping gate.** Once the pre-push
+protocol below is clean on your feature branch, ship with:
+
+```
+scripts/ship.sh <feature-branch> [title]
+```
+
+`ship.sh` makes the deterministic membership decision
+(`git diff --name-only origin/main...HEAD | grep '^server/'`) and does the right
+thing:
+
+| Condition | What `ship.sh` does |
+|---|---|
+| `DEPLOY_QUEUE_ENABLED=1` **and** diff touches `server/**` | Pushes the **branch**, POSTs `/claude-deploy/mark-ready`, and stops — `main` is untouched. A background coordinator merges the whole `ready` batch and redeploys **once**. |
+| flag off, **or** no `server/**` change (frontend/docs) | Today's `--no-ff` merge into `main` + push — exactly the shared workflow above. |
+
+**The flag gates everything.** `DEPLOY_QUEUE_ENABLED` is a Railway env var on the
+backend service (currently **unset**). While unset, `ship.sh` always takes the
+direct-push path and the whole feature is inert — nothing queues, nothing waits.
+Flip it to `1` in Railway → Variables to arm the queue (that also arms the phase-3
+coordinator).
+
+**Pre-push protocol ordering, for server changes:** run the **full** pre-push
+protocol on the feature branch **before** calling `ship.sh` — i.e. before the fix
+enters the queue, not before a push to `main`. Only a clean branch should reach
+`mark-ready` (`ready`); the coordinator adds one integration build on the merged
+batch, it does not re-run each fix's review. Frontend/docs are unchanged: protocol,
+then `ship.sh` pushes straight to `main`.
+
+**Backstop hook.** `.claude/hooks/deploy-gate.sh` (PreToolUse on Bash) blocks a
+manual `git push origin main` that carries a `server/**` change while the flag is
+on, and tells you to use `ship.sh` instead. It is inert with the flag off. It
+only catches a hand-push that bypasses `ship.sh` — the script is the real gate.
+Emergency bypass: `DEPLOY_GATE_SKIP=1 git push …`.
+
 ## Pre-push review protocol — non-negotiable
 
 Before `git push` on any branch with non-trivial changes (anything beyond a
