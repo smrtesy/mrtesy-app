@@ -264,6 +264,29 @@ async function upsertThreadMemory(userId: string, key: string, fields: Partial<T
   if (threadMemoryUpsertError) console.error("thread_memory upsert failed:", threadMemoryUpsertError);
 }
 
+// A follow-up tracker claiming its thread's memory pointer must NOT steal it
+// from a DIFFERENT, still-open, non-tracker task — every `gmail_sent` message
+// on a thread routes through check_followup (preclassify.ts) regardless of
+// whether that thread already has a real task, so a "just checking in" nudge
+// on an existing matter must not cut that matter off from real-time reply
+// linking (Path 1, ~3251) by redirecting the thread to the new tracker.
+// Verified in code, not guessed: only claim when there's nothing there, it's
+// already this tracker, or whatever it points to is stale (closed) or itself
+// a follow-up (the re-anchor case already replaces one tracker with another).
+async function claimThreadForFollowup(userId: string, key: string, trackerTaskId: string, lastMessageId: string) {
+  const existing = await loadThreadMemory(userId, key);
+  if (existing?.related_task_id && existing.related_task_id !== trackerTaskId) {
+    const { data: other } = await supabase
+      .from("tasks").select("status, task_type")
+      .eq("id", existing.related_task_id).eq("user_id", userId).maybeSingle();
+    const otherIsLiveAndDistinct = !!other
+      && other.task_type !== "followup"
+      && !["completed", "dismissed", "archived"].includes(String(other.status));
+    if (otherIsLiveAndDistinct) return;
+  }
+  await upsertThreadMemory(userId, key, { related_task_id: trackerTaskId, last_message_id: lastMessageId });
+}
+
 interface ThreadAnalysis {
   classification: "actionable" | "informational" | "spam";
   reason: string;
@@ -2876,6 +2899,11 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
             actor: "system",
           });
           if (reanchorActivityError) console.error("task_activities re-anchor insert failed:", reanchorActivityError);
+          // Keep thread_memory pointed at the tracker so a reply on this thread
+          // is recognized in real time by Path 1 (line ~3251) instead of only at
+          // the 48h wake — see the sibling comment at the create branch below.
+          const reanchorTk = threadKey(msg);
+          if (reanchorTk) await claimThreadForFollowup(msg.user_id, reanchorTk, threadFu.id, msg.id);
         }
         const { error: followupMsgReanchorError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
         if (followupMsgReanchorError) console.error("source_messages followup re-anchor update failed:", followupMsgReanchorError);
@@ -2903,6 +2931,14 @@ async function processMessage(msg: any, settings: any, sys: SystemParams) {
           actor: "system",
         });
         if (followupCreatedActivityError) console.error("task_activities insert failed:", followupCreatedActivityError);
+        // Register thread memory for the tracker, exactly like every other task
+        // creation path already does (line ~2708). Without this, a reply on the
+        // thread finds no thread_memory row, Path 1's real-time link+auto-close
+        // (line ~3251, ~1231) never fires, and the reply spins off an unrelated
+        // new task while the tracker sits open forever (the T1832/S258 bug: DSS
+        // replied confirming the matter closed, but the follow-up was never told).
+        const tk = threadKey(msg);
+        if (tk) await claimThreadForFollowup(msg.user_id, tk, newTask.id, msg.id);
       }
     }
     const { error: followupMsgUpdateError } = await supabase.from("source_messages").update({ processing_status: "processed", ai_classification: "actionable_followup", processed_at: new Date().toISOString(), processing_lock_at: null }).eq("id", msg.id);
