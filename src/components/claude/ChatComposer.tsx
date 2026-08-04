@@ -51,7 +51,9 @@ const MIN_ROWS_PX = 76;
 // drafts) keyed by thread id — "new" before the thread exists; ClaudeChat carries
 // that "new" draft onto the real id the moment ensureThread mints one.
 const DRAFT_PREFIX = "claude:draft:";
-const draftKey = (id: string | null) => `${DRAFT_PREFIX}${id ?? "new"}`;
+/** Exported so ClaudeChat.ensureThread migrates the "new" draft under the SAME key
+ *  scheme — one source of truth for the storage key. */
+export const draftKey = (id: string | null) => `${DRAFT_PREFIX}${id ?? "new"}`;
 
 export interface StagedAttachment {
   id: string;
@@ -136,6 +138,11 @@ export function ChatComposer({
   // has run once, so the save effect below can't persist an empty initial render
   // over a real stored draft.
   const loadedForRef = useRef<string | null | undefined>(undefined);
+  // The save effect must skip its very first run: on mount it fires once with the
+  // empty initial `text` while the load effect has already set loadedForRef, which
+  // would momentarily delete a stored draft (delete-then-rewrite). Skipping the
+  // first run leaves that write to the load's setText or the user's next keystroke.
+  const firstSaveRef = useRef(true);
 
   // Load this chat's draft into the box when the active chat changes (and on
   // mount). Placed BEFORE the seed effect so a stored draft is never clobbered by
@@ -159,6 +166,10 @@ export function ChatComposer({
   // saved draft, and keyed off loadedForRef — not threadId — so a chat switch
   // writes under the chat the text actually belongs to, never the one just left.
   useEffect(() => {
+    if (firstSaveRef.current) {
+      firstSaveRef.current = false;
+      return;
+    }
     const id = loadedForRef.current;
     if (id === undefined) return;
     try {

@@ -51,7 +51,7 @@ import { cn } from "@/lib/utils";
 import { isEmbeddedPane } from "@/lib/navigate";
 import { AnswerContent } from "./interactive/AnswerContent";
 import { CopyButton } from "@/components/common/CopyButton";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, draftKey } from "./ChatComposer";
 import { PlaybookList } from "./PlaybookList";
 import { RepoPicker } from "./RepoPicker";
 import { StandingInstructions } from "./StandingInstructions";
@@ -916,13 +916,13 @@ export function ClaudeChat() {
       // Carry the "new chat" draft onto the real id, synchronously and BEFORE
       // setActiveId, so text typed before the thread existed (typed, then attached
       // a file) stays with this conversation instead of vanishing when the
-      // composer reloads its draft under the new id. Keys mirror ChatComposer's
-      // draftKey(); kept inline to avoid a shared-module import for two strings.
+      // composer reloads its draft under the new id. Uses ChatComposer's shared
+      // draftKey() so both sides agree on the storage key scheme.
       try {
-        const draft = localStorage.getItem("claude:draft:new");
+        const draft = localStorage.getItem(draftKey(null));
         if (draft != null) {
-          localStorage.setItem(`claude:draft:${created.id}`, draft);
-          localStorage.removeItem("claude:draft:new");
+          localStorage.setItem(draftKey(created.id), draft);
+          localStorage.removeItem(draftKey(null));
         }
       } catch {
         /* storage unavailable — the draft simply isn't carried over */
