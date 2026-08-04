@@ -1205,7 +1205,7 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
   try {
     const { data: thread } = await db
       .from("claude_threads")
-      .select("id, title, title_source, task_serial")
+      .select("id, title, title_source, task_serial, claude_account")
       .eq("id", threadId)
       .eq("org_id", orgId)
       .maybeSingle();
@@ -1260,9 +1260,16 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
     ].join("\n");
 
     // Trivial/mechanical (a ≤6-word title) → fast model. Never a judgment.
+    // Run on the THREAD'S OWN account, not the hardcoded primary: a title one-shot
+    // that always hit `primary` failed silently for every thread whenever primary
+    // exhausted its weekly subscription limit — even though the thread itself runs
+    // fine on another account (e.g. ai3) that still has quota. The title belongs on
+    // the same subscription as the conversation it names. A null account resolves to
+    // primary in loadAccountToken, exactly as before.
     const raw = await runOneShot(prompt, {
       timeoutMs: 60_000,
       model: BG_MODEL_FAST,
+      account: thread.claude_account ?? undefined,
       label: "thread-title",
     });
     if (!raw) return;
