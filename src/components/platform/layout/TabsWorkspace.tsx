@@ -28,6 +28,14 @@ function isWhatsAppTab(tab: WorkspaceTab): boolean {
   return path.endsWith("/whatsapp");
 }
 
+/** True if the tab is the Claude console pane. Pinned to the physical-left edge
+ *  (just inside WhatsApp) so it reads as a narrow companion — see orderedTabs
+ *  and companionSourceFraction in TabsWorkspaceContext. */
+function isClaudeTab(tab: WorkspaceTab): boolean {
+  const path = tab.href.split("?")[0].split("#")[0].replace(/\/+$/, "");
+  return path.endsWith("/claude");
+}
+
 /**
  * Resolve each EXPANDED pane's width as a fraction (0..1) of the space left for
  * expanded panes (rails are fixed-width and excluded from this).
@@ -242,9 +250,17 @@ export function TabsWorkspace() {
   const orderedTabs = useMemo(() => {
     if (tabs.length < 2) return tabs;
     const wa = tabs.filter(isWhatsAppTab);
-    if (wa.length === 0) return tabs;
-    const rest = tabs.filter((tab) => !isWhatsAppTab(tab));
-    return isRtl ? [...rest, ...wa] : [...wa, ...rest];
+    const claude = tabs.filter(isClaudeTab);
+    if (wa.length === 0 && claude.length === 0) return tabs;
+    const rest = tabs.filter((tab) => !isWhatsAppTab(tab) && !isClaudeTab(tab));
+    // Both pin to the physical-LEFT edge, with WhatsApp furthest left and Claude
+    // just inside it (user decision). The panes are a flex row that follows the
+    // page direction, so the physical-left edge is the LAST DOM child in RTL and
+    // the FIRST in LTR — the pinned pair's DOM order flips with direction to keep
+    // WhatsApp on the very edge either way.
+    return isRtl
+      ? [...rest, ...claude, ...wa]
+      : [...wa, ...claude, ...rest];
   }, [tabs, isRtl]);
 
   // Maximized: render only that pane. The others stay open (and keep their
