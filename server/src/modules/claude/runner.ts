@@ -453,14 +453,17 @@ export const USAGE_UNTIL_RE = /^usage-limit-wait:until=([0-9TZ:.+-]+);/;
 /**
  * Extract the usage-window reset time from the CLI's failure text, when present.
  *
- * Three shapes are recognized (most-specific first):
+ * Shapes recognized (most-specific first):
  *   1. "…usage limit reached|1750000000" — a unix epoch (s or ms) after a pipe,
  *      the API's machine-readable form.
  *   2. An ISO timestamp within a few words of "reset".
- *   3. "…resets at 3am (America/New_York)" / "…reset at 11:30pm (Asia/Jerusalem)"
- *      — a wall-clock time in a named zone; resolved to the NEXT instant whose
- *      wall clock in that zone matches (minute-step scan over 26h — exact, and
- *      immune to DST/offset arithmetic mistakes).
+ *   3. Dated wall-clock: "resets Aug 5, 10am (UTC)" — a month/day/time in a named
+ *      zone (a WEEKLY reset can be days out; scanned over 8 days).
+ *   4. Time-only wall-clock: "resets 5am (UTC)" / "resets at 3am (America/New_York)"
+ *      — the "at" is optional (the current CLI drops it); scanned over 26h.
+ *
+ * Shapes 3–4 resolve to the NEXT instant whose wall clock in that zone matches
+ * (minute-step scan — exact, and immune to DST/offset arithmetic mistakes).
  *
  * Returns null for anything else, or for a value outside (now-5min, now+8d) —
  * a nonsense parse must not schedule a retry into next year. Null simply means
@@ -476,7 +479,7 @@ export function parseUsageResetTime(text: string, nowMs = Date.now()): Date | nu
   };
 
   // Each pattern FALLS THROUGH on a rejected value (clamp null), so a stray
-  // 10-digit id after a pipe cannot mask a perfectly good "resets at …" later
+  // 10-digit id after a pipe cannot mask a perfectly good "resets …" later
   // in the same text.
   const epoch = text.match(/\|\s*(\d{10,13})\b/);
   if (epoch) {
@@ -496,16 +499,30 @@ export function parseUsageResetTime(text: string, nowMs = Date.now()): Date | nu
     if (d) return d;
   }
 
-  const wall = text.match(/resets?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i);
-  if (wall) {
-    let hour = Number(wall[1]) % 12;
-    if (wall[3].toLowerCase() === "pm") hour += 12;
-    const minute = wall[2] ? Number(wall[2]) : 0;
-    const zone = wall[4].trim();
+  const hourOf = (h: string, ap: string): number => {
+    let hour = Number(h) % 12;
+    if (ap.toLowerCase() === "pm") hour += 12;
+    return hour;
+  };
+
+  // Scan forward minute-by-minute for the first instant whose wall clock in
+  // `zone` matches the given components. month/day are optional (a time-only
+  // reset scans 26h; a dated one scans 8 days — a weekly reset can be days out).
+  // We ASK Intl what the wall clock is at each instant, so DST/offset arithmetic
+  // is never done by hand.
+  const scanZone = (
+    zone: string,
+    hour: number,
+    minute: number,
+    month: number | null,
+    day: number | null,
+  ): Date | null => {
     let fmt: Intl.DateTimeFormat;
     try {
       fmt = new Intl.DateTimeFormat("en-US", {
         timeZone: zone,
+        month: "numeric",
+        day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
@@ -513,24 +530,86 @@ export function parseUsageResetTime(text: string, nowMs = Date.now()): Date | nu
     } catch {
       return null; // an unknown zone name — don't guess
     }
-    // Scan forward one minute at a time (≤26h ≈ 1560 checks, microseconds of
-    // work) for the first instant whose wall clock in `zone` matches.
+    const horizonMin = month !== null ? 8 * 24 * 60 : 26 * 60;
     const start = Math.ceil(nowMs / 60_000) * 60_000;
-    for (let t = start; t <= start + 26 * 60 * 60 * 1000; t += 60_000) {
-      const parts = fmt.formatToParts(new Date(t));
-      const h = Number(parts.find((p) => p.type === "hour")?.value);
-      const m = Number(parts.find((p) => p.type === "minute")?.value);
-      if ((h % 24) === hour && m === minute) return clamp(new Date(t));
+    for (let i = 0; i <= horizonMin; i++) {
+      const parts = fmt.formatToParts(new Date(start + i * 60_000));
+      const get = (ty: string): number => Number(parts.find((p) => p.type === ty)?.value);
+      if ((get("hour") % 24) !== hour || get("minute") !== minute) continue;
+      if (month !== null && get("month") !== month + 1) continue;
+      if (day !== null && get("day") !== day) continue;
+      return clamp(new Date(start + i * 60_000));
+    }
+    return null;
+  };
+
+  const MONTHS: Record<string, number> = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  };
+
+  // 3. Dated wall-clock: "resets Aug 5, 10am (UTC)" / "reset Aug 5 at 10:30pm (Zone)".
+  const dated = text.match(
+    /resets?\s+(?:at\s+)?([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i,
+  );
+  if (dated) {
+    const mon = MONTHS[dated[1].slice(0, 3).toLowerCase()];
+    if (mon !== undefined) {
+      const d = scanZone(
+        dated[6].trim(),
+        hourOf(dated[3], dated[5]),
+        dated[4] ? Number(dated[4]) : 0,
+        mon,
+        Number(dated[2]),
+      );
+      if (d) return d;
     }
   }
+
+  // 4. Time-only wall-clock ("at" optional): "resets 5am (UTC)" / "resets at 3am (Zone)".
+  const wall = text.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i);
+  if (wall) {
+    const d = scanZone(
+      wall[4].trim(),
+      hourOf(wall[1], wall[3]),
+      wall[2] ? Number(wall[2]) : 0,
+      null,
+      null,
+    );
+    if (d) return d;
+  }
+
   return null;
 }
 /** Matched against the CLI's failure text. Narrow on purpose: an ordinary API
  *  error must NOT be retried in a loop — a broad match (e.g. bare "rate limit")
  *  would park a turn whose SHELL output merely mentioned "GitHub API rate limit"
- *  and replay it every 15 minutes for a day. The CLI phrases subscription
- *  exhaustion as "Claude … usage limit reached" / "…limit will reset at…". */
-const USAGE_LIMIT_RE = /claude\s+(?:ai\s+)?usage limit|usage limit reached|limit will reset/i;
+ *  and replay it every 15 minutes for a day.
+ *
+ *  The CLI has used two families of phrasing for subscription exhaustion:
+ *    - older: "Claude … usage limit reached" / "…limit will reset at…"
+ *    - current (2026-08): "You've hit your weekly limit · resets Aug 5, 10am (UTC)"
+ *      / "You've hit your session limit · resets 5am (UTC)".
+ *  Both must match, or the run lands as `failed` and the recoverer never resumes
+ *  it — which is exactly what happened to every usage-limited run before this fix
+ *  (0 parked rows, 9 `failed` rows carrying the message). The new alternative is
+ *  kept narrow — only the three CONFIRMED subscription phrasings
+ *  ("your weekly/session/usage limit"), a shape a GitHub/API rate-limit message
+ *  ("API rate limit exceeded") never has. Deliberately NOT "daily"/"N-hour":
+ *  those are unconfirmed for this CLI and would only widen the false-park surface
+ *  (a failed run merely quoting a third-party "reached your daily limit" would be
+ *  parked and blind-probed for hours). "session limit" already covers the CLI's
+ *  short (5-hour) window. */
+const USAGE_LIMIT_RE =
+  /claude\s+(?:ai\s+)?usage limit|usage limit reached|limit will reset|(?:hit|hits|reached|exceeded)\s+your\s+(?:weekly|session|usage)\s+limit/i;
+
+/** True when the CLI's failure text is a subscription usage-limit stop (which the
+ *  recoverer should PARK and resume), not an ordinary error the user must resend.
+ *  Exported so the regression test pins the real phrasings against this exact
+ *  predicate. */
+export function detectUsageLimit(text: string): boolean {
+  return USAGE_LIMIT_RE.test(text);
+}
 
 function truncate(v: unknown, max = MAX_TEXT): string | null {
   if (typeof v !== "string") return null;
@@ -1449,7 +1528,7 @@ async function executeRunBody(runId: string): Promise<void> {
   // watchdog, applied to console turns. Guarded on status='running' so a cancel
   // that landed meanwhile is never resurrected; if the guarded write matched
   // nothing (or errored), fall through to the honest failed state instead.
-  const usageLimited = !ok && spawnError === null && USAGE_LIMIT_RE.test(failureText);
+  const usageLimited = !ok && spawnError === null && detectUsageLimit(failureText);
   if (usageLimited) {
     // When the message names the reset moment, carry it in the sentinel so the
     // retry happens right after the window opens instead of blind 15-min probes.
