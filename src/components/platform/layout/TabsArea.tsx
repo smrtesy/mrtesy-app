@@ -136,6 +136,17 @@ export function TabsArea({ children }: { children: React.ReactNode }) {
     return <EmptyWorkspace />;
   }
 
+  // Embedded (the Claude drawer's iframe): host the screen at a BOUNDED full height,
+  // no max-width and no padding. A full-height chat (`h-full`, its own scroll +
+  // pinned composer) needs a height-bounded ancestor; the plain centered wrapper
+  // below has auto height, so the chat grew with each streamed message and pushed
+  // the composer below the fold — hiding what the user was typing. 100dvh here is
+  // the iframe's own viewport, so it fills the drawer exactly. The centered wrapper
+  // stays for the mobile / SSR fallback (regular scrolling pages).
+  if (isEmbedded) {
+    return <div className="h-[100dvh] w-full overflow-hidden">{children}</div>;
+  }
+
   return <div className="w-full max-w-4xl mx-auto p-4 md:p-6">{children}</div>;
 }
 

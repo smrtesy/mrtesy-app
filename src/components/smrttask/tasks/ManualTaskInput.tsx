@@ -8,12 +8,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Check, Plus, X, Zap, Circle, Layers, ListPlus, Home, MapPin, AlignLeft, ListChecks, Paperclip } from "lucide-react";
+import { Loader2, Check, Plus, X, Zap, Circle, Layers, Home, MapPin, AlignLeft, ListChecks, Paperclip } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { todayISO } from "@/lib/workdays";
 import { RecurrenceEditor, type RecurrenceModel } from "./RecurrenceEditor";
+import {
+  DayCapacityCalendar,
+  useDayCapacity,
+  usedOnDay,
+  quotaForSize,
+  firstFreeDay,
+} from "./DayCapacityCalendar";
 
 interface ManualTaskInputProps {
   open: boolean;
@@ -63,9 +70,13 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   // ── task tab state ──────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
   const [size, setSize] = useState<"quick" | "medium" | "big">("medium");
-  // Daily method: medium/big default to the pool; this toggle opts one into
-  // "היום" at creation time. Quick tasks are always today, so it's moot for them.
-  const [addToToday, setAddToToday] = useState(false);
+  // מהיר·3·1 day decision for a non-dated medium/big task: with room today it
+  // lands on today automatically; a full today opens the day-picker step (the
+  // shared DayCapacityCalendar) so the user chooses a day. Quick = always today,
+  // dated = scheduled (no planned_for), so neither uses this.
+  const { cap: dayCap, load: loadDayCap } = useDayCapacity();
+  const [dayStep, setDayStep] = useState(false);
+  const [dayDraft, setDayDraft] = useState<string | null>(null);
   // "" = משרד/office (default), "home" = בית, "outside" = בחוץ.
   const [taskContext, setTaskContext] = useState<"" | "home" | "outside">("");
   const [dueDate, setDueDate] = useState("");
@@ -100,7 +111,8 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     setTab("task");
     setTitle("");
     setSize("medium");
-    setAddToToday(false);
+    setDayStep(false);
+    setDayDraft(null);
     setTaskContext("");
     setDueDate("");
     setDueTime("");
@@ -124,6 +136,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
   // Hydrate the task draft once each time the dialog opens.
   useEffect(() => {
     if (!open) { hydrated.current = false; return; }
+    // The day-picker step is transient UI — never restore it on reopen.
+    setDayStep(false);
+    setDayDraft(null);
     try {
       const raw = window.localStorage.getItem(DRAFT_KEY);
       if (raw) {
@@ -154,6 +169,13 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
     const draft = { title, showDescription, description, showSubtasks, subtasks, size, context: taskContext, dueDate, dueTime };
     try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch { /* ignore quota */ }
   }, [open, title, showDescription, description, showSubtasks, subtasks, size, taskContext, dueDate, dueTime]);
+
+  // Prefetch today's capacity whenever a non-dated medium/big task is being
+  // composed, so the create-time day decision (auto-today vs open the picker) is
+  // instant and reflects the current day load. Refetched on each relevant open.
+  useEffect(() => {
+    if (open && tab === "task" && size !== "quick" && !dueDate) void loadDayCap();
+  }, [open, tab, size, dueDate, loadDayCap]);
 
   // Load projects when the info tab is first needed; remember the last target.
   useEffect(() => {
@@ -251,6 +273,39 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
       toast.error(t("recurrenceNeedsEndDate"));
       return;
     }
+
+    // מהיר·3·1 day decision (non-dated medium/big only). Quick = always today;
+    // a dated task is scheduled by its due date (no planned_for). A medium/big
+    // with room today lands on today automatically; a full today opens the
+    // day-picker step and defers creation until the user picks a day (a full day
+    // is still selectable — the quota is soft, so "insisting" is allowed).
+    let plannedFor: string | null = null;
+    if (size === "quick") {
+      plannedFor = todayISO();
+    } else if (!dueDate) {
+      const csize = size === "big" ? "big" : "medium";
+      if (dayStep) {
+        if (!dayDraft) { toast.error(t("pickDayRequired")); return; }
+        plannedFor = dayDraft;
+      } else {
+        const c = dayCap ?? (await loadDayCap());
+        if (!c) {
+          // Capacity read failed — never block creation; fall back to today so
+          // the task isn't silently lost.
+          plannedFor = todayISO();
+        } else if (usedOnDay(c, c.today, csize) < quotaForSize(c, csize)) {
+          plannedFor = c.today; // room today → auto-commit
+        } else {
+          // Today is full for this size — open the picker and stop here; the
+          // user picks a day, then re-submits from the step.
+          setDayDraft(firstFreeDay(c, csize));
+          setDayStep(true);
+          return;
+        }
+      }
+    }
+    // (dated medium/big → plannedFor stays null: scheduled by its due date.)
+
     setLoading(true);
     try {
       const body: Record<string, unknown> = {
@@ -277,12 +332,10 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
           created_by: "user" as const,
         }));
       if (checklist.length) body.checklist = checklist;
-      // Daily method: a ⚡quick task is auto-committed to today (you do all
-      // quick daily); medium/big land in the pool (no planned_for) until the
-      // user pulls them into "היום" — or opts in now via the "להיום" toggle.
-      // A dated task is scheduled (floats in at its time), so the toggle is
-      // ignored when a due date is set.
-      if (size === "quick" || (addToToday && !dueDate)) body.planned_for = todayISO();
+      // planned_for was resolved above by the מהיר·3·1 day decision: quick and
+      // an in-quota medium/big → today; a picked day from the day-picker step;
+      // a dated task → left null (scheduled by its due date).
+      if (plannedFor) body.planned_for = plannedFor;
 
       const { task: created } = await api<{ task: { id: string } }>("/api/tasks", { method: "POST", body });
 
@@ -387,6 +440,29 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
         {/* Visually-compact title; the tabs sit right under it. */}
         <DialogTitle className="text-start text-base">{t("title")}</DialogTitle>
 
+        {dayStep ? (
+          /* מהיר·3·1 day-picker step — reached only when today is already full for
+             this task's size. The user picks a day (a full day is still selectable
+             — soft quota), then re-submits; "back" returns to the form. */
+          <div className="mt-3 space-y-2">
+            <div className="text-sm font-medium" dir="auto">{t("pickDayTitle")}</div>
+            <DayCapacityCalendar
+              size={size === "big" ? "big" : "medium"}
+              cap={dayCap}
+              value={dayDraft}
+              onSelect={setDayDraft}
+            />
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <Button type="button" variant="ghost" onClick={() => setDayStep(false)} disabled={loading}>
+                {tCommon("back")}
+              </Button>
+              <Button type="button" onClick={handleCreateTask} disabled={loading || !dayDraft} className="gap-1">
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {t("create")}
+              </Button>
+            </div>
+          </div>
+        ) : (
         <Tabs value={tab} onValueChange={(v) => setTab(v as "task" | "info")} dir={dir} className="mt-1">
           <TabsList className="h-8 w-auto self-start">
             <TabsTrigger value="task" className="px-3 py-1 text-xs">{t("tabTask")}</TabsTrigger>
@@ -400,8 +476,9 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => {
-                // Enter on the title → create immediately. With no due date the
-                // task lands on the desk as a quick "on the desk" task.
+                // Enter on the title → create immediately (same מהיר·3·1 day
+                // decision as the Create button — a full-today medium/big opens
+                // the day-picker step instead of creating).
                 if (e.key === "Enter" && title.trim() && !loading) {
                   e.preventDefault();
                   handleCreateTask();
@@ -527,23 +604,6 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
                   <Layers className="h-4 w-4" />
                 </button>
               </div>
-
-              {/* Daily method: medium/big default to the pool — opt into "היום" here.
-                  Hidden for quick (always today) and for dated tasks (scheduled). */}
-              {size !== "quick" && !dueDate && (
-                <button
-                  type="button"
-                  onClick={() => setAddToToday((v) => !v)}
-                  className={cn(
-                    "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm font-medium transition-colors",
-                    addToToday ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground",
-                  )}
-                  aria-pressed={addToToday}
-                >
-                  <ListPlus className="h-3.5 w-3.5" />
-                  {t("addToToday")}
-                </button>
-              )}
 
               <button
                 type="button"
@@ -745,6 +805,7 @@ export function ManualTaskInput({ open, onClose, onCreated }: ManualTaskInputPro
             </div>
           </TabsContent>
         </Tabs>
+        )}
       </DialogContent>
     </Dialog>
   );

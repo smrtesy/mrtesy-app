@@ -590,7 +590,10 @@ router.get("/whatsapp/media", ...gate, async (req: Request, res: Response) => {
 //
 // Body: { to_phone: string, text: string, reply_to_wamid?: string }
 // Returns: { ok: true, wamid: string }
-const META_API_VERSION = process.env.META_API_VERSION ?? "v21.0";
+// v25.0 — the only version DualHook's proxy relays (older versions 404 on
+// api.dualhook.com); also valid direct-to-Meta. See
+// docs/whatsapp-dualhook-outbound-migration.md.
+const META_API_VERSION = process.env.META_API_VERSION ?? "v25.0";
 const SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // Outgoing image constraints. Meta's Cloud API documents JPEG and PNG as the

@@ -529,27 +529,16 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       return byPriority(a, b);
     };
 
-    // method131 ON: split surfaced medium/big by the soft quota. Woke tasks
-    // (deadline reminders) always stay on the desk, uncapped; deliberate picks
-    // fill the remaining quota in position order, and picks beyond it overflow
-    // to the pool ("השאר"). So the pool holds ONLY today's overflow and empties
-    // back to the inbox each night with the rollover (docs/pool-cleanup-fix-plan.md §4.1).
-    const splitByQuota = (surfaced: Task[], quota: number) => {
-      const onDesk: Task[] = [];
-      const overflow: Task[] = [];
-      let budget = Math.max(0, quota);
-      for (const task of surfaced) {
-        // Woke reminders and pending_completion (awaiting confirm) always stay on
-        // the desk, uncapped — never demoted into the collapsed pool.
-        if (task.woke_from_snooze_at || task.status === "pending_completion") { onDesk.push(task); continue; }
-        if (budget > 0) { onDesk.push(task); budget -= 1; }
-        else overflow.push(task);
-      }
-      return { onDesk, overflow };
-    };
-    const medSplit = splitByQuota([...mediumPicked].sort(byPosition), mediumQuota);
-    const bigSplit = splitByQuota([...bigPicked].sort(byPosition), bigQuota);
-    const poolList = [...medSplit.overflow, ...bigSplit.overflow];
+    // method131 ON: all surfaced medium/big for today stay on the desk — the soft
+    // quota is no longer a demotion. The day-picker (at creation in ManualTaskInput
+    // and on the row via DaySchedulePopover) already steers picks toward days with
+    // room and warns when a day is full; a user who deliberately schedules past 3/1
+    // sees those tasks together on the desk (the "n/3"/"n/1" chip turns red), not
+    // hidden away. The old "השאר" overflow pool is retired (poolList stays empty in
+    // ON mode; the drawer renders only in OFF mode's waiting list).
+    const deskMediumSorted = [...mediumPicked].sort(byPosition);
+    const deskBigSorted = [...bigPicked].sort(byPosition);
+    const poolList: Task[] = [];
 
     // Review banner drains the collapsed catch-all (pool / waiting) of stale rows.
     const catchAll = m131Enabled ? poolList : waitingList;
@@ -562,8 +551,8 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
 
     return {
       deskQuick: [...quickList].sort(byPosition),
-      deskMedium: medSplit.onDesk,
-      deskBig: bigSplit.onDesk,
+      deskMedium: deskMediumSorted,
+      deskBig: deskBigSorted,
       rest: [...poolList].sort(byRest),
       deskRegular: [...regularDesk].sort(byDeadline),
       waiting: [...waitingList].sort(byDeadline),
@@ -571,7 +560,7 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
       pickedMedium: countPicks(mediumPicked),
       pickedBig: countPicks(bigPicked),
     };
-  }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr, mediumQuota, bigQuota]);
+  }, [tasks, contextFilter, blocked, isHidden, m131Enabled, unsatisfiedOf, todayStr]);
 
   // Future commitments — medium/big tasks scheduled for a day AFTER today
   // (planned_for > today). They are hidden from the desk until their day arrives
@@ -601,8 +590,9 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
     [scheduledAhead],
   );
 
-  // Marathon "regular" run set: the day's medium+big work — desk picks plus the
-  // pool overflow (ON), or the surfaced regular desk (OFF). Quick keeps its own run.
+  // Marathon "regular" run set: the day's medium+big work — all desk picks (ON;
+  // `rest` is empty now the pool is retired), or the surfaced regular desk (OFF).
+  // Quick keeps its own run.
   const marathonRegularTasks = useMemo(
     () => (m131Enabled ? [...deskMedium, ...deskBig, ...rest] : deskRegular),
     [m131Enabled, deskMedium, deskBig, rest, deskRegular],
@@ -1234,35 +1224,32 @@ export function TaskList({ locale, title }: { locale: string; title?: string }) 
           </section>
           </DndContext>
 
-          {/* ── The catch-all (collapsed) — the rest (ON) / waiting (OFF) ── */}
-          {(() => {
-            const catchAll = m131Enabled ? rest : waiting;
-            const heading = m131Enabled ? t("desk.rest") : t("desk.waiting");
-            const empty = m131Enabled ? t("desk.emptyRest") : t("desk.emptyPool");
-            return (
-              <section>
-                <button
-                  className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground"
-                  onClick={() => setShowPool((v) => !v)}
-                >
-                  {showPool ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  {heading}
-                  <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{catchAll.length}</span>
-                </button>
-                {showPool && (
-                  catchAll.length === 0 ? (
-                    <p className="py-2 text-center text-sm text-muted-foreground">{empty}</p>
-                  ) : (
-                    // Flat, already sorted (rest: deadline→fell→tenure→priority;
-                    // waiting: by date). No size grouping — spec §3.3 "מוצגת שטוחה".
-                    <div className="space-y-1.5">
-                      {catchAll.map((task) => renderRow(task, "waiting"))}
-                    </div>
-                  )
-                )}
-              </section>
-            );
-          })()}
+          {/* ── The waiting pile (collapsed) — OFF mode only. In method131 ON,
+              every medium/big committed to today lives on the desk (no overflow
+              drawer): an in-quota task auto-lands, an over-quota one the user
+              insisted on shows there too (chip turns red). ── */}
+          {!m131Enabled && (
+            <section>
+              <button
+                className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground"
+                onClick={() => setShowPool((v) => !v)}
+              >
+                {showPool ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {t("desk.waiting")}
+                <span className="rounded-full bg-secondary px-1.5 text-[11px] font-medium">{waiting.length}</span>
+              </button>
+              {showPool && (
+                waiting.length === 0 ? (
+                  <p className="py-2 text-center text-sm text-muted-foreground">{t("desk.emptyPool")}</p>
+                ) : (
+                  // Flat, already sorted by date. No size grouping (spec §3.3).
+                  <div className="space-y-1.5">
+                    {waiting.map((task) => renderRow(task, "waiting"))}
+                  </div>
+                )
+              )}
+            </section>
+          )}
 
           {/* ── COMPLETED (collapsible) ──────────────────────────────── */}
           <section>
