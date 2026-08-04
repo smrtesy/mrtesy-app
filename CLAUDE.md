@@ -588,6 +588,23 @@ All product names follow the pattern **`smrt` + English word**:
   When in doubt, the smaller, hidden-until-needed version is the right
   call. This applies to every app/screen, not just WhatsApp.
 
+- **Minimum-effort-for-the-user is the default design goal**.
+  The user's instruction (2026-08-04, prompted by managed-secrets making him
+  hand-type a variable name and paste a project id the platform already held):
+  whenever you plan or build ANYTHING for the user — a feature, screen, flow,
+  form, tool — the default is **the least possible manual work for him**. Any
+  value the system already knows (an env var, an id, a token, a name) must be
+  **auto-loaded / pre-filled**, never re-typed. Any field derivable from
+  another (e.g. a target's `env_var_name` from the secret's `key_name`) is
+  **pre-filled by default**, editable if needed. Any step that can be skipped
+  is skipped. If the user has to type, paste, or hunt for a value the system
+  could have supplied itself, that is a **design bug**, not a minor nicety —
+  fix it. Pair this with the deep-link and compact-UI principles above: the
+  whole system exists to make the user maximally efficient, so every extra
+  hop you leave in is wasted effort. **Kept in sync across the three repos**
+  (`mrtesy-app`, `video-lab`, `voice-engine`) like the other standing
+  preferences.
+
 ## Project conventions worth remembering
 
 - **Tabs-workspace panes (router-based)**: sidebar screens render as

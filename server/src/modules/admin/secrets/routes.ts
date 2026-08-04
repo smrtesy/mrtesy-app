@@ -45,10 +45,12 @@ router.use("/admin", requireAuth, requireSuperAdmin);
 // (Railway phase 1, Vercel + Supabase phase 2/3).
 const LIVE_PROVIDERS = new Set(["railway", "vercel", "supabase"]);
 
-// Logical key names follow the same shape as the app_secrets custom keys — but the
-// managed registry keys on a human label, so we allow spaces and mixed case. Keep it
-// non-empty and bounded.
-const KEY_NAME_RE = /^[\w .:\-/]{2,80}$/;
+// Logical key names are a human-facing label (shown as-is in the UI), so they must
+// accept ANY script the user writes in — Hebrew included. `\w` matches only Latin
+// letters/digits/underscore, which wrongly rejected a Hebrew label like
+// "מפתח דוואלהוק יוצא". Use Unicode letter/number classes (\p{L}\p{N}, requires the
+// `u` flag) plus underscore and the same punctuation as before. Keep it bounded.
+const KEY_NAME_RE = /^[\p{L}\p{N} .:\-/_]{2,80}$/u;
 // The variable name written on a provider must be a real env-var identifier.
 const ENV_VAR_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
@@ -172,8 +174,8 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
       const key = ctxKey(t);
       if (!railwayCache.has(key)) railwayCache.set(key, await railwayReadVariables(specOf(t)));
     } else if (t.provider === "vercel") {
-      const key = t.target_ref ?? "";
-      if (t.target_ref && !vercelCache.has(key)) {
+      const key = t.target_ref ?? ""; // "" → resolves to the pinned VERCEL_PROJECT_ID
+      if (!vercelCache.has(key)) {
         vercelCache.set(key, await vercelProjectEnvNames(t.target_ref));
       }
     } else if (t.provider === "supabase") {
@@ -218,19 +220,15 @@ router.get("/admin/secrets", async (_req: Request, res: Response) => {
           }
         }
       } else if (t.provider === "vercel") {
-        if (!t.target_ref) {
-          configured = false;
-          hint = "This Vercel target needs the project id (set it as the target's service id).";
-        } else {
-          const read = vercelCache.get(t.target_ref);
-          if (read) {
-            configured = read.configured;
-            hint = read.hint;
-            providerError = read.error;
-            if (read.names) {
-              present = read.names.includes(t.env_var_name);
-              matches = null; // Vercel values are encrypted — presence only.
-            }
+        // target_ref may be empty — the connector falls back to VERCEL_PROJECT_ID.
+        const read = vercelCache.get(t.target_ref ?? "");
+        if (read) {
+          configured = read.configured;
+          hint = read.hint;
+          providerError = read.error;
+          if (read.names) {
+            present = read.names.includes(t.env_var_name);
+            matches = null; // Vercel values are encrypted — presence only.
           }
         }
       } else if (t.provider === "supabase") {
@@ -317,8 +315,11 @@ router.post("/admin/secrets", async (req: Request, res: Response) => {
     value?: string;
   };
   const name = typeof key_name === "string" ? key_name.trim() : "";
+  if (!name) {
+    return res.status(400).json({ error: "The name field is required — give the secret a short label. The secret value itself goes in the separate value field." });
+  }
   if (!KEY_NAME_RE.test(name)) {
-    return res.status(400).json({ error: "key_name must be 2-80 chars (letters, digits, space . : - / _)" });
+    return res.status(400).json({ error: "The name must be 2-80 chars (letters incl. Hebrew, digits, space . : - / _). If you pasted the secret key here, move it to the value field instead." });
   }
 
   let vaultId: string | null = null;
@@ -429,7 +430,7 @@ router.post("/admin/secrets/:id/targets", async (req: Request, res: Response) =>
   }
   const varName = typeof env_var_name === "string" ? env_var_name.trim().toUpperCase() : "";
   if (!ENV_VAR_RE.test(varName)) {
-    return res.status(400).json({ error: "env_var_name must be UPPER_SNAKE_CASE (A-Z, 0-9, _)" });
+    return res.status(400).json({ error: "The environment-variable name field (the actual variable written to the service, e.g. WHATSAPP_OUTBOUND_KEY) must be UPPER_SNAKE_CASE: A-Z, 0-9, _ only." });
   }
 
   const { data: secret, error: sErr } = await db
