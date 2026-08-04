@@ -37,7 +37,11 @@ import smrtstudioRouter, { jobsRouter as smrtstudioJobsRouter } from "./modules/
 import correctionsJobsRouter from "./modules/smrttask/corrections/jobs";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
-import claudeRouter, { claudeActionM2MRouter, startClaudeRunRecovery } from "./modules/claude";
+import claudeRouter, {
+  claudeActionM2MRouter,
+  claudeDeployQueueRouter,
+  startClaudeRunRecovery,
+} from "./modules/claude";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -173,6 +177,11 @@ app.use(correctionsJobsRouter);
 // smrtTask Claude Code session proposals — x-cron-secret guarded (the Claude
 // Code Stop hook calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", claudeSessionRouter);
+
+// Claude console coalescing deploy queue — x-cron-secret guarded (a console run's
+// hook / push step calls it), so it comes BEFORE the auth-guarded routers too.
+// docs/claude-console/deploy-queue-plan.md.
+app.use("/api", claudeDeployQueueRouter);
 
 // Google Drive catalog scanner — x-cron-secret guarded (kicked by this session
 // and self-draining server-side). Walks a shared Drive subtree into
