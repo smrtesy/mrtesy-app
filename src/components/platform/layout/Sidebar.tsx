@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   Bot,
@@ -146,6 +146,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
   const hasSmrtDesign = enabledApps.includes("smrtdesign");
   const t = useTranslations("nav");
   const pathname = usePathname();
+  const router = useRouter();
   const [taskInputOpen, setTaskInputOpen] = useState(false);
   const [manualTaskOpen, setManualTaskOpen] = useState(false);
   // Compact global-search entry point: collapsed to a magnifying-glass icon
@@ -618,10 +619,24 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
               const mobileClaudeClass =
                 "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground";
               return isAdmin ? (
-                <Link key="claude" href={`${basePath}/claude`} className={mobileClaudeClass}>
+                // On mobile the Claude button opens the THREAD LIST (rail), not a
+                // fresh chat and not the last thread: the full /claude screen
+                // otherwise auto-opens the most recent thread ("continue where you
+                // left off"), so a bare /claude reopened an OLD chat. Navigate with
+                // a fresh ?list=<ts> each tap — ClaudeChat keys the rail-open on the
+                // VALUE, so it re-opens even if the user already closed it. onClick
+                // (not a static href) so the timestamp is minted at click time,
+                // avoiding a hydration mismatch. The rail's own "+ שיחה חדשה" button
+                // is the path to a new chat from there.
+                <button
+                  key="claude"
+                  type="button"
+                  onClick={() => router.push(`${basePath}/claude?list=${Date.now()}`)}
+                  className={mobileClaudeClass}
+                >
                   <ClaudeIcon className="h-5 w-5 shrink-0" />
                   <span className="truncate max-w-full">{claudeLabel}</span>
-                </Link>
+                </button>
               ) : (
                 <button
                   key="claude"
