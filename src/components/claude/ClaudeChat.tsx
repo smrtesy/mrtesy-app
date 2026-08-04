@@ -79,8 +79,10 @@ const MODELS = [
   { id: "claude-opus-4-8", name: "Opus 4.8" },
 ] as const;
 
-/** Opus by default, by request. A smarter per-task choice is a later job. */
-const DEFAULT_MODEL = "claude-opus-5";
+/** Opus 4.8 by default, by request (2026-08-04). This is the built-in default
+ *  used only when the org set none (claude_instructions.default_model); a stored
+ *  org default still wins. A smarter per-task choice is a later job. */
+const DEFAULT_MODEL = "claude-opus-4-8";
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const EFFORT_DEFAULT = "__default__";
