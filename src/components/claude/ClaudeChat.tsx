@@ -166,6 +166,10 @@ interface Thread {
   /** The newest run's status (done/failed/…) — the rail's resting dot colour when
    *  not live. Null when the thread has never run. */
   last_status?: string | null;
+  /** Deterministic fallback title (first user message, clipped), sent by the list
+   *  endpoint ONLY when the AI `title` is absent — so an untitled thread still reads
+   *  as something in the rail. Null when a title exists or there's no clean prompt. */
+  preview?: string | null;
 }
 
 /** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
@@ -177,6 +181,8 @@ interface Account {
 }
 
 const DEFAULT_ACCOUNT = "primary";
+/** localStorage key for the last Claude account the user used — the new-chat default. */
+const LAST_ACCOUNT_KEY = "claude-last-account";
 
 interface TurnEvent {
   seq: number;
@@ -271,10 +277,22 @@ export function ClaudeChat() {
   useEffect(() => {
     setEmbedded(isEmbeddedPane());
   }, []);
-  // The Claude account the user last picked (localStorage). A NEW chat opens on
-  // it instead of the primary default — the user's request. Read once on mount.
-  const LAST_ACCOUNT_KEY = "claude-last-account";
+  // The Claude account the user last USED — a NEW chat opens on it instead of the
+  // primary default. Updated both by an explicit dropdown pick AND by opening a
+  // thread that runs on a non-primary account (see loadThread), so the default
+  // follows the account you were last working in, not only the last manual pick.
+  // Read once on mount; a stable module-level helper writes it back.
   const [lastAccount, setLastAccount] = useState<string | null>(null);
+  const rememberAccount = useCallback((id: string | null) => {
+    const acct = (id ?? "").trim();
+    if (!acct) return;
+    setLastAccount(acct);
+    try {
+      window.localStorage.setItem(LAST_ACCOUNT_KEY, acct);
+    } catch {
+      /* localStorage unavailable — session-only memory still applies */
+    }
+  }, []);
   useEffect(() => {
     try {
       const v = window.localStorage.getItem(LAST_ACCOUNT_KEY);
@@ -467,10 +485,14 @@ export function ClaudeChat() {
       setSplitProposal(r.split_proposal ?? null);
       setChildren(r.children ?? []);
       setParent(r.parent ?? null);
+      // The account you're now working in becomes the new-chat default. Only a
+      // non-null (explicitly non-primary) account overrides — opening an old
+      // default thread never resets an account you deliberately picked.
+      rememberAccount(r.thread.claude_account);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
     }
-  }, []);
+  }, [rememberAccount]);
 
   const loadTopics = useCallback(async () => {
     try {
@@ -799,17 +821,21 @@ export function ClaudeChat() {
 
   // Report the open thread's title up to the drawer's compact header. Empty string
   // for a fresh/untitled chat — the drawer shows its own placeholder then.
+  const firstPrompt = turns[0]?.user_prompt ?? null;
   useEffect(() => {
     if (!embedded) return;
     try {
       window.parent.postMessage(
-        { type: "claude-chat:title", title: thread?.title?.trim() || "" },
+        {
+          type: "claude-chat:title",
+          title: thread?.title?.trim() || firstMessagePreview(firstPrompt) || "",
+        },
         window.location.origin,
       );
     } catch {
       /* cross-origin parent — ignored */
     }
-  }, [embedded, thread?.title]);
+  }, [embedded, thread?.title, firstPrompt]);
 
   // The org's default model/effort for new chats. Read once on mount; a failure is
   // ambient (the app's built-in default stays in effect).
@@ -1060,7 +1086,8 @@ export function ClaudeChat() {
     if (created.length > 0) toast.success(t("decompose.created", { count: created.length }));
   }
 
-  const title = thread?.title?.trim() || t("untitled");
+  const title =
+    thread?.title?.trim() || firstMessagePreview(turns[0]?.user_prompt) || t("untitled");
 
   /** Open a thread (or a fresh chat when id is null). On mobile the rail is a
    *  full-screen overlay covering the chat, so picking closes it to reveal the
@@ -1247,12 +1274,7 @@ export function ClaudeChat() {
               onChange={(id) => {
                 // Remember it as the new-chat default (bug 10) — before the thread
                 // write, so it sticks even if that fails.
-                setLastAccount(id);
-                try {
-                  window.localStorage.setItem(LAST_ACCOUNT_KEY, id);
-                } catch {
-                  /* localStorage unavailable — session-only memory still applies */
-                }
+                rememberAccount(id);
                 if (activeId) void patchThread({ claude_account: id });
                 else setPending((p) => ({ ...p, claude_account: id }));
               }}
@@ -1593,12 +1615,29 @@ function sortHandledLast(list: Thread[]): Thread[] {
  *  prefix. The server titler already enforces this; this display pass also covers
  *  titles written before that fix (and user-set titles, which it leaves alone
  *  aside from the meta-prefix strip). */
+/** First non-empty line of the open thread's first message, clipped — the client
+ *  fallback title (header + drawer bridge) when the AI title hasn't landed. Mirrors
+ *  the server's firstLinePreview so an untitled OPEN chat reads the same as the rail. */
+function firstMessagePreview(s: string | null | undefined): string {
+  const line = (s ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .find(Boolean);
+  return (line ?? "").slice(0, 80);
+}
+
 function railThreadTitle(thread: Thread, untitled: string): string {
   let title = (thread.title ?? "").trim().replace(/^\s*תיקון\s+אוטומטי\s*[:\-–—.]*\s*/u, "").trim();
   const serial = (thread.task_serial ?? "").trim();
   if (serial) {
     if (!title) title = serial;
     else if (!title.startsWith(serial)) title = `${serial} · ${title}`;
+  }
+  // No AI title → the deterministic first-message preview, so the rail is never a
+  // wall of "ללא כותרת" for untitled/backlog threads. The serial still leads.
+  if (!title) {
+    const preview = (thread.preview ?? "").trim();
+    if (preview) return serial ? `${serial} · ${preview}` : preview;
   }
   return title || untitled;
 }
