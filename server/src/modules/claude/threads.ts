@@ -199,6 +199,19 @@ async function primaryRepoForOrg(orgId: string): Promise<string | null> {
   return best;
 }
 
+/** A deterministic fallback title from the thread's first user message — the
+ *  first non-empty line, clipped. So a thread whose AI title never landed (the
+ *  one-shot returned null on a usage-limit / timeout, or it is an old thread that
+ *  predates titling and will never get a new turn) still reads as something in the
+ *  rail instead of a blank "ללא כותרת". The AI title, when it exists, always wins. */
+function firstLinePreview(s: string | null | undefined): string {
+  const line = (s ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .find(Boolean);
+  return (line ?? "").slice(0, 80);
+}
+
 // ── list / create ─────────────────────────────────────────────────────────────
 
 router.get("/claude/threads", async (req: Request, res: Response) => {
@@ -250,10 +263,33 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
       if (r.thread_id && !lastStatus.has(r.thread_id)) lastStatus.set(r.thread_id, r.status);
     }
   }
+
+  // First user message per thread — the deterministic title fallback (see
+  // firstLinePreview). Fetched ONLY for the threads that lack an AI title, so the
+  // response never carries prompt text we won't use. turn_index=1 is the first turn
+  // (turnIndex = prior count + 1), so this is exactly one row per thread — no cap.
+  const firstPrompt = new Map<string, string>();
+  const untitledIds = rows.filter((r) => !(r.title ?? "").trim()).map((r) => r.id);
+  if (untitledIds.length > 0) {
+    const { data: firstRows, error: fErr } = await db
+      .from("claude_runs")
+      .select("thread_id, user_prompt")
+      .in("thread_id", untitledIds)
+      .eq("turn_index", 1);
+    if (fErr) console.error("[claude/threads] first-prompt failed:", fErr.message);
+    for (const r of firstRows ?? []) {
+      // user_prompt only: `prompt` carries the composed env preamble, which would
+      // make a garbage title. A row with no clean user_prompt just stays untitled.
+      if (r.thread_id) firstPrompt.set(r.thread_id, firstLinePreview(r.user_prompt));
+    }
+  }
+
   const threads = rows.map((r) => ({
     ...r,
     live: liveSet.has(r.id),
     last_status: lastStatus.get(r.id) ?? null,
+    // Only when the AI title is absent; the client uses it as the rail fallback.
+    preview: (r.title ?? "").trim() ? null : firstPrompt.get(r.id) || null,
   }));
   return res.json({ threads });
 });
@@ -920,6 +956,22 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
       .then(() => maybeTitle(thread.id, orgId))
       .then(() => maybeAutoSplit(thread.id, orgId))
       .catch((e) => console.error("[claude/threads] executeRun threw:", e instanceof Error ? e.message : e));
+  }
+
+  // Title the thread EARLY — ~10s in, while the first turn is still running —
+  // instead of only after it completes (the chain above). A long first turn used
+  // to leave the rail blank ("ללא כותרת") for minutes; now the title lands within
+  // ~10s from the opening message. Only for the first turn (turnIndex 1); later
+  // turns are already titled and re-sharpen via the chain. This is deliberately
+  // decoupled from executeRun and fully detached — the HTTP response already went
+  // out (res.json below), and it's a short Haiku one-shot on the subscription, so
+  // it never blocks or slows the chat's own output. `.unref()` keeps a pending
+  // timer from holding the process open. TITLE_AT_TURNS includes 1, so the chain's
+  // post-completion call re-sharpens this once the full answer exists.
+  if (turnIndex === 1) {
+    setTimeout(() => {
+      void maybeTitle(thread.id, orgId).catch(() => {});
+    }, 10_000).unref();
   }
 
   return res.status(201).json({ run });
