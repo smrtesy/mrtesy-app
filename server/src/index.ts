@@ -41,6 +41,7 @@ import claudeRouter, {
   claudeActionM2MRouter,
   claudeDeployQueueRouter,
   startClaudeRunRecovery,
+  startDeployCoordinator,
 } from "./modules/claude";
 
 const app = express();
@@ -318,6 +319,11 @@ app.listen(PORT, HOST, () => {
   // re-execute them (context rebuilt from our DB). Runs on the subscription — no
   // paid tokens. Assumes a single replica, same as the Baileys note above.
   startClaudeRunRecovery();
+
+  // Coalescing deploy queue coordinator (docs/claude-console/deploy-queue-plan.md).
+  // A no-op unless DEPLOY_QUEUE_ENABLED=1 — safe to ship while phase 2 (the push
+  // gate that feeds the queue) is still flag-gated off.
+  startDeployCoordinator();
 });
 
 // Surface unhandled errors so Railway logs show them instead of a silent crash
