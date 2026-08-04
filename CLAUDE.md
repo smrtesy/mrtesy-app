@@ -224,6 +224,17 @@ that flow unless the trigger phrase is present at the start.
 
 ## smrtTask session proposals (Stop hook)
 
+> **DISABLED as of 2026-08-04 (user experiment).** The `Stop` hook entry for
+> `.claude/hooks/smrttask-session-proposal.sh` was **removed from
+> `.claude/settings.json`** at the user's request, to test whether dropping the
+> per-turn summary block makes long console chats feel faster. Consequence
+> while disabled: console sessions no longer file/refresh a smrtTask "הצעה", and
+> there is no safety-net trace either. The hook **scripts are kept in the repo
+> unchanged** — re-enabling is one entry back under `hooks.Stop` in
+> `settings.json` (put it before `longtask-guard.sh`). Do **not** re-add it
+> unless the user asks. Everything below documents the mechanism as it works
+> **when enabled**, for that re-enable.
+
 **Requirement:** every Claude Code chat in this repo must leave a trace in
 smrtTask. When a chat here stops, a "הצעה" (proposal) is filed into the
 user's smrtTask inbox summarizing the session: the topic discussed, where it
@@ -440,6 +451,15 @@ when the push was rejected (non-fast-forward), which silently hides a
 failed push. If a push is rejected, `git fetch origin main` and redo the
 `--no-ff` merge onto the updated `main` before retrying.
 
+**Deployed is not fixed — verify the BEHAVIOUR, not just the SHA.** After the
+deploy lands, exercise the thing you changed and read the real numbers (a probe
+that distinguishes fixed from broken, the queue count, the error rate). On
+2026-08-03 two separate bugs were found this way, and *both were in that
+session's own fixes*: an attempts cap that would have discarded the whole
+backlog it existed to protect, and a rate-limit rejection wrongly counted
+against a row's retries. Neither was visible from "push succeeded"; both were
+obvious the moment the production numbers were read.
+
 After pushing `main`, confirm Production actually advanced: curl
 `https://app.smrtesy.com/api/deploy-info` and check `commit_short` matches
 the SHA you pushed (Vercel takes a few minutes to build). If it's stuck on
@@ -556,6 +576,7 @@ one go — every one was preventable with a 30-second grep).
 | API defaults I'm relying on without knowing them | Read the docs page or local wrapper for any Google/Supabase/SDK call whose filter behavior I just changed | Gmail `q` searching all labels by default would have caught the missing `in:inbox` |
 | Semantic mismatch between UI strings and backend filter direction | Read the i18n key the user-visible label resolves to, then trace the trigger value all the way through `parseSkipRules` (or the equivalent runtime check) | The skip-rule `to=` vs `from=` bug |
 | Insert/update without `{ error }` destructuring | `grep -n "await supabase.from.*\\.\\(insert\\|update\\|upsert\\)(" -A0` in changed files | Silent CHECK violations, silent RLS denials |
+| A "clean" scan that reads the wrong shape | Any grep you are about to treat as PROOF that you fixed every instance — check it against the real code shape first (multi-line? renamed middleware? nested mount?), or replace it with a parser | A line-anchored `^router.use(require` reported clean twice while a live gate was still 403'ing all of `/api`. Detector: `node server/scripts/check-route-gates.mjs`; rule: `.claude/rules/server-routing.md` |
 | Structural drift vs the codebase map | Did the branch add/move/remove an app, server module, components dir, screen/route-group dir, or edge function? If yes — `docs/codebase-map.md` must change in the same range | The map loads into every session; a stale map misleads them all. `map-guard.sh` auto-blocks the tree-visible cases at push time; semantic drift (a new core table, a moved responsibility) only this check catches |
 
 ### Step 3 — Sub-agent code review

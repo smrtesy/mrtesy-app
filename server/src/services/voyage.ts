@@ -25,6 +25,38 @@ export const EMBED_DIM = 1024;
 // endpoint can echo WHY Voyage rejected a batch (Railway logs aren't reachable
 // from the DB side). Diagnostic only.
 let lastEmbedError: string | null = null;
+
+// ── Free-tier throttle ───────────────────────────────────────────────────────
+// A Voyage account with no payment method is capped at 3 requests/min and 10K
+// tokens/min. The indexer drains every minute in chunks, so it blew past 3 RPM,
+// every call 429'd, every row came back with a null embedding and was re-queued
+// — the backlog never drained and new content stopped getting vectors. We now
+// stay UNDER the free limits instead of hammering: at most MAX_RPM requests per
+// rolling minute, a bounded character budget per request (≈4 chars/token, so
+// 12K chars ≈ 3K tokens — three of those fit inside 10K TPM), and a cooldown
+// after a 429 so a burst can't re-trigger it. Anything not embedded this tick
+// is simply left for the next one.
+const MAX_RPM = 3;
+const MAX_CHARS_PER_REQUEST = 12_000;
+const COOLDOWN_MS = 70_000;
+let requestTimes: number[] = [];
+let cooldownUntil = 0;
+// True when the LAST embed call made no request at all because we were cooling
+// down or out of rate budget. The caller must not count that as a failed
+// attempt for the rows involved — nothing was actually tried for them.
+let lastEmbedDeferred = false;
+
+/** Did the last embedTexts() skip the API entirely (cooldown / rate budget)? */
+export function wasLastEmbedDeferred(): boolean {
+  return lastEmbedDeferred;
+}
+
+/** Requests still counting against the rolling-minute window. */
+function recentRequests(now: number): number {
+  requestTimes = requestTimes.filter((t) => now - t < 60_000);
+  return requestTimes.length;
+}
+
 export function getLastEmbedError(): string | null {
   return lastEmbedError;
 }
@@ -117,16 +149,35 @@ export async function embedTexts(
   if (!apiKey) return results;
 
   // Only send non-empty texts; remember each one's slot in the original array.
+  // Respect the free tier BEFORE spending a request: a 429 costs the whole
+  // batch, so skipping this tick is strictly better than being rejected.
+  const now = Date.now();
+  lastEmbedDeferred = false;
+  if (now < cooldownUntil) {
+    lastEmbedDeferred = true;
+    lastEmbedError = `voyage cooling down for ${Math.ceil((cooldownUntil - now) / 1000)}s after a rate-limit`;
+    return results;
+  }
+  if (recentRequests(now) >= MAX_RPM) {
+    lastEmbedDeferred = true;
+    lastEmbedError = `voyage rate budget spent (${MAX_RPM}/min) — deferring to the next tick`;
+    return results;
+  }
+
   const slots: number[] = [];
   const inputs: string[] = [];
+  let budget = MAX_CHARS_PER_REQUEST;
   texts.forEach((t, i) => {
     const trimmed = (t ?? "").trim();
-    if (trimmed) {
-      slots.push(i);
-      inputs.push(trimmed.slice(0, 16000));
-    }
+    if (!trimmed || budget <= 0) return; // over budget → left for the next tick
+    const clipped = trimmed.slice(0, Math.min(16000, budget));
+    budget -= clipped.length;
+    slots.push(i);
+    inputs.push(clipped);
   });
   if (inputs.length === 0) return results;
+
+  requestTimes.push(now);
 
   try {
     const resp = await fetch(ENDPOINT, {
@@ -141,6 +192,17 @@ export async function embedTexts(
       // Capture the reason so the drain endpoint can echo it (see getLastEmbedError).
       const body = await resp.text().catch(() => "");
       lastEmbedError = `voyage ${resp.status} (${inputs.length} inputs): ${body.slice(0, 300)}`;
+      // Back off on a rate-limit so the next tick doesn't walk straight into
+      // another 429 (which is what kept the queue stuck for four days).
+      if (resp.status === 429) {
+        cooldownUntil = Date.now() + COOLDOWN_MS;
+        // A rate-limit rejection is not the row's fault and gives it no real
+        // chance, so it must not count against that row's attempt cap — same
+        // reasoning as a pre-emptively skipped tick. Otherwise, on the free
+        // tier (3 RPM), every backlog row burns its 5 attempts on 429s and
+        // loses its vector for good.
+        lastEmbedDeferred = true;
+      }
       return results; // whole batch failed → all null (caller retries)
     }
 

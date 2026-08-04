@@ -38,7 +38,11 @@ import {
 import { writeAppSecret } from "./apps/routes";
 
 const router = Router();
-router.use(requireAuth, requireSuperAdmin);
+// Path-scoped to "/admin" ON PURPOSE. This router is mounted with
+// app.use("/api", adminRouter), so a BARE router.use() here runs for EVERY
+// /api request that falls through to it — which 403'd every non-super-admin
+// on routers mounted after it (smrtTask, studio, inbox, …).
+router.use("/admin", requireAuth, requireSuperAdmin);
 
 /** Reserved ids the operator can rename/re-token but never remove: `primary` is the
  *  default every thread falls back to, `automation` is where background work routes. */

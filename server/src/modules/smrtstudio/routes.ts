@@ -28,7 +28,11 @@ import {
 import { emitEvent } from "../../lib/platform";
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrtstudio"));
+// Path-scoped to "/studio" ON PURPOSE. This router is mounted with
+// app.use("/api", smrtstudioRouter), so a BARE router.use() here runs for EVERY
+// /api request that falls through to it — 403'ing users without smrtstudio on
+// every router mounted after this one (smrtvault, smrtinfo, claude, inbox, …).
+router.use("/studio", requireAuth, requireOrg, requireApp("smrtstudio"));
 
 type Row = Record<string, unknown>;
 

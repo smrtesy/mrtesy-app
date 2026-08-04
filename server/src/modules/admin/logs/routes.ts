@@ -15,7 +15,11 @@ import { db } from "../../../db";
 import { requireAuth, requireSuperAdmin } from "../../../middleware";
 
 const router = Router();
-router.use(requireAuth, requireSuperAdmin);
+// Path-scoped to "/admin" ON PURPOSE. This router is mounted with
+// app.use("/api", adminRouter), so a BARE router.use() here runs for EVERY
+// /api request that falls through to it — which 403'd every non-super-admin
+// on routers mounted after it (smrtTask, studio, inbox, …).
+router.use("/admin", requireAuth, requireSuperAdmin);
 
 const LEVELS = new Set(["info", "warning", "error"]);
 const DAY_MS = 24 * 60 * 60 * 1000;

@@ -366,8 +366,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
       {/* Floating account avatar on mobile — sits in the top-end corner of
           the viewport and overlays the page area without consuming a
-          dedicated header row. */}
-      <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40">
+          dedicated header row. Next to it (admin-only) the same F/B/DB
+          system-status dots the desktop sidebar shows, so the deploy/DB
+          health is visible on mobile too. */}
+      <div data-mobile-avatar className="md:hidden fixed top-2 end-2 z-40 flex items-center gap-2">
+        {isAdmin && <SystemStatusStrip interactive />}
         <UserAvatarLink size="sm" />
       </div>
 
@@ -610,19 +613,23 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
         <div className="flex items-center justify-around px-1 py-1">
           {activeMobileItems.map((item) => {
             if (item.key === "claude") {
-              // אדמין → פתיחת מגירת קלוד הצפה (ClaudeDrawerContext); מסך מלא
-              // זמין מכפתור ההרחבה שבתוכה. אחרת → תיבת "עדכון" המהירה.
+              // אדמין → מסך קלוד המלא (לא המגירה הצפה — חלון קטן הוא הצורה הלא
+              // נכונה בנייד). אחרת → תיבת "עדכון" המהירה.
               const ClaudeIcon = isAdmin ? Bot : Sparkles;
               const claudeLabel = isAdmin ? t("claude") : t("update");
-              return (
+              const mobileClaudeClass =
+                "flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground";
+              return isAdmin ? (
+                <Link key="claude" href={`${basePath}/claude`} className={mobileClaudeClass}>
+                  <ClaudeIcon className="h-5 w-5 shrink-0" />
+                  <span className="truncate max-w-full">{claudeLabel}</span>
+                </Link>
+              ) : (
                 <button
                   key="claude"
                   type="button"
-                  onClick={() => {
-                    if (isAdmin) toggleDrawer();
-                    else setTaskInputOpen(true);
-                  }}
-                  className="flex min-h-[44px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground"
+                  onClick={() => setTaskInputOpen(true)}
+                  className={mobileClaudeClass}
                 >
                   <ClaudeIcon className="h-5 w-5 shrink-0" />
                   <span className="truncate max-w-full">{claudeLabel}</span>

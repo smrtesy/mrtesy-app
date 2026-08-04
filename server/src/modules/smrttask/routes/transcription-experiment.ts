@@ -22,7 +22,11 @@ import { transcribeAudioDetailed } from "../../../gemini";
 import { whatsappApiBase, whatsappBearer, whatsappViaProxy } from "../../../lib/whatsapp-endpoint";
 
 const router = Router();
-router.use(requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use("/transcription-experiment", requireAuth, requireOrg, requireApp("smrttask"), requireFullTask);
 
 // ── Experiment config helpers ────────────────────────────────────────────
 

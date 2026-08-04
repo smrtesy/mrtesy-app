@@ -28,6 +28,13 @@ import { useLocale, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { Crosshair, X } from "lucide-react";
 
+import { useClaudeDrawer } from "@/contexts/ClaudeDrawerContext";
+
+/** Event the inspector fires when the drawer chat is open: the drawer relays the
+ *  seed (already in sessionStorage) into its iframe, instead of the whole tab
+ *  navigating to the full /claude screen. */
+export const DRAWER_RESEED_EVENT = "smrtesy:claude-drawer-reseed";
+
 const SEED_KEY = "smrtesy-claude-inspect-seed";
 /** The platform's own repository — where the marked component's code lives. This is
  *  the app's identity, the same for every tenant, not tenant data. */
@@ -87,6 +94,7 @@ export function ClaudeInspector() {
   const t = useTranslations("claudeChat.inspect");
   const locale = useLocale();
   const router = useRouter();
+  const { open: drawerOpen } = useClaudeDrawer();
   const [armed, setArmed] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const hoverElRef = useRef<Element | null>(null);
@@ -183,9 +191,16 @@ export function ClaudeInspector() {
         `${t("seedProblem")} `,
       ];
       deliverInspectSeed({ text: lines.join("\n"), repo: APP_REPO, branch: APP_BRANCH });
-      router.push(`/${locale}/claude`);
+      if (drawerOpen) {
+        // The floating drawer chat is open — deliver the mark THERE (its iframe
+        // reads the seed from the shared sessionStorage) instead of yanking the
+        // whole tab to the full screen and resuming some other conversation.
+        window.dispatchEvent(new CustomEvent(DRAWER_RESEED_EVENT));
+      } else {
+        router.push(`/${locale}/claude`);
+      }
     },
-    [elementAt, locale, router, t],
+    [elementAt, locale, router, t, drawerOpen],
   );
 
   if (!armed) return null;

@@ -40,7 +40,12 @@ import {
 import { weekdayNum } from "./hebdate";
 
 const router = Router();
+// Path-scoped ON PURPOSE. This router is mounted BARE inside smrttaskRouter
+// (`router.use(dailyReportRouter)`), which is itself mounted on "/api" — so an
+// unscoped router.use() here runs for EVERY /api request that falls through to
+// it, 403'ing every user without smrtTask on everything mounted after it.
 router.use(
+  "/daily-report",
   requireAuth,
   requireOrg,
   requireApp("smrttask"),

@@ -684,6 +684,27 @@
       "timeHint": "הוספת שעה הופכת את זה לארוע — תזכורת שתופיע יום עסקים לפני",
       "clearTime": "הסר שעה"
     },
+    "daySchedule": {
+      "title": "תזמון ליום",
+      "loading": "טוען זמינות…",
+      "legendFree": "פנוי",
+      "legendPartial": "חלקי",
+      "legendFull": "מלא",
+      "loadMedium": "{used}/{quota} בינוניות ביום זה",
+      "loadBig": "{used}/{quota} גדולות ביום זה",
+      "bumpedToday": "היום מלא — קפצתי ליום הפנוי הקרוב",
+      "pastDeadline": "אחרי תאריך היעד של המשימה",
+      "addHint": "תזמן ליום",
+      "plannedHint": "מתוזמן ל-{date} · לחיצה לשינוי",
+      "remove": "הסר מהתזמון",
+      "commit": "תזמן"
+    },
+    "scheduled": {
+      "heading": "מתוזמן קדימה",
+      "summary": "{days, plural, one {יום אחד} other {# ימים}} · {tasks, plural, one {משימה אחת} other {# משימות}}",
+      "sizeMedium": "בינונית",
+      "sizeBig": "גדולה"
+    },
     "row": {
       "blockedHint": "ממתין ל: {titles}",
       "reopen": "החזר משימה",
@@ -3185,7 +3206,9 @@
       "loadFiles": "טען קבצים",
       "loadingFiles": "טוען…",
       "noFiles": "לא נמצאו קבצי אודיו בתיקיה",
-      "cloneFromDriveCount": "צור קלון מ-{count} קבצים"
+      "cloneFromDriveCount": "צור קלון מ-{count} קבצים",
+      "errorNoSlots": "נגמרו ה-slots לשיבוט מהיר ברזמבל. קנה עוד (או מחק קולות שאינם בשימוש מ\"ספרייה\") כדי לשבט שוב.",
+      "openBilling": "פתח חיוב ברזמבל"
     },
     "recordingUploader": {
       "titleNew": "העלה הקלטת עורך (STS)",
@@ -4565,6 +4588,7 @@
   },
   "claudeDrawer": {
     "title": "קלוד",
+    "untitled": "שיחה חדשה",
     "openFull": "פתח במסך מלא",
     "close": "סגור",
     "loading": "טוען את קלוד…"

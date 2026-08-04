@@ -72,7 +72,11 @@ function localToday(tz: string): string {
 // Every task route requires auth + active org + smrtTask enabled for that org.
 // attachTaskAccess resolves req.taskAccess ("full" | "lite") once for the whole
 // router so list filtering + the per-:id ownership guard below can read it.
-router.use(requireAuth, requireOrg, requireApp("smrttask"), attachTaskAccess);
+// Path-scoped ON PURPOSE. This router is mounted with app.use("/api", …),
+// so a BARE router.use() runs for EVERY /api request that falls through to
+// it — which 403'd every user without this app on all routers mounted after
+// it. Keep this list in sync with the prefixes below.
+router.use(["/source-messages", "/tasks", "/work-calendar"], requireAuth, requireOrg, requireApp("smrttask"), attachTaskAccess);
 
 // GET /tasks/access — the caller's smrtTask access level. Deliberately NOT
 // behind requireFullTask: a lite (project-only) worker must be able to read
@@ -427,6 +431,81 @@ router.post("/tasks/day-plan", async (req: Request, res: Response) => {
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({ plan: data });
+});
+
+/** GET /tasks/day-capacity?from=YYYY-MM-DD&to=YYYY-MM-DD
+ *  Per-day committed load of medium/big tasks (planned_for) across [from, to],
+ *  for the מהיר·3·1 day-picker's free/partial/full colouring when the user
+ *  schedules a task to a future day. Org-scoped + plan_id null (the desk's own
+ *  scope). Active statuses mirror daily_rollover()'s exclusion set (a completed/
+ *  archived/dismissed task no longer occupies its day). NOTE this is a DAY-LOAD
+ *  count — every non-terminal medium/big committed to the day — which is a
+ *  superset of the desk's "n/3"/"n/1" quota chip: that chip counts only
+ *  DELIBERATE picks and excludes woke-from-snooze reminders (TaskList.tsx
+ *  countPicks), whereas a woke task still occupies the day for capacity. Quotas
+ *  come from the caller's method131 config (fallback 3 medium / 1 big); the
+ *  client decides free/full per the scheduled task's own size. Registered BEFORE
+ *  GET/PATCH /tasks/:id so "day-capacity" isn't captured as an :id. */
+router.get("/tasks/day-capacity", async (req: Request, res: Response) => {
+  const from = String(req.query.from ?? "");
+  const to = String(req.query.to ?? "");
+  if (!ISO_DATE.test(from) || !ISO_DATE.test(to)) {
+    return res.status(400).json({ error: "from and to must be YYYY-MM-DD" });
+  }
+  if (to < from) {
+    return res.status(400).json({ error: "to must be >= from" });
+  }
+  // Cap the window so a bad request can't scan an unbounded range.
+  const MAX_DAYS = 120;
+  const spanDays = Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000,
+  );
+  if (spanDays > MAX_DAYS) {
+    return res.status(400).json({ error: `range is limited to ${MAX_DAYS} days` });
+  }
+
+  // Quotas from the caller's method131 day-tool config (user_settings.day_tools
+  // JSONB), defaulting to 3 medium / 1 big (src/lib/smrttask/day-tools.ts).
+  const { data: us, error: usErr } = await db
+    .from("user_settings").select("day_tools").eq("user_id", req.user!.id).maybeSingle();
+  if (usErr) return res.status(500).json({ error: usErr.message });
+  const dayTools = (us?.day_tools ?? {}) as Record<string, unknown>;
+  const m131 = (dayTools.method131 ?? {}) as Record<string, unknown>;
+  const mediumQuota =
+    typeof m131.medium_quota === "number" && Number.isInteger(m131.medium_quota) ? m131.medium_quota : 3;
+  const bigQuota =
+    typeof m131.big_quota === "number" && Number.isInteger(m131.big_quota) ? m131.big_quota : 1;
+
+  const { data, error } = await db
+    .from("tasks")
+    .select("planned_for, size")
+    .eq("organization_id", req.org!.id)
+    .is("plan_id", null)
+    .in("size", ["medium", "big"])
+    .not("status", "in", "(completed,archived,dismissed)")
+    .gte("planned_for", from)
+    .lte("planned_for", to);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const byDay = new Map<string, { medium_used: number; big_used: number }>();
+  for (const row of data ?? []) {
+    const d = row.planned_for as string | null;
+    if (!d) continue;
+    const cur = byDay.get(d) ?? { medium_used: 0, big_used: 0 };
+    if (row.size === "big") cur.big_used += 1;
+    else cur.medium_used += 1;
+    byDay.set(d, cur);
+  }
+  const days = [...byDay.entries()]
+    .map(([date, v]) => ({ date, medium_used: v.medium_used, big_used: v.big_used }))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  res.json({
+    today: localToday(await userTz(req.user!.id)),
+    medium_quota: mediumQuota,
+    big_quota: bigQuota,
+    days,
+  });
 });
 
 // ── work-clock (workclock day-tool) ─────────────────────────────────────────

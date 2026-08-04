@@ -1169,7 +1169,12 @@ export async function maybeTitle(threadId: string, orgId: string): Promise<void>
       .eq("thread_id", threadId);
     const count = total ?? 0;
     if (count === 0) return;
-    if (!TITLE_AT_TURNS.has(count)) return;
+    // Retry EVERY turn while the thread is still untitled: a single attempt at
+    // turn 1 can fail silently (runOneShot returns null on a usage-limit / timeout),
+    // which used to leave short conversations permanently blank. Once a title
+    // exists, only re-sharpen it at the milestone counts.
+    const hasTitle = !!(thread.title ?? "").trim();
+    if (hasTitle && !TITLE_AT_TURNS.has(count)) return;
 
     const { data: turns } = await db
       .from("claude_runs")
