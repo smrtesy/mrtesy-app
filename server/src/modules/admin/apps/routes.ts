@@ -196,7 +196,7 @@ const SMRTTASK_PLATFORM_KEYS = [
   { key: "GEMINI_API_KEY",        is_secret: true,  default_value: null },
   { key: "GEMINI_MODEL",          is_secret: false, default_value: "gemini-3-flash-preview" },
   { key: "GEMINI_THINKING_LEVEL", is_secret: false, default_value: "low" },
-  { key: "META_API_VERSION",      is_secret: false, default_value: "v21.0" },
+  { key: "META_API_VERSION",      is_secret: false, default_value: "v25.0" },
   // Subscription OAuth token (from `claude setup-token`) used by the Claude runner
   // in modules/claude. Listed here so it can be set from this screen instead of a
   // hosting dashboard; getAppSecret still falls back to the same-named env var.
@@ -643,7 +643,7 @@ router.put(
  * is why incoming customer replies don't reach our webhook even though
  * outgoing echoes do.
  *
- * Meta endpoint: GET /v21.0/{WABA_ID}/subscribed_apps
+ * Meta endpoint: GET /v25.0/{WABA_ID}/subscribed_apps
  * Auth: needs a System User Access Token for the WABA (we use the
  * connection's stored access_token from Vault).
  */
@@ -676,7 +676,7 @@ router.get(
     // (lib/whatsapp-endpoint.ts). `subscribed_apps` is a Meta System-User
     // diagnostic and is not one of DualHook's supported relay routes — it must
     // hit Meta directly with the connection's own Meta token.
-    const apiVersion = process.env.META_API_VERSION ?? "v21.0";
+    const apiVersion = process.env.META_API_VERSION ?? "v25.0";
     const url = `https://graph.facebook.com/${apiVersion}/${conn.waba_id}/subscribed_apps`;
 
     const metaRes = await fetch(url, {
