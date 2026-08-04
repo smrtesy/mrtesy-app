@@ -32,10 +32,15 @@
  *     stale → queued) is what lets exactly one scan take a run. Only after the claim
  *     succeeds are the dead run's partial events cleared — so a run that turned out
  *     live (lost the claim race) keeps its transcript intact.
- *   - resume_attempts caps the loop: a run that keeps dying (reliably OOMs the box,
- *     say) is resumed at most MAX_RESUME_ATTEMPTS times, then failed with a clear
- *     "resend" message rather than looped forever. Even an orphaned run can never
- *     spin.
+ *   - resume_attempts caps the loop, but only counts the run's OWN failures: a run
+ *     that keeps dying while the server stays up (reliably OOMs the box, say) is
+ *     resumed at most MAX_RESUME_ATTEMPTS times, then failed with a clear "resend"
+ *     message. A restart-orphan — a run killed because the whole process restarted
+ *     (deploy / box restart), detected by a last heartbeat that predates
+ *     PROCESS_BOOT_MS — does NOT count against that budget; penalizing a run for an
+ *     external restart made long turns give up though they never failed. An absolute
+ *     ORPHAN_MAX_AGE_MS bound still terminates a run that forever coincides with
+ *     restarts, so even an uncounted orphan can never spin.
  *   - Single-instance assumption: isRunLive is in-memory, so "not live here" equals
  *     "no process" only while one backend instance runs this module — the same
  *     assumption the cancel path documents. If this backend is ever scaled
@@ -60,8 +65,28 @@ import { dispatchNextWaiting } from "./threads";
  *  slow repo clone (so a run still setting up is never grabbed), yet small enough
  *  that a turn resumes within a couple of minutes of a restart. */
 const RESUME_STALE_MS = 90_000;
-/** Give up (fail, don't resume) after this many auto-continuations of one run. */
-const MAX_RESUME_ATTEMPTS = 2;
+/** Give up (fail, don't resume) after this many auto-continuations that were the
+ *  RUN'S OWN fault (it crashed while the server stayed up — e.g. it reliably OOMs
+ *  the box). Restart-orphans (external deploy/box restart) do NOT count against
+ *  this — see PROCESS_BOOT_MS. Was 2; raised to 3 because a long turn (a build,
+ *  an install) legitimately spans more than two deploys, and the old budget made
+ *  it give up though it had never actually failed. */
+const MAX_RESUME_ATTEMPTS = 3;
+/** When THIS server process started (module-load time ≈ boot). A run whose last
+ *  heartbeat predates it was orphaned by the restart that birthed this process —
+ *  an EXTERNAL death (deploy / box restart), NOT the run crashing on its own. Such
+ *  a death must not burn a resume attempt, or a turn that merely spans a couple of
+ *  deploys exhausts the budget and gives up though it never failed. (Relies on the
+ *  same single-instance assumption as isRunLive.) */
+const PROCESS_BOOT_MS = Date.now();
+/** Absolute bound on the orphan path — the ONLY thing that bounds a run which
+ *  restarts the box on every attempt (a reliable-OOM run): its self-caused restart
+ *  is indistinguishable by timing from a deploy, so it always reads as a
+ *  restart-orphan and evades the per-attempt cap. 6h is far above any legitimate
+ *  console turn (RUN_TIMEOUT_MS is 45 min PER attempt; a turn that hasn't completed
+ *  a single uninterrupted window in 6h is stuck, not merely unlucky) yet bounds
+ *  such a run's restart-thrash to hours, not a day. */
+const ORPHAN_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 /** How often to scan for orphaned runs. */
 const SCAN_INTERVAL_MS = 60_000;
 /** Let the server settle before the first scan (routes mounted, DB reachable). */
@@ -115,13 +140,60 @@ async function markReplayed(runId: string, prompt: string | null): Promise<void>
   if (error) console.error("[claude/recover] replay note failed:", error.message);
 }
 
+export interface OrphanResumeDecision {
+  /** Fail the run (stop retrying) instead of resuming. */
+  giveUp: boolean;
+  /** The death was an external restart (last heartbeat predates this process), not
+   *  the run crashing on its own. */
+  restartOrphan: boolean;
+  /** What resume_attempts becomes on the next claim — unchanged for a restart-orphan,
+   *  +1 for a self-inflicted crash. */
+  nextAttempts: number;
+}
+
+/**
+ * Decide what to do with an orphaned run from timing facts alone — pure, so the
+ * branchy give-up/counting logic is unit-tested (recover.test.ts) instead of
+ * only exercised in production.
+ *
+ * `lastBeatMs`/`createdMs` are the run's last-heartbeat and creation epochs (0 when
+ * unparseable — treated as "unknown", never as 1970); `bootMs` = PROCESS_BOOT_MS.
+ *
+ *  - restartOrphan: last heartbeat predates this process → killed by a whole-server
+ *    restart (deploy / box), not a crash in a living server.
+ *  - giveUp: past the absolute age bound, OR a self-inflicted crash that has burned
+ *    the attempt budget. A restart-orphan is NEVER given up on the budget — only on
+ *    age — so an external restart can't doom a turn that never actually failed.
+ *  - nextAttempts: unchanged for a restart-orphan (didn't earn a strike), else +1.
+ */
+export function classifyOrphanResume(args: {
+  attempts: number;
+  lastBeatMs: number;
+  createdMs: number;
+  nowMs: number;
+  bootMs: number;
+  maxAttempts?: number;
+  maxAgeMs?: number;
+}): OrphanResumeDecision {
+  const maxAttempts = args.maxAttempts ?? MAX_RESUME_ATTEMPTS;
+  const maxAgeMs = args.maxAgeMs ?? ORPHAN_MAX_AGE_MS;
+  const restartOrphan = args.lastBeatMs > 0 && args.lastBeatMs < args.bootMs;
+  // Fail closed: an unknown creation time (0 / unparseable) must NOT disable the
+  // absolute bound — otherwise a perpetual restart-orphan with a bad created_at
+  // would never give up. Treat unknown age as "past the bound".
+  const tooOld = args.createdMs <= 0 || args.nowMs - args.createdMs > maxAgeMs;
+  const giveUp = tooOld || (!restartOrphan && args.attempts >= maxAttempts);
+  const nextAttempts = restartOrphan ? args.attempts : args.attempts + 1;
+  return { giveUp, restartOrphan, nextAttempts };
+}
+
 async function recoverOrphanedRuns(): Promise<void> {
   const cutoffMs = Date.now() - RESUME_STALE_MS;
   const cutoff = new Date(cutoffMs).toISOString();
 
   const { data: candidates, error } = await db
     .from("claude_runs")
-    .select("id, resume_attempts, thread_id, org_id, error, prompt, created_at")
+    .select("id, resume_attempts, thread_id, org_id, error, prompt, created_at, updated_at")
     .in("status", ["running", "queued"])
     .lt("updated_at", cutoff)
     .order("updated_at", { ascending: true })
@@ -226,7 +298,18 @@ async function recoverOrphanedRuns(): Promise<void> {
 
     const attempts = run.resume_attempts ?? 0;
 
-    if (attempts >= MAX_RESUME_ATTEMPTS) {
+    // Was this death the run's own fault or an external restart? The decision is pure
+    // (classifyOrphanResume) so it can be unit-tested; see its doc. Restart-orphans
+    // don't consume the attempt budget — the run never got a fair chance to finish.
+    const { giveUp, restartOrphan, nextAttempts } = classifyOrphanResume({
+      attempts,
+      lastBeatMs: Date.parse(run.updated_at ?? "") || 0,
+      createdMs: Date.parse(run.created_at ?? "") || 0,
+      nowMs: Date.now(),
+      bootMs: PROCESS_BOOT_MS,
+    });
+
+    if (giveUp) {
       // Terminal: stop the screen polling and tell the user to resend. Guarded on the
       // live states + still-stale so a run that recovered on its own is left alone.
       const { error: fErr } = await db
@@ -251,7 +334,7 @@ async function recoverOrphanedRuns(): Promise<void> {
       .from("claude_runs")
       .update({
         status: "queued",
-        resume_attempts: attempts + 1,
+        resume_attempts: nextAttempts,
         // A fresh attempt starts clean — the dead attempt's error/summary/timing must
         // not bleed into it.
         error: null,
@@ -291,7 +374,10 @@ async function recoverOrphanedRuns(): Promise<void> {
     await markReplayed(run.id, run.prompt);
 
     console.warn(
-      `[claude/recover] resuming orphaned run ${run.id} (attempt ${attempts + 1}/${MAX_RESUME_ATTEMPTS})`,
+      `[claude/recover] resuming orphaned run ${run.id} ` +
+        (restartOrphan
+          ? `(restart-orphan — attempt ${nextAttempts}/${MAX_RESUME_ATTEMPTS}, not counted)`
+          : `(attempt ${nextAttempts}/${MAX_RESUME_ATTEMPTS})`),
     );
     // Fire-and-forget: executeRun owns the row's terminal state and never throws at
     // the caller. Chain the same waiting-queue dispatch the normal launch path uses
