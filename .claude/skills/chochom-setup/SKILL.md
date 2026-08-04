@@ -10,9 +10,8 @@ description: משימה 1 בתוכנית ai chochom — להקים את סביב
 1. ודא ש-docs/ai-chochom-plan.md עדכני על main וש-CLAUDE.md מפנה אליו (סעיף "תוכנית ai chochom").
 2. העתק research.sh / research-gate.sh / research-guard.sh מ-video-lab, חווט ב-.claude/settings.json (PreToolUse: WebSearch|WebFetch|Bash→gate ; Stop→guard), מכסה RESEARCH_GATE_FREE=10. ודא .claude/research/ ב-.gitignore.
 3. ודא שכל 24 הסקילים chochom-* קיימים, וצור תיקיות docs/ai-chochom/{decisions,eval,marketing}.
-4. חמש watchdog (longtask.sh arm + Routine).
-5. עבור על "בדיקת-סיום להקמה" סעיף-סעיף, כולל אימות שמשתנה הסביבה SMRTPLAN_PLAN_ID_CHOCHOM קיים (POST לדיווח-כרטיס עובר).
-6. מזג ל-main לפי כללי הדחיפה.
+4. עבור על "בדיקת-סיום להקמה" סעיף-סעיף, כולל אימות שמשתנה הסביבה SMRTPLAN_PLAN_ID_CHOCHOM קיים (POST לדיווח-כרטיס עובר).
+5. מזג ל-main לפי כללי הדחיפה.
 
 ## כללים תמיד
 - אישור-עלות לפני כל הרצה בתשלום (עד $5 בתקציב-שלב מאושר → "כן" בסשן; מעל → משימת-אישור).

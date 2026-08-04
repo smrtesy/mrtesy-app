@@ -72,15 +72,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/longtask-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
             "command": ".claude/hooks/research-guard.sh"
           }
         ]
