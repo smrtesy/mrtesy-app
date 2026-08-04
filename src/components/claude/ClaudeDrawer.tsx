@@ -4,13 +4,26 @@
  * ClaudeDrawer — the in-app Claude console as a floating, collapsible side chat.
  *
  * Opened from the app's EXISTING Claude entry points (the sidebar "קלוד" button
- * on desktop, the Claude FAB on mobile) via ClaudeDrawerContext — it has no
- * launcher of its own, so there is no second button for the same thing. It
- * floats above whatever screen you're on — NOT a full tab, NOT full screen
- * height. Inside it hosts the real /claude console in an iframe (`?embed=1`,
- * which strips the app chrome), so the drawer inherits every console feature and
- * future change with zero duplication, and the framed URL/router state stays
- * fully isolated from the host screen it floats over.
+ * on desktop) via ClaudeDrawerContext — it has no launcher of its own, so there
+ * is no second button for the same thing. It floats above whatever screen you're
+ * on — NOT a full tab, NOT full screen height. Inside it hosts the real /claude
+ * console in an iframe (`?embed=1`, which strips the app chrome), so the drawer
+ * inherits every console feature and future change with zero duplication, and the
+ * framed URL/router state stays fully isolated from the host screen it floats over.
+ *
+ * DESKTOP ONLY. On mobile the same Claude button navigates to the full /claude
+ * screen instead (Sidebar) — a small floating box is the wrong shape on a phone —
+ * so the drawer renders nothing under the mobile breakpoint even if a desktop
+ * session left it open in localStorage.
+ *
+ * Bridge to the framed chat (the iframe is a separate document, so events and the
+ * router don't cross into it): postMessage in both directions.
+ *   → iframe: `claude-drawer:new` (open a fresh chat on every open — the button is
+ *     "start something new", not "resume"), `claude-drawer:seed` (relay an inspect
+ *     mark into the open chat), `claude-drawer:shown` (scroll to the latest).
+ *   ← iframe: `claude-chat:title` (the live thread title, shown in the slim header).
+ * The FIRST open loads the iframe already carrying `?new`, so the chat starts fresh
+ * without a postMessage race; later opens (iframe kept alive) send `claude-drawer:new`.
  *
  * Two things make the iframe safe here:
  *   1. Recursion guard — the framed /claude loads (app)/layout.tsx again, which
@@ -26,13 +39,14 @@
  * while you toggle the drawer closed and open again.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Sparkles, X, Maximize2, Loader2 } from "lucide-react";
+import { X, Maximize2, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { isEmbeddedPane } from "@/lib/navigate";
 import { useClaudeDrawer } from "@/contexts/ClaudeDrawerContext";
+import { DRAWER_RESEED_EVENT } from "./ClaudeInspector";
 
 export function ClaudeDrawer({ locale }: { locale: string }) {
   const t = useTranslations("claudeDrawer");
@@ -41,14 +55,33 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
   // render match (nothing), then flips to true only when this window is a real
   // top-level document — never inside the console's own iframe.
   const [enabled, setEnabled] = useState(false);
+  // Under the mobile breakpoint the drawer is suppressed — the Claude button goes
+  // to the full screen there instead (bug 9).
+  const [isMobile, setIsMobile] = useState(false);
   // Mount the (heavy) iframe only after the first open, then keep it alive so
   // the conversation survives a close/reopen.
   const [loaded, setLoaded] = useState(false);
   // The framed app takes a moment to boot — show a spinner until its first load.
   const [ready, setReady] = useState(false);
+  // The open thread's title, pushed up from the framed chat — the slim header
+  // shows it instead of a generic icon + "קלוד" (bug 5).
+  const [threadTitle, setThreadTitle] = useState("");
+
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // True once the iframe has mounted at least once — distinguishes the first open
+  // (iframe loads with ?new) from later opens (message the live chat instead).
+  const openedOnceRef = useRef(false);
 
   useEffect(() => {
     if (!isEmbeddedPane()) setEnabled(true);
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767.98px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
   }, []);
 
   // Lazy-mount the iframe the first time the drawer opens (open may already be
@@ -56,6 +89,45 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
   useEffect(() => {
     if (open) setLoaded(true);
   }, [open]);
+
+  function post(type: string) {
+    iframeRef.current?.contentWindow?.postMessage({ type }, window.location.origin);
+  }
+
+  // On every open: start a fresh chat and jump to the bottom (bugs 3/8). The first
+  // open is handled by the ?new the iframe loads with (no live listener yet to
+  // race); later opens message the already-mounted chat.
+  useEffect(() => {
+    if (!open || !ready) return;
+    if (openedOnceRef.current) {
+      post("claude-drawer:new");
+      post("claude-drawer:shown");
+    } else {
+      openedOnceRef.current = true;
+    }
+  }, [open, ready]);
+
+  // The live thread title from the framed chat.
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.source !== iframeRef.current?.contentWindow) return;
+      const d = e.data as { type?: string; title?: string } | null;
+      if (d?.type === "claude-chat:title") {
+        setThreadTitle(typeof d.title === "string" ? d.title : "");
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // Inspect mode fired with the drawer open — relay the captured mark (already in
+  // sessionStorage) into the framed chat instead of navigating the whole tab (bug 1).
+  useEffect(() => {
+    const onReseed = () => post("claude-drawer:seed");
+    window.addEventListener(DRAWER_RESEED_EVENT, onReseed);
+    return () => window.removeEventListener(DRAWER_RESEED_EVENT, onReseed);
+  }, []);
 
   // Escape closes the drawer while it is open.
   useEffect(() => {
@@ -67,7 +139,7 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, closeDrawer]);
 
-  if (!enabled || !loaded) return null;
+  if (!enabled || !loaded || isMobile) return null;
 
   return (
     <div data-claude-drawer>
@@ -78,21 +150,30 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
       <div
         className={cn(
           "fixed z-[60] flex flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl",
-          "bottom-20 md:bottom-6 start-4 md:start-56",
+          "bottom-6 start-56",
           "w-[min(26rem,calc(100vw-2rem))] h-[min(38rem,calc(100dvh-7rem))]",
           !open && "hidden",
         )}
         role="dialog"
         aria-label={t("title")}
       >
-        <header className="flex items-center gap-2 border-b px-3 py-2">
-          <Sparkles className="size-4 shrink-0 text-primary" />
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{t("title")}</span>
+        {/* Slim header: the open chat's title (not a generic icon + "קלוד"),
+            plus expand and close. Lives outside the scrolling iframe, so it is
+            always pinned at the top of the drawer. */}
+        <header className="flex items-center gap-2 border-b px-3 py-1.5">
+          <span
+            className="min-w-0 flex-1 truncate text-sm font-medium"
+            dir="auto"
+            title={threadTitle || t("untitled")}
+          >
+            {threadTitle || t("untitled")}
+          </span>
           <a
             href={`/${locale}/claude`}
+            onClick={closeDrawer}
             aria-label={t("openFull")}
             title={t("openFull")}
-            className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
           >
             <Maximize2 className="size-4" />
           </a>
@@ -101,7 +182,7 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
             onClick={closeDrawer}
             aria-label={t("close")}
             title={t("close")}
-            className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
           >
             <X className="size-4" />
           </button>
@@ -114,7 +195,8 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
             </div>
           )}
           <iframe
-            src={`/${locale}/claude?embed=1`}
+            ref={iframeRef}
+            src={`/${locale}/claude?embed=1&new=drawer`}
             title={t("title")}
             onLoad={() => setReady(true)}
             className="h-full w-full border-0"

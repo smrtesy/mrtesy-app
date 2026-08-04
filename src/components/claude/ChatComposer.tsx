@@ -221,6 +221,54 @@ export function ChatComposer({
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void send();
+              return;
+            }
+            // Shift+Enter continues a numbered/bulleted list automatically — the
+            // next marker ("2. ", "- ") appears on the new line instead of the
+            // user typing it. Empty item + Shift+Enter ends the list (drops the
+            // dangling marker), the editor convention.
+            if (e.key === "Enter" && e.shiftKey && !e.nativeEvent.isComposing) {
+              const el = areaRef.current;
+              if (!el || el.selectionStart !== el.selectionEnd) return; // caret only
+              const pos = el.selectionStart;
+              const before = text.slice(0, pos);
+              const lineStart = before.lastIndexOf("\n") + 1;
+              const line = before.slice(lineStart);
+              const numbered = line.match(/^(\s*)(\d+)([.)])(\s+)(.*)$/);
+              const bullet = line.match(/^(\s*)([-*])(\s+)(.*)$/);
+              let marker: string | null = null;
+              let itemEmpty = false;
+              if (numbered) {
+                itemEmpty = numbered[5].trim() === "";
+                marker = `${numbered[1]}${parseInt(numbered[2], 10) + 1}${numbered[3]}${numbered[4]}`;
+              } else if (bullet) {
+                itemEmpty = bullet[4].trim() === "";
+                marker = `${bullet[1]}${bullet[2]}${bullet[3]}`;
+              }
+              if (marker === null) return; // not a list line → plain newline
+              // Only continue/end the list when the caret sits at the line's end.
+              // Mid-item ("2. |extra") falls through to a plain newline — otherwise
+              // `line` (text before the caret only) would misread the item as empty
+              // and merge the trailing text upward, losing it.
+              const rest = text.slice(pos);
+              const nl = rest.indexOf("\n");
+              if ((nl === -1 ? rest : rest.slice(0, nl)).trim() !== "") return;
+              e.preventDefault();
+              if (itemEmpty) {
+                // The user pressed on an empty marker — end the list.
+                const next = text.slice(0, lineStart) + text.slice(pos);
+                setText(next);
+                requestAnimationFrame(() => {
+                  el.selectionStart = el.selectionEnd = lineStart;
+                });
+                return;
+              }
+              const insert = `\n${marker}`;
+              const next = text.slice(0, pos) + insert + text.slice(pos);
+              setText(next);
+              requestAnimationFrame(() => {
+                el.selectionStart = el.selectionEnd = pos + insert.length;
+              });
             }
           }}
           onPaste={(e) => {
