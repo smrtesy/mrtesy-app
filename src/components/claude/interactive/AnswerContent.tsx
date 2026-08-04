@@ -17,6 +17,7 @@
  */
 
 import { Markdown } from "@/components/common/Markdown";
+import { MarkdownTabLink } from "@/components/common/MarkdownTabLink";
 import { splitInteractive, hasInteractive } from "./blocks";
 import { AskBlock } from "./AskBlock";
 import { PlanBlock } from "./PlanBlock";
@@ -40,7 +41,7 @@ export function AnswerContent({
   // Fast path: no widgets → render exactly as before, one Markdown pass.
   if (!hasInteractive(segments)) {
     return (
-      <Markdown density="chat" className={className}>
+      <Markdown density="chat" className={className} linkComponent={MarkdownTabLink}>
         {answer}
       </Markdown>
     );
@@ -52,7 +53,11 @@ export function AnswerContent({
         if (seg.kind === "md") {
           // Trim so a blank line around a block doesn't render an empty
           // paragraph; Markdown returns null for whitespace-only input anyway.
-          return seg.text.trim() ? <Markdown key={i} density="chat">{seg.text}</Markdown> : null;
+          return seg.text.trim() ? (
+            <Markdown key={i} density="chat" linkComponent={MarkdownTabLink}>
+              {seg.text}
+            </Markdown>
+          ) : null;
         }
         if (seg.kind === "ask") {
           return (

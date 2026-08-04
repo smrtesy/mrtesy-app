@@ -49,6 +49,33 @@ export function isEmbeddedPane(): boolean {
 }
 
 /**
+ * An in-app target returns its locale-agnostic path (so it can open as a
+ * workspace tab); an external target (github, google docs, mailto, …) returns
+ * null and stays a normal new-browser-tab link.
+ *
+ * In-app = a relative path, this app's own origin, or the production host
+ * app.smrtesy.com. The host check is SSR-safe; the same-origin fallback (for
+ * preview / non-production domains) is evaluated only on the client. Shared by
+ * every surface that renders Claude-authored links — the studio console and the
+ * built-in Claude console — so an in-app deep link opens as a pane tab instead
+ * of a new browser window.
+ */
+export function toInAppPath(url: string): string | null {
+  if (!url) return null;
+  // A protocol-relative "//host/…" is external, not an in-app path.
+  if (url.startsWith("//")) return null;
+  if (url.startsWith("/")) return url;
+  try {
+    const u = new URL(url);
+    const sameOrigin = typeof window !== "undefined" && u.origin === window.location.origin;
+    if (u.host === "app.smrtesy.com" || sameOrigin) return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    /* not an absolute URL — treat as external */
+  }
+  return null;
+}
+
+/**
  * Ask the top-level tabs workspace to open `href` as a NEW pane. A link inside
  * a pane lives in an iframe and has no access to the workspace's React context,
  * so a plain navigation would just replace that pane's own iframe. Posting this

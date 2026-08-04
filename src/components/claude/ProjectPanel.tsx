@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Markdown } from "@/components/common/Markdown";
+import { MarkdownTabLink } from "@/components/common/MarkdownTabLink";
 import { api } from "@/lib/api/client";
 import type { ProposedPart } from "./DecomposeReview";
 
@@ -296,7 +297,7 @@ export function ProjectPanel({
               />
             ) : board.trim() ? (
               <div className="max-h-64 overflow-y-auto rounded-lg border bg-card p-3">
-                <Markdown density="chat">{board}</Markdown>
+                <Markdown density="chat" linkComponent={MarkdownTabLink}>{board}</Markdown>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">{t("boardEmpty")}</p>
