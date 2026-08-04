@@ -434,6 +434,7 @@ function SecretCard({ secret, onChange }: { secret: Secret; onChange: () => void
           {addingTarget && (
             <AddTargetForm
               secretId={secret.id}
+              secretKeyName={secret.key_name}
               onDone={() => {
                 setAddingTarget(false);
                 onChange();
@@ -524,18 +525,33 @@ function TargetRow({ target, onRemove }: { target: Target; onRemove: () => void 
   );
 }
 
+/** Derive an UPPER_SNAKE env-var name from a secret's key_name, so the target
+ *  form pre-fills instead of making the user retype it. Returns "" when the label
+ *  can't map to a valid identifier (e.g. a Hebrew label) — then the field stays
+ *  empty and the user types it. */
+function keyToEnvVar(keyName: string): string {
+  const up = keyName
+    .trim()
+    .toUpperCase()
+    .replace(/[\s.:/-]+/g, "_")
+    .replace(/[^A-Z0-9_]/g, "");
+  return /^[A-Z][A-Z0-9_]{1,63}$/.test(up) ? up : "";
+}
+
 function AddTargetForm({
   secretId,
+  secretKeyName,
   onDone,
   onCancel,
 }: {
   secretId: string;
+  secretKeyName: string;
   onDone: () => void;
   onCancel: () => void;
 }) {
   const t = useTranslations("adminSecretsManaged");
   const [provider, setProvider] = useState("railway");
-  const [envVar, setEnvVar] = useState("");
+  const [envVar, setEnvVar] = useState(() => keyToEnvVar(secretKeyName));
   const [environment, setEnvironment] = useState("production");
   const [targetRef, setTargetRef] = useState("");
   const [busy, setBusy] = useState(false);

@@ -1826,7 +1826,7 @@
     "targetRef": "Service id (optional)",
     "targetRefPlaceholder": "Railway service id — blank = the single service",
     "targetRefVercel": "Vercel project id",
-    "targetRefVercelPlaceholder": "Vercel project id (required)",
+    "targetRefVercelPlaceholder": "Optional — empty = the platform's default project",
     "targetRefSupabase": "Not needed for Supabase",
     "add": "Add",
     "removeTarget": "Remove target",
