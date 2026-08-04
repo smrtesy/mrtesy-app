@@ -241,7 +241,12 @@ function Heading({
   );
 }
 
-/** Fenced code block: horizontal scroll, forced LTR, quiet copy button. */
+/** Fenced code block: horizontal scroll, forced LTR, and an always-present copy
+ *  button. Unlike the message-level copy (hover-revealed, `reveal`), a code block
+ *  is exactly where a persistent one-tap copy is expected — and on a phone (no
+ *  hover) a hover-revealed control is a coin-flip. So the button rests visible but
+ *  quiet (muted, low opacity) and goes full on hover/focus. `pe-12` on the <pre>
+ *  keeps the first line's text from sliding under the button. */
 function CodeBlock({ children, labels }: { children: ReactNode; labels: Labels }) {
   // Same trailing-newline strip the <code> renderer applies, so what lands on
   // the clipboard matches what the user sees in the box.
@@ -252,7 +257,7 @@ function CodeBlock({ children, labels }: { children: ReactNode; labels: Labels }
       <pre
         dir="ltr"
         className={cn(
-          "overflow-x-auto rounded-lg border bg-muted/50 p-3 text-start",
+          "overflow-x-auto rounded-lg border bg-muted/50 p-3 pe-12 text-start",
           "font-mono text-[12.5px] leading-relaxed",
           // The inner <code> carries the inline-code pill styling; strip it
           // back off inside a block so the pill doesn't nest in the box.
@@ -265,8 +270,7 @@ function CodeBlock({ children, labels }: { children: ReactNode; labels: Labels }
         text={text}
         label={labels.copyCode}
         copiedLabel={labels.copied}
-        reveal="code"
-        className="absolute end-2 top-2 border bg-background/90"
+        className="absolute end-2 top-2 border bg-background/90 opacity-70 hover:opacity-100 focus-visible:opacity-100 group-hover/code:opacity-100"
       />
     </div>
   );
