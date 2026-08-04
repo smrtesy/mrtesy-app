@@ -3207,7 +3207,9 @@
       "loadFiles": "Load files",
       "loadingFiles": "Loading…",
       "noFiles": "No audio files found in the folder",
-      "cloneFromDriveCount": "Create clone from {count} files"
+      "cloneFromDriveCount": "Create clone from {count} files",
+      "errorNoSlots": "Resemble is out of rapid voice-clone slots. Buy more (or delete unused voices from the Library) to clone again.",
+      "openBilling": "Open Resemble billing"
     },
     "recordingUploader": {
       "titleNew": "Upload editor recording (STS)",

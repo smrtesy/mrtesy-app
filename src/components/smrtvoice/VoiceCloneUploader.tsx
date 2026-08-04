@@ -8,7 +8,7 @@ import { Loader2, Check, Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api/client";
+import { api, ApiError } from "@/lib/api/client";
 
 import { DriveFolderPicker } from "./DriveFolderPicker";
 
@@ -126,6 +126,25 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, voiceProvide
     setBgNote(false);
   }
 
+  // Surface a clone failure. Resemble's "no rapid clone slots" is a billing
+  // quota (not a bug, not an audio-length problem) — the backend tags it with
+  // code "resemble_no_slots" + a billing link, so we show a clear message with a
+  // one-click shortcut to buy more slots instead of raw provider English.
+  function handleCloneError(err: unknown) {
+    if (err instanceof ApiError) {
+      const body = err.body as { code?: string; link?: string } | undefined;
+      if (body?.code === "resemble_no_slots") {
+        toast.error(t("errorNoSlots"), {
+          action: body.link
+            ? { label: t("openBilling"), onClick: () => window.open(body.link, "_blank", "noopener") }
+            : undefined,
+        });
+        return;
+      }
+    }
+    toast.error(err instanceof Error ? err.message : "Unknown error");
+  }
+
   async function onUpload() {
     if (files.length === 0) return;
     setFlow("upload");
@@ -162,7 +181,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, voiceProvide
       setFiles([]);
       await afterClone(status, character.resemble_voice_id);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unknown error");
+      handleCloneError(err);
       if (mountedRef.current) setPhase("idle");
     }
   }
@@ -209,7 +228,7 @@ export function VoiceCloneUploader({ characterId, hasExistingVoice, voiceProvide
       });
       await afterClone(status, character.resemble_voice_id);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unknown error");
+      handleCloneError(err);
       if (mountedRef.current) setPhase("idle");
     }
   }
