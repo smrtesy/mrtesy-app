@@ -189,6 +189,15 @@ function railwayState(status: string): ProviderState {
   }
 }
 
+/**
+ * Railway statuses that mean "this commit was NOT deployed" — the previous
+ * deployment is still the one serving traffic. Since we set watch paths so
+ * Railway only rebuilds on backend changes, every frontend-only push produces a
+ * SKIPPED deployment; that is normal, not a problem, so we must look past it to
+ * the real running deployment instead of showing the dot grey/unknown.
+ */
+const RAILWAY_NON_DEPLOY = new Set(["SKIPPED", "REMOVED"]);
+
 async function railwayGraphql(
   token: string,
   query: string,
@@ -292,6 +301,9 @@ export async function railwayLatestStatus(): Promise<DeployStatus> {
       }
     }
 
+    // Fetch several deployments (not just the latest) so a run of SKIPPED
+    // deployments — every frontend-only push, given our backend watch paths —
+    // doesn't hide the deployment that is actually serving traffic.
     const query = `query deployments($input: DeploymentListInput!, $first: Int) {
       deployments(input: $input, first: $first) {
         edges { node { id status createdAt url staticUrl meta } }
@@ -299,7 +311,7 @@ export async function railwayLatestStatus(): Promise<DeployStatus> {
     }`;
     const { ok, status, data, errors } = await railwayGraphql(token, query, {
       input: { projectId, serviceId, environmentId },
-      first: 1,
+      first: 20,
     });
     if (!ok || errors) {
       const msg = Array.isArray(errors) && errors[0] && typeof errors[0] === "object"
@@ -307,9 +319,16 @@ export async function railwayLatestStatus(): Promise<DeployStatus> {
         : undefined;
       return { provider: "railway", configured: true, error: `Railway API ${status}${msg ? `: ${msg}` : ""}` };
     }
-    const node = (
+    const nodes = (
       data as { deployments?: { edges?: Array<{ node?: Record<string, unknown> }> } }
-    )?.deployments?.edges?.[0]?.node;
+    )?.deployments?.edges?.map((e) => e.node).filter(Boolean) as
+      | Array<Record<string, unknown>>
+      | undefined;
+    // The newest deployment that actually deployed (skip SKIPPED/REMOVED — those
+    // mean "not built", so the prior deploy is still live). Fall back to the very
+    // latest node if every one in the window is a non-deploy (nothing else to show).
+    const node =
+      nodes?.find((n) => !RAILWAY_NON_DEPLOY.has(String(n.status ?? ""))) ?? nodes?.[0];
     if (!node) {
       return { provider: "railway", configured: true, state: "unknown", error: "no deployment found" };
     }
