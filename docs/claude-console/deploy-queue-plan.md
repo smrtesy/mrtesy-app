@@ -1,223 +1,206 @@
-# Deploy queue — coalescing backend deploys so console runs stop killing each other
+# תור-פריסה — צירוף פריסות-שרת כדי שריצות הקונסולה יפסיקו להרוג זו את זו
 
-> Status: **design, awaiting approval**. Author: Claude console session, 2026-08-04.
-> Owner decision points are marked **[decision]**.
+> סטטוס: **תכנון, ממתין לאישור**. נכתב ע"י סשן קונסולה, 4/8/2026.
+> נקודות-הכרעה לבעלים מסומנות **[החלטה]**.
 
-## The problem
+## הבעיה
 
-The Claude console runner lives inside the **Railway backend process**. Railway
-auto-deploys the backend on every push to `main`, and a deploy sends `SIGTERM`
-(exit 143) to the container — which kills **every in-flight console run at once**.
+מריץ הקונסולה חי בתוך **תהליך ה-backend ב-Railway**. Railway פורס את ה-backend
+מחדש על כל דחיפה ל-`main`, ופריסה שולחת `SIGTERM` (exit 143) לקונטיינר — מה
+ש**הורג את כל הריצות החיות בבת-אחת**.
 
-When the user works on several fixes in parallel (the normal workflow), each fix
-pushes to `main` in its turn, and every one of those pushes restarts the backend
-and knocks down all the *other* running fixes. Hard evidence (Railway deployment
-history, 2026-08-04): deploys landed 3–14 minutes apart in bursts
-(`08:08 → 08:15 → 08:23 → 08:28 → 08:36 → 08:39 → 08:53`), and console runs gave
-up in the same windows — different threads dying at the *same second*, the
-signature of a shared cause (a restart), not a per-run crash.
+כשהמשתמש עובד על כמה תיקונים במקביל (זרימת-העבודה הרגילה), כל תיקון דוחף ל-`main`
+בתורו, וכל דחיפה כזאת מאתחלת את השרת ומפילה את כל שאר התיקונים הרצים. ראיה קשה
+(היסטוריית הפריסות של Railway, 4/8/2026): פריסות נחתו בפער 3–14 דקות בגלים
+(`08:08 → 08:15 → 08:23 → 08:28 → 08:36 → 08:39 → 08:53`), וריצות קונסולה ויתרו
+באותם חלונות — thread-ים שונים מתים באותה שנייה, החתימה של סיבה משותפת (אתחול),
+לא של קריסת-ריצה בודדת.
 
-## What is already done (do not redo)
+## מה כבר נעשה (לא לחזור על זה)
 
-1. **`watchPatterns = server/**` on the Railway service** (enabled by the user,
-   2026-08-04). The backend now redeploys **only** when a push changes
-   `server/**`. Frontend (`src/**`), docs, and plan pushes no longer restart it.
-   This removed the majority of the restarts on its own.
-2. **Run-recovery tolerates restarts** (merged `main`, commit `e013d212`):
-   `MAX_RESUME_ATTEMPTS` raised to 3, and a *restart-orphan* (a run killed by the
-   deploy that started the current process — last heartbeat predates
-   `PROCESS_BOOT_MS`) does **not** consume the attempt budget. So a run killed by
-   a deploy now resumes itself instead of giving up. See
+1. **`watchPatterns = server/**` על שירות Railway** (הופעל ע"י המשתמש, 4/8/2026).
+   מעכשיו ה-backend נפרס מחדש **רק** כשדחיפה נוגעת ב-`server/**`. דחיפות פרונט
+   (`src/**`), דוקס ותוכניות כבר לא מאתחלות אותו. זה לבדו הסיר את רוב האתחולים.
+2. **שחזור-ריצות סובל אתחולים** (מוזג ל-`main`, commit `e013d212`):
+   `MAX_RESUME_ATTEMPTS` הועלה ל-3, ו**יתום-אתחול** (ריצה שנהרגה מהפריסה שהתחילה
+   את התהליך הנוכחי — פעימה אחרונה שקודמת ל-`PROCESS_BOOT_MS`) **לא** צורך ניסיון
+   מהתקציב. אז ריצה שנהרגה מפריסה משחזרת את עצמה במקום לוותר. ראה
    `server/src/modules/claude/recover.ts`.
 
-Because of #2, a deploy is **no longer catastrophic** — interrupted runs recover.
-That reframes this feature: the queue's job is to **reduce how often** the backend
-restarts (coalesce many server deploys into one), NOT to guarantee zero
-interruptions. This is why the design deliberately drops the intrusive parts the
-user and I discussed and rejected (blocking the user from editing; waiting for
-"no session active").
+בגלל #2, פריסה **כבר לא הרסנית** — ריצות שנקטעו משוחזרות. זה ממסגר מחדש את הפיצ'ר
+הזה: תפקיד התור הוא **להפחית את תדירות** האתחולים (לצרף הרבה פריסות-שרת לאחת),
+**לא** להבטיח אפס-קטיעות. לכן התכנון מוותר במכוון על החלקים החודרניים שדנו בהם
+ופסלנו (לחסום את המשתמש מלערוך; להמתין ל"אין סשן פעיל").
 
-## Goals / non-goals
+## מטרות / לא-מטרות
 
-**Goals**
-- Collapse N near-simultaneous server deploys into **one** deploy of the whole batch.
-- Deploy the batch at a settled moment, or within a **30-minute** cap regardless.
-- Zero added friction to the user's actual work — the coding loop is not slowed.
+**מטרות**
+- לכווץ N פריסות-שרת כמעט-בו-זמניות לפריסה **אחת** של כל הצרור.
+- לפרוס את הצרור ברגע התייצבות, או בתוך תקרת **30 דקות** בכל מקרה.
+- אפס חיכוך לעבודה האמיתית של המשתמש — לולאת-הקוד לא מואטת.
 
-**Non-goals**
-- Do **not** block the user from working or editing during a pending deploy.
-- Do **not** wait on non-server work (conversations, frontend, docs) — none of it
-  restarts the backend.
-- Do **not** try to perfectly time deploys to zero active runs (recovery covers the
-  interruption).
+**לא-מטרות**
+- **לא** לחסום את המשתמש מעבודה או עריכה בזמן שפריסה ממתינה.
+- **לא** להמתין לעבודה שאינה שרת (שיחות, פרונט, דוקס) — שום דבר מזה לא מאתחל את
+  ה-backend.
+- **לא** לנסות לתזמן פריסות לאפס-ריצות-פעילות בצורה מושלמת (השחזור מכסה את הקטיעה).
 
-## The model (settled with the user)
+## המודל (סוכם עם המשתמש)
 
-### 1. Only `server/**` changes are queued; everything else pushes immediately
+### 1. רק שינויי `server/**` נכנסים לתור; כל השאר נדחף מיד
 
-The single fact that decides whether a push restarts the backend is **whether its
-diff touches `server/**`** — the exact same rule as the watch path. So that is the
-queue's membership rule too:
+העובדה היחידה שקובעת אם דחיפה מאתחלת את ה-backend היא **האם ה-diff נוגע
+ב-`server/**`** — בדיוק אותו כלל של ה-watch path. אז זה גם כלל-החברות של התור:
 
-| The branch's diff vs `origin/main` | What happens |
+| ה-diff של הענף מול `origin/main` | מה קורה |
 |---|---|
-| touches `server/**` | routed into the **deploy queue** (coalesced) — this is what restarts the backend |
-| touches only `src/**`, `docs/**`, … | **pushed to `main` immediately**, no queue — it will not restart the backend |
+| נוגע ב-`server/**` | מנותב ל**תור-הפריסה** (מצורף) — זה מה שמאתחל את ה-backend |
+| נוגע רק ב-`src/**`, `docs/**`, … | **נדחף ל-`main` מיד**, בלי תור — לא יאתחל את ה-backend |
 
-Deterministic check, no guessing: `git diff --name-only origin/main...HEAD` — any
-line under `server/` ⇒ server change.
+בדיקה דטרמיניסטית, בלי ניחוש: `git diff --name-only origin/main...HEAD` — כל שורה
+תחת `server/` ⇒ שינוי-שרת.
 
-### 2. Two-state queue entries: `building` → `ready`
+### 2. שני מצבים בתור: `building` → `ready`
 
-A server fix is registered as early as possible, so the coordinator holds the
-deploy for fixes that are still in flight (not only ones already finished — the
-gap the user caught).
+תיקון-שרת נרשם מוקדם ככל האפשר, כדי שהמתאם יחזיק את הפריסה גם עבור תיקונים שעדיין
+בתנועה (לא רק כאלה שכבר סיימו — הפער שהמשתמש תפס).
 
-| State | Set when | Effect on the deploy |
+| מצב | נקבע כאשר | השפעה על הפריסה |
 |---|---|---|
-| `building` | the run first changes a file under `server/` (see detection below) | the coordinator will **not** fire a deploy while any `building` row exists — a fix is still coming |
-| `ready` | the run built + tested + pushed its **branch**, and would otherwise have pushed to `main` | joins the batch |
+| `building` | הריצה משנה לראשונה קובץ תחת `server/` (ראה זיהוי למטה) | המתאם **לא** יפרוס כל עוד יש שורת `building` — תיקון עוד בדרך |
+| `ready` | הריצה בנתה + בדקה + דחפה את ה**ענף**, ואחרת הייתה דוחפת ל-`main` | מצטרף לצרור |
 
-The deploy fires only when **every** row is `ready` (none `building`) **and** the
-batch has settled (§4).
+הפריסה נורית רק כש**כל** השורות ב-`ready` (אף אחת ב-`building`) **וגם** הצרור
+התייצב (§4).
 
-### 3. Detection — max-speed (the user's choice)
+### 3. זיהוי — מקסימום-מהירות (בחירת המשתמש)
 
-The early `building` signal comes from a **hook the engine runs automatically**
-(same reliability model as the existing `map-guard` / `cost-guard` hooks — not
-dependent on the model remembering).
+הסימן המוקדם `building` מגיע מ**הוק שהמנוע מריץ אוטומטית** (אותו מודל אמינות של
+ה-hooks הקיימים `map-guard` / `cost-guard` — לא תלוי במודל שיזכור).
 
-- **Fast path (Edit/Write):** a `PostToolUse` hook matched to `Edit|Write` reads
-  the tool's `file_path`. If it is under `server/` **and** a local marker
-  (`.claude/tmp/deploy-building-<thread>.marker`) does not yet exist → fire a
-  **fire-and-forget** `register-building` POST and drop the marker. Cost: a string
-  check, sub-millisecond. Once the marker exists every later call **short-circuits**
-  immediately. No `git`, no per-call DB write.
-- **No bash-diff in the loop.** Side-channel edits (`sed`, `git apply`, codegen)
-  are **not** chased on every Bash call (that was the max-accuracy option we
-  dropped). They are caught by the push-time gate instead (below), so nothing is
-  ever *missed* — the fast hook only affects how early coalescing sees the fix, and
-  **correctness does not depend on it**.
+- **מסלול מהיר (Edit/Write):** הוק `PostToolUse` משויך ל-`Edit|Write` קורא את
+  `file_path` של הכלי. אם הוא תחת `server/` **וגם** סמן מקומי
+  (`.claude/tmp/deploy-building-<thread>.marker`) עוד לא קיים → יורה POST
+  **שגר-ושכח** ל-`register-building` ומניח את הסמן. עלות: בדיקת-מחרוזת,
+  תת-מילישנייה. מרגע שהסמן קיים כל קריאה הבאה **מקצרת-דרך** מיד. בלי `git`, בלי
+  כתיבת-DB בכל קריאה.
+- **בלי bash-diff בלולאה.** עריכות-מהצד (`sed`, `git apply`, קוד שמייצר קבצים)
+  **לא** נרדפות בכל קריאת Bash (זו אפשרות מקסימום-הדיוק שוויתרנו עליה). הן נתפסות
+  ע"י שער-הדחיפה (למטה), אז שום דבר לא *נופל* — ההוק המהיר רק משפיע על כמה מוקדם
+  הצירוף רואה את התיקון, ו**התקינות לא תלויה בו**.
 
-### 4. When the batch deploys
+### 4. מתי הצרור נפרס
 
-Fire the batched deploy when **both** hold:
-- **all** queue rows are `ready` (no `building`), and
-- the batch has **settled**: no server change entered/updated the queue in the last
-  **~3 minutes** (the user's wave has stopped),
+לירות את הפריסה המצורפת כש**שניהם** מתקיימים:
+- **כל** שורות התור ב-`ready` (אף אחת ב-`building`), וגם
+- הצרור **התייצב**: לא נכנס/עודכן שינוי-שרת בתור ב~**3 הדקות** האחרונות (הגל של
+  המשתמש נגמר),
 
-**or** the **30-minute cap** from the earliest still-queued row has elapsed —
-whichever comes first. A steady trickle of fixes therefore still ships within 30
-minutes of the first one.
+**או** עברה **תקרת 30 הדקות** מהשורה הכי-מוקדמת שעדיין בתור — המוקדם מביניהם. אז
+טפטוף מתמשך של תיקונים עדיין נשלח בתוך 30 דקות מהראשון.
 
-### 5. The clock
+### 5. השעון
 
-A compact widget in the console shows the queue: the pending server fixes
-(count + titles), each row's state, and a live **countdown** — `פורס בעוד M:SS
-(או כשהצרור יתייצב)` — visible even while quiet has not arrived. Compact-by-default
-per the UI rule: one quiet entry point, not a permanent toolbar.
+widget קומפקטי בקונסולה מציג את התור: תיקוני-השרת הממתינים (כמות + כותרות), מצב כל
+שורה, ו**ספירה-לאחור** חיה — `פורס בעוד M:SS (או כשהצרור יתייצב)` — גלוי גם כשעוד
+לא הגיע שקט. קומפקטי-כברירת-מחדל לפי כלל-הממשק: נקודת-כניסה שקטה אחת, לא סרגל קבוע.
 
-## Where the pieces live
+## איפה כל חלק חי
 
-### DB — `claude_deploy_queue` (org-scoped, like the other `claude_*` tables)
+### DB — `claude_deploy_queue` (org-scoped, כמו שאר טבלאות `claude_*`)
 
-| column | notes |
+| עמודה | הערות |
 |---|---|
 | `id` uuid pk | |
 | `org_id` | scope |
-| `thread_id` | one active fix per thread — upsert key |
-| `run_id` | the run that registered (for staleness via its heartbeat) |
-| `branch` | the feature branch to merge into the batch |
-| `title` | short label for the clock UI |
-| `state` | CHECK in (`building`,`ready`,`deploying`,`done`,`failed`,`conflict`) |
-| `created_at`,`updated_at` | `created_at` of the earliest row drives the 30-min cap |
+| `thread_id` | תיקון פעיל אחד ל-thread — מפתח ה-upsert |
+| `run_id` | הריצה שרשמה (לבדיקת-נשירה דרך הפעימה שלה) |
+| `branch` | ענף-הפיצ'ר למיזוג לצרור |
+| `title` | תווית קצרה לשעון |
+| `state` | CHECK ב-(`building`,`ready`,`deploying`,`done`,`failed`,`conflict`) |
+| `created_at`,`updated_at` | `created_at` של השורה הכי-מוקדמת מניע את תקרת 30 הדקות |
 
-Additive migration (`CREATE TABLE` + index) — applied by the implementing session
-per the migration-discipline rule.
+מיגרציה תוספתית (`CREATE TABLE` + index) — מיושמת ע"י הסשן המממש לפי כלל
+משמעת-המיגרציות.
 
-### Endpoints — machine-to-machine, `x-cron-secret` gated (like `/claude-session`)
+### נקודות-קצה — מכונה-למכונה, מגודרות ב-`x-cron-secret` (כמו `/claude-session`)
 
 - `POST /claude-deploy/register-building` `{ org_id, thread_id, run_id, branch, title }`
-  → upsert row `state='building'`. Called by the detection hook (fire-and-forget).
-- `POST /claude-deploy/mark-ready` `{ thread_id, branch }` → `state='ready'`. Called
-  by the run at push time instead of pushing server changes to `main` itself.
-- (internal) the coordinator transitions `ready → deploying → done|failed|conflict`.
+  → upsert שורה `state='building'`. נקראת ע"י הוק-הזיהוי (שגר-ושכח).
+- `POST /claude-deploy/mark-ready` `{ thread_id, branch }` → `state='ready'`. נקראת
+  ע"י הריצה בזמן-הדחיפה במקום לדחוף שינויי-שרת ל-`main` בעצמה.
+- (פנימי) המתאם מעביר `ready → deploying → done|failed|conflict`.
 
-### Push-time gate (enforcement + the fallback that never misses)
+### שער-הדחיפה (אכיפה + ה-fallback שלא מפספס)
 
-The real enforcement is at the moment a run would push to `main`. A pre-push step
-(hook or the merge routine) runs the deterministic `git diff --name-only
-origin/main...HEAD` **once**:
-- no `server/` line → push to `main` directly (immediate; watch path ⇒ no restart);
-- a `server/` line → do **not** push to `main`; push the **branch**, call
-  `mark-ready`, and stop. This is also where a side-channel `building`-miss is
-  caught, so coalescing correctness is guaranteed here regardless of the fast hook.
+האכיפה האמיתית היא ברגע שריצה עומדת לדחוף ל-`main`. צעד לפני-דחיפה (הוק או שגרת
+המיזוג) מריץ את הבדיקה הדטרמיניסטית `git diff --name-only origin/main...HEAD`
+**פעם אחת**:
+- אין שורת `server/` → דחיפה ל-`main` ישירות (מיידי; ה-watch path ⇒ אין אתחול);
+- יש שורת `server/` → **לא** לדחוף ל-`main`; לדחוף את ה**ענף**, לקרוא ל-`mark-ready`,
+  ולעצור. זה גם המקום שבו מיסוך-`building` שנפספס מהצד נתפס, אז תקינות-הצירוף
+  מובטחת כאן ללא קשר להוק המהיר.
 
-### Coordinator — a server background loop (NOT a console run)
+### מתאם — לולאת-רקע בשרת (לא ריצת-קונסולה)
 
-Runs like `recover.ts` (a `setInterval`, off the request path), so it never counts
-itself as activity and is never a run that a deploy could kill mid-decision. Each
-tick, per org with queue rows:
-1. Drop stale `building` rows whose `run_id` has no fresh heartbeat (the fix was
-   abandoned / its thread died) — so a dead fix can't block the queue forever.
-2. If any `building` row remains → wait, unless the 30-min cap passed → force.
-3. If all `ready` and settled (or cap) → **fire the deploy** (below).
+רץ כמו `recover.ts` (`setInterval`, מחוץ למסלול-הבקשה), אז הוא לעולם לא סופר את
+עצמו כפעילות ולעולם לא ריצה שפריסה יכולה להרוג באמצע-החלטה. בכל tick, לכל org עם
+שורות בתור:
+1. לזרוק שורות `building` שה-`run_id` שלהן בלי פעימה טרייה (התיקון ננטש / ה-thread
+   מת) — כדי שתיקון מת לא יחסום את התור לנצח.
+2. אם נשארה שורת `building` → להמתין, אלא אם עברה תקרת 30 הדקות → לכפות.
+3. אם הכל `ready` והתייצב (או תקרה) → **לירות את הפריסה** (למטה).
 
-### Deploy-run — the hands that do the git
+### ריצת-פריסה — הידיים שעושות את ה-git
 
-The coordinator does not push (the backend process is not a working checkout with
-push creds). When it fires, it **spawns a dedicated deploy-run** (a console run on
-an automation thread, which already has a workspace + `git` + `GITHUB_TOKEN`) whose
-job is fixed: `git fetch`, merge every `ready` branch onto `main` **sequentially**,
-run the pre-push **build once** on the merged result, `git push origin main`, then
-mark the rows `done`. It is excluded from the queue (it edits nothing under
-`server/`). It is killed by its own resulting deploy — but push is its **last**
-act, so that is harmless, and recovery covers it if the push itself is interrupted.
+המתאם לא דוחף (תהליך ה-backend אינו checkout עובד עם הרשאות-דחיפה). כשהוא יורה,
+הוא **מפעיל ריצת-פריסה ייעודית** (ריצת-קונסולה על thread אוטומציה, שכבר יש לה
+workspace + `git` + `GITHUB_TOKEN`) שתפקידה קבוע: `git fetch`, למזג כל ענף `ready`
+ל-`main` **ברצף**, להריץ את בניית לפני-הדחיפה **פעם אחת** על התוצאה הממוזגת,
+`git push origin main`, ואז לסמן את השורות `done`. היא מוחרגת מהתור (לא עורכת שום
+דבר תחת `server/`). היא נהרגת מהפריסה שהיא עצמה גרמה — אבל הדחיפה היא הפעולה
+ה**אחרונה** שלה, אז זה לא מזיק, והשחזור מכסה אם הדחיפה עצמה נקטעה.
 
-**[decision]** deploy-run vs. granting one ready run a "deploy token" to merge +
-push the batch. Recommended: the dedicated deploy-run — the deciding brain
-(background loop) and the git hands (a run) stay cleanly separated, less new
-coordination code.
+**[החלטה]** ריצת-פריסה מול מתן "אסימון-דחיפה" לריצת-`ready` אחת שתמזג + תדחוף את
+הצרור. מומלץ: ריצת-הפריסה הייעודית — המוח המחליט (לולאת-הרקע) והידיים של ה-git
+(ריצה) נשארים מופרדים נקי, פחות קוד-תיאום חדש.
 
-## Conflicts & failures (surface, never auto-resolve)
+## קונפליקטים וכשלים (להציג, לעולם לא לפתור אוטומטית)
 
-- **Merge conflict** between two `ready` branches → skip the conflicting branch,
-  mark it `conflict`, **notify the user** to resolve it, and deploy the rest of the
-  batch. (Per "A model may propose; only code may confirm" — we do not
-  silent-resolve a merge.)
-- **Batched build fails** → do not push; mark the batch `failed` and notify with
-  the build output. The integration failure is exactly the thing a single batched
-  build is there to catch before it reaches production.
-- The 30-min cap is measured from the **earliest** queued row, so nothing waits
-  longer than 30 minutes.
+- **קונפליקט-מיזוג** בין שני ענפי `ready` → לדלג על הענף המתנגש, לסמן אותו
+  `conflict`, **להודיע למשתמש** לפתור, ולפרוס את שאר הצרור. (לפי "מודל יכול להציע;
+  רק קוד יכול לאשר" — לא פותרים מיזוג בשקט.)
+- **בניית הצרור נכשלת** → לא לדחוף; לסמן את הצרור `failed` ולהודיע עם פלט-הבנייה.
+  כשל-אינטגרציה הוא בדיוק מה שבנייה מצורפת אחת אמורה לתפוס לפני שזה מגיע לפרודקשן.
+- תקרת 30 הדקות נמדדת מהשורה ה**כי-מוקדמת** בתור, אז שום דבר לא ממתין יותר מ-30
+  דקות.
 
-## Why this doesn't slow the built-in Claude
+## למה זה לא מאט את קלוד המובנה
 
-- The queue/coordinator are **background**; the run's coding loop is unchanged. The
-  only thing deferred is the push-to-main, which is already asynchronous — the user
-  never waits on it.
-- The only in-loop cost is the fast detection hook: a sub-millisecond path-prefix
-  check that short-circuits after the first server edit, plus one fire-and-forget
-  POST per session. Same class as the hooks already running today.
+- התור/המתאם רצים ב**רקע**; לולאת-הקוד של הריצה לא משתנה. הדבר היחיד שנדחה הוא
+  הדחיפה-ל-main, שממילא אסינכרונית — המשתמש לעולם לא ממתין לה.
+- העלות היחידה בלולאה היא הוק-הזיהוי המהיר: בדיקת-קידומת-נתיב בתת-מילישנייה שמקצרת
+  דרך אחרי העריכה הראשונה בשרת, ועוד POST אחד שגר-ושכח לסשן. אותה סוגה של ה-hooks
+  שכבר רצים היום.
 
-## Phasing
+## שלבים
 
-1. **Migration + endpoints + queue table** (additive, invisible).
-2. **Push-time gate** — route `server/**` branches to `mark-ready` instead of
-   pushing to `main`. (This alone already serializes; correctness lands here.)
-3. **Coordinator loop + deploy-run** — the coalescing + batched deploy.
-4. **Detection hook** — the early `building` signal (pure timing improvement).
-5. **Clock UI** — the countdown widget.
+1. **מיגרציה + נקודות-קצה + טבלת התור** (תוספתי, בלתי-נראה).
+2. **שער-הדחיפה** — לנתב ענפי `server/**` ל-`mark-ready` במקום לדחוף ל-`main`.
+   (זה לבדו כבר מסדרן; התקינות נוחתת כאן.)
+3. **לולאת-המתאם + ריצת-הפריסה** — הצירוף + הפריסה המצורפת.
+4. **הוק-הזיהוי** — הסימן המוקדם `building` (שיפור-תזמון טהור).
+5. **ממשק השעון** — widget הספירה-לאחור.
 
-Each phase is shippable and safe on its own; 1–2 give serialized correctness before
-the coalescing brain (3) exists.
+כל שלב ניתן-לשילוח ובטוח בפני עצמו; 1–2 נותנים תקינות מסודרת עוד לפני שמוח-הצירוף
+(3) קיים.
 
-## Open questions for the owner
+## שאלות פתוחות לבעלים
 
-- **[decision]** deploy-run vs. deploy-token (recommended: deploy-run).
-- **[decision]** settle window default **3 min** — good, or shorter/longer?
-- **[decision]** the clock's home: a small panel on `/claude`, or fold into the
-  existing `ClaudeActivityBar` on `/tasks`?
-- Should a **failed batched build** try to bisect which branch broke it, or just
-  fail the batch and let the user look? (Recommended: fail + surface first; bisect
-  later if it proves annoying.)
+- **[החלטה]** ריצת-פריסה מול אסימון-דחיפה (מומלץ: ריצת-פריסה).
+- **[החלטה]** ברירת-מחדל לחלון-ההתייצבות **3 דקות** — טוב, או קצר/ארוך יותר?
+- **[החלטה]** בית השעון: פאנל קטן ב-`/claude`, או לקפל לתוך `ClaudeActivityBar`
+  הקיים ב-`/tasks`?
+- האם **בניית-צרור שנכשלת** צריכה לנסות לאתר איזה ענף שבר אותה (bisect), או פשוט
+  להכשיל את הצרור ולתת למשתמש להסתכל? (מומלץ: להכשיל + להציג קודם; bisect בהמשך אם
+  יתברר מעצבן.)
