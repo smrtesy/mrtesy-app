@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -95,6 +96,19 @@ type TabsWorkspaceValue = {
 
 const STORAGE_KEY = "smrtesy.tabs.v1";
 
+/** Panes that stay EXPANDED beside a tab opened from them, instead of parking to
+ *  a rail like every other source does. Returns the fraction of the two-pane
+ *  split to give the SOURCE pane (the opened pane gets the rest), or null if the
+ *  source isn't sticky. `/tasks` keeps an even 50/50; `/claude` takes a narrow
+ *  third so it reads as a companion beside the page it opened. Pairs with the
+ *  physical-left order pin for `/claude` in TabsWorkspace. */
+function companionSourceFraction(href: string): number | null {
+  const p = stripLocale(href).split("?")[0].split("#")[0].replace(/\/+$/, "");
+  if (p === "/tasks") return 0.5;
+  if (p === "/claude") return 1 / 3;
+  return null;
+}
+
 const TabsWorkspaceContext = createContext<TabsWorkspaceValue | null>(null);
 
 export function TabsWorkspaceProvider({ children }: { children: React.ReactNode }) {
@@ -105,6 +119,12 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
   const [collapsedIds, setCollapsedIds] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const router = useRouter();
+
+  // Mirror the active id into a ref so openTab (a []-deps callback) can read the
+  // CURRENT active pane — the tab a new pane is being opened FROM — without going
+  // stale. Used to keep /tasks and /claude expanded beside what they open.
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
 
   // Hydrate from localStorage once, after mount, to avoid an SSR/client
   // markup mismatch (the server has no access to localStorage).
@@ -212,7 +232,36 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
     // deep link into the open pane (PaneHost watches tab.href).
     const pathOf = (h: string) => h.split("?")[0].split("#")[0].replace(/\/+$/, "");
     const path = pathOf(href);
+    const sourceId = activeIdRef.current;
     setTabs((prev) => {
+      const source = sourceId ? prev.find((t) => t.id === sourceId) : null;
+      // Apply the focus:true layout for `targetId`. Normally this parks every
+      // OTHER tab as a rail so only the target is expanded. Exception: when the
+      // pane we're opening FROM (`source`) is a sticky companion (/tasks,
+      // /claude) and isn't the target itself, keep it expanded BESIDE the target
+      // — park everyone else — and pin the two-pane split (tasks 50/50, claude a
+      // narrow third). See companionSourceFraction + the /claude order pin.
+      const applyFocusLayout = (targetId: string) => {
+        setSoloId((cur) => (cur ? targetId : null));
+        const frac =
+          source && source.id !== targetId
+            ? companionSourceFraction(source.href)
+            : null;
+        if (frac != null && source) {
+          setCollapsedIds(
+            prev
+              .filter((t) => t.id !== targetId && t.id !== source.id)
+              .map((t) => t.id),
+          );
+          // Pin the companion split for the pair, but MERGE (not replace) so a
+          // parked pane keeps any width the user dragged for when it's expanded
+          // again — resolveFractions ignores parked panes, so only this pair's
+          // fractions drive the current view.
+          setWidthsState((w) => ({ ...w, [source.id]: frac, [targetId]: 1 - frac }));
+        } else {
+          setCollapsedIds(prev.filter((t) => t.id !== targetId).map((t) => t.id));
+        }
+      };
       // While a pane is maximized, solo FOLLOWS whatever is being opened.
       // Dropping solo instead (what this used to do for a new pane) throws the
       // operator back into the split view they had deliberately left; leaving
@@ -230,10 +279,10 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       if (existing) {
         setActiveId(existing.id);
         if (focus) {
-          setSoloId((cur) => (cur ? existing.id : null));
-          // Focus by default: the opened page is the only expanded pane, every
-          // other open tab is parked as a rail. Clicking a rail brings it back.
-          setCollapsedIds(prev.filter((t) => t.id !== existing.id).map((t) => t.id));
+          // Focus by default: the opened page is expanded and every other open
+          // tab is parked as a rail — unless opened from a sticky companion,
+          // which stays beside it (see applyFocusLayout).
+          applyFocusLayout(existing.id);
         } else {
           setSoloId(null);
           // Beside: expand the opened pane if it was parked, leave the rest.
@@ -248,9 +297,10 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       }
       setActiveId(href);
       if (focus) {
-        setSoloId((cur) => (cur ? href : null));
-        // Park every previously-open tab; the new pane (href) stays expanded.
-        setCollapsedIds(prev.map((t) => t.id));
+        // Park every previously-open tab so the new pane stands alone — unless
+        // it was opened from a sticky companion (/tasks, /claude), which stays
+        // expanded beside it at the pinned split (see applyFocusLayout).
+        applyFocusLayout(href);
       } else {
         // Beside: the new pane joins the split expanded (it isn't in
         // collapsedIds), every existing pane keeps its expanded/parked state.
