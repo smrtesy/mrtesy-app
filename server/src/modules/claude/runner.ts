@@ -1686,23 +1686,36 @@ export async function runOneShot(
   // which task, and whether it produced output. level 'info' on purpose — the
   // error-notification trigger fires only on 'error', and a background model choice
   // is not an error. Fire-and-forget so it never delays returning the result.
-  const logProvenance = (ok: boolean): void => {
+  const logProvenance = (ok: boolean, note?: { code?: number | null; stderr?: string }): void => {
     // Fire-and-forget in its own async IIFE with try/catch: the PostgREST builder is
     // a thenable without .catch, so a network-level reject would otherwise become an
     // unhandled rejection. Provenance is best-effort and never fails a run.
     void (async () => {
       try {
+        // On FAILURE, carry WHY: the CLI's exit code and a redacted stderr tail. This
+        // is the only place the one-shot's error surfaces — the CLI's stderr is
+        // otherwise discarded, which is exactly what left a burst of ~2s title
+        // failures undiagnosable (usage-limit? bad model? auth?). Success stays lean.
+        const details: Record<string, unknown> = {
+          task: opts.label ?? "unknown",
+          model: opts.model ?? "cli-default",
+          account: opts.account ?? "primary",
+        };
+        if (!ok) {
+          if (note?.code !== undefined) details.exit_code = note.code;
+          const errTail = (note?.stderr ?? "").trim();
+          // Scrub the OAuth token (the only secret in this one-shot's env) before
+          // storing; `redact` is a no-op if it never appears. Keep the last 400 chars
+          // — the CLI prints its actionable error at the END of stderr.
+          if (errTail) details.stderr = redact(errTail, token).slice(-400);
+        }
         const { error } = await db.from("log_entries").insert({
           user_id: null,
           level: "info",
           category: "claude_bg_model",
           status: ok ? "ok" : "failed",
           processing_duration_ms: Date.now() - startedAt,
-          details: {
-            task: opts.label ?? "unknown",
-            model: opts.model ?? "cli-default",
-            account: opts.account ?? "primary",
-          },
+          details,
         });
         if (error) console.error("[claude/oneshot] provenance log failed:", error.message);
       } catch {
@@ -1725,16 +1738,25 @@ export async function runOneShot(
       out += c;
       if (out.length > 8000) out = out.slice(0, 8000);
     });
+    // Capture stderr (previously piped but never read) so a failure records WHY.
+    let err = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => {
+      err += c;
+      if (err.length > 4000) err = err.slice(-4000);
+    });
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 90_000);
-    child.on("error", () => {
+    child.on("error", (e) => {
       clearTimeout(timer);
-      logProvenance(false);
+      logProvenance(false, { code: null, stderr: `spawn error: ${e instanceof Error ? e.message : String(e)}` });
       resolve(null);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       const result = code === 0 && out.trim() ? out.trim() : null;
-      logProvenance(result !== null);
+      // A non-zero exit with output on stdout is rare; prefer stderr, fall back to
+      // the stdout tail so an error message printed to stdout isn't lost either.
+      logProvenance(result !== null, { code, stderr: err || out });
       resolve(result);
     });
   });

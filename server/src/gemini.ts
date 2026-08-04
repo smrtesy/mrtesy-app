@@ -263,7 +263,7 @@ export async function callGemini(opts: GeminiCallOptions): Promise<string> {
  *  from the platform's app_secrets (GEMINI_API_KEY / GEMINI_MODEL). */
 export async function generateText(
   prompt: string,
-  opts?: { model?: string; maxOutputTokens?: number; component?: string; throwOnTruncate?: boolean },
+  opts?: { model?: string; maxOutputTokens?: number },
 ): Promise<string> {
   const apiKey = await getAppSecret("smrttask", "GEMINI_API_KEY", "GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
@@ -299,7 +299,7 @@ export async function generateText(
   try {
     await db.from("ai_usage").insert({
       provider: "google",
-      component: opts?.component ?? "smrtbot.ai-answer",
+      component: "smrtbot.ai-answer",
       model,
       input_tokens: data.usageMetadata?.promptTokenCount ?? 0,
       // Thinking tokens bill as output and are priced into the cost below.
@@ -308,13 +308,6 @@ export async function generateText(
       cost_usd: estimateGeminiCost(model, data.usageMetadata),
     });
   } catch { /* ledger insert must not break the caller */ }
-
-  // A MAX_TOKENS finish means the body is truncated — the tail is silently
-  // dropped. Callers that must not lose content (e.g. dictation tidy) pass
-  // throwOnTruncate so they can fall back to the untidied source instead.
-  if (opts?.throwOnTruncate && data.candidates?.[0]?.finishReason === "MAX_TOKENS") {
-    throw new Error("Gemini output truncated (MAX_TOKENS)");
-  }
 
   return text;
 }
