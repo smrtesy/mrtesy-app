@@ -4572,7 +4572,8 @@
       "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic.",
       "chooseDevice": "Choose microphone",
       "defaultDevice": "System default microphone",
-      "unnamedDevice": "Microphone {n}"
+      "unnamedDevice": "Microphone {n}",
+      "needPermission": "Allow microphone access to see your devices"
     },
     "playbooks": {
       "title": "Working methods",
