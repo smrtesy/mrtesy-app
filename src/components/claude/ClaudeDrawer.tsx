@@ -66,6 +66,10 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
   // The open thread's title, pushed up from the framed chat — the slim header
   // shows it instead of a generic icon + "קלוד" (bug 5).
   const [threadTitle, setThreadTitle] = useState("");
+  // The open thread's id, pushed up from the framed chat — the expand button uses
+  // it to continue THIS conversation in the full screen instead of opening the
+  // latest. Null while the framed composer is still blank (nothing sent yet).
+  const [threadId, setThreadId] = useState<string | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // True once the iframe has mounted at least once — distinguishes the first open
@@ -112,9 +116,10 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
     const onMsg = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
       if (e.source !== iframeRef.current?.contentWindow) return;
-      const d = e.data as { type?: string; title?: string } | null;
+      const d = e.data as { type?: string; title?: string; threadId?: string | null } | null;
       if (d?.type === "claude-chat:title") {
         setThreadTitle(typeof d.title === "string" ? d.title : "");
+        setThreadId(typeof d.threadId === "string" ? d.threadId : null);
       }
     };
     window.addEventListener("message", onMsg);
@@ -169,7 +174,11 @@ export function ClaudeDrawer({ locale }: { locale: string }) {
             {threadTitle || t("untitled")}
           </span>
           <a
-            href={`/${locale}/claude`}
+            href={
+              threadId
+                ? `/${locale}/claude?thread=${threadId}`
+                : `/${locale}/claude?new=drawer-expand`
+            }
             onClick={closeDrawer}
             aria-label={t("openFull")}
             title={t("openFull")}

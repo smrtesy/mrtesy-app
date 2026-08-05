@@ -925,13 +925,17 @@ export function ClaudeChat() {
         {
           type: "claude-chat:title",
           title: thread?.title?.trim() || firstMessagePreview(firstPrompt) || "",
+          // The open thread's id, so the drawer's "expand" button can continue
+          // THIS conversation in the full screen (?thread=<id>) instead of the
+          // latest. Null while the composer is still blank — expand opens fresh.
+          threadId: activeId ?? null,
         },
         window.location.origin,
       );
     } catch {
       /* cross-origin parent — ignored */
     }
-  }, [embedded, thread?.title, firstPrompt]);
+  }, [embedded, thread?.title, firstPrompt, activeId]);
 
   // The org's default model/effort for new chats. Read once on mount; a failure is
   // ambient (the app's built-in default stays in effect).
