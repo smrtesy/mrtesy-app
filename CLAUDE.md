@@ -459,7 +459,29 @@ partial fixes*. Shipping the rule is not following it.
 ### Step 1 — Real build (not just tsc)
 
 ```
-npm install --no-audit --no-fund && npm run build
+npm install --include=dev --no-audit --no-fund && npm run build
+```
+
+**`--include=dev` is NOT optional here.** This backend runs with
+`NODE_ENV=production` (a Railway service variable), under which a plain
+`npm install` OMITS devDependencies — and `typescript` plus every `@types/*`
+package the build needs are devDeps. Without the flag the build fails with a
+false "Cannot find declaration file for module '…'" / `TS2584: Cannot find name
+'console'` on perfectly correct code. The flag overrides the production omit;
+it is a no-op on a machine where NODE_ENV isn't production, so it's always safe
+to include. (This bit the deploy coordinator's own build on 2026-08-05, and
+several repo threads that burned whole turns hand-recovering.)
+
+**If `npm install` says "up to date" but the build then fails on a MISSING
+module, the checkout's `node_modules` is corrupt — not the code.** This happens
+when a prior `npm install` was killed mid-extraction (a Railway redeploy
+SIGTERMs live runs), leaving empty package dirs plus a lockfile-ledger that
+records them as installed, so the next `npm install` is a no-op. `--force` does
+NOT fix it (it honours the same ledger). Recover with a clean reinstall, which
+wipes `node_modules` first and installs exactly the lockfile:
+
+```
+rm -rf node_modules && npm ci
 ```
 
 **`npm run build` is the only authoritative check.** It runs the
