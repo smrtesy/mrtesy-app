@@ -96,16 +96,31 @@ type TabsWorkspaceValue = {
 
 const STORAGE_KEY = "smrtesy.tabs.v1";
 
-/** Panes that stay EXPANDED beside a tab opened from them, instead of parking to
- *  a rail like every other source does. Returns the fraction of the two-pane
- *  split to give the SOURCE pane (the opened pane gets the rest), or null if the
- *  source isn't sticky. `/tasks` keeps an even 50/50; `/claude` takes a narrow
- *  third so it reads as a companion beside the page it opened. Pairs with the
- *  physical-left order pin for `/claude` in TabsWorkspace. */
-function companionSourceFraction(href: string): number | null {
-  const p = stripLocale(href).split("?")[0].split("#")[0].replace(/\/+$/, "");
-  if (p === "/tasks") return 0.5;
-  if (p === "/claude") return 1 / 3;
+/** When a tab is opened FROM a sticky-companion pane, both panes stay EXPANDED
+ *  beside each other (instead of the source parking to a rail like every other
+ *  source does). Returns the fraction of the two-pane split to give the SOURCE
+ *  pane — the opened TARGET gets the rest — or null when the pair isn't a
+ *  companion.
+ *
+ *  The split looks at BOTH panes, not just the source, because /claude must read
+ *  as a narrow third whenever it is one of the pair — whether it's the source
+ *  (opening something out of a Claude tab) OR the target (the COMMON case:
+ *  clicking "קלוד" on a task opens /claude FROM /tasks). Looking only at the
+ *  source gave that common case an even 50/50 — the bug this fixes. So a
+ *  tasks+Claude pair reads tasks-⅔ / claude-⅓ either direction; `/tasks` paired
+ *  with anything that ISN'T Claude keeps an even 50/50 (user decision). Pairs
+ *  with the /claude physical-left order pin in TabsWorkspace, and applies only
+ *  while /claude is a real workspace TAB — the desktop drawer is untouched. */
+function companionSplit(sourceHref: string, targetHref: string): number | null {
+  const norm = (h: string) => stripLocale(h).split("?")[0].split("#")[0].replace(/\/+$/, "");
+  const source = norm(sourceHref);
+  const target = norm(targetHref);
+  const CLAUDE_NARROW = 1 / 3;
+  // Claude anywhere in the pair → Claude is the narrow third, the other takes ⅔.
+  if (target === "/claude") return 1 - CLAUDE_NARROW; // opened Claude → source wide
+  if (source === "/claude") return CLAUDE_NARROW; // opened FROM Claude → Claude narrow
+  // Tasks as the source, paired with a non-Claude pane → even split.
+  if (source === "/tasks") return 0.5;
   return null;
 }
 
@@ -237,15 +252,16 @@ export function TabsWorkspaceProvider({ children }: { children: React.ReactNode 
       const source = sourceId ? prev.find((t) => t.id === sourceId) : null;
       // Apply the focus:true layout for `targetId`. Normally this parks every
       // OTHER tab as a rail so only the target is expanded. Exception: when the
-      // pane we're opening FROM (`source`) is a sticky companion (/tasks,
-      // /claude) and isn't the target itself, keep it expanded BESIDE the target
-      // — park everyone else — and pin the two-pane split (tasks 50/50, claude a
-      // narrow third). See companionSourceFraction + the /claude order pin.
+      // pane we're opening FROM (`source`) forms a sticky companion pair with the
+      // target (tasks/claude), keep it expanded BESIDE the target — park everyone
+      // else — and pin the two-pane split. The split reads BOTH panes so /claude
+      // is the narrow third whether it's the source or the target (`href` is the
+      // page being opened). See companionSplit + the /claude order pin.
       const applyFocusLayout = (targetId: string) => {
         setSoloId((cur) => (cur ? targetId : null));
         const frac =
           source && source.id !== targetId
-            ? companionSourceFraction(source.href)
+            ? companionSplit(source.href, href)
             : null;
         if (frac != null && source) {
           setCollapsedIds(
