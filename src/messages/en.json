@@ -4569,7 +4569,10 @@
       "permission": "Microphone permission denied",
       "noAutoStop": "No silence detection in this browser — stop manually when done",
       "maxLength": "Recording hit the maximum length and stopped",
-      "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic."
+      "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic.",
+      "chooseDevice": "Choose microphone",
+      "defaultDevice": "System default microphone",
+      "unnamedDevice": "Microphone {n}"
     },
     "playbooks": {
       "title": "Working methods",
