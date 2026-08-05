@@ -816,6 +816,15 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   const attachmentIds: string[] = Array.isArray(body.attachment_ids)
     ? body.attachment_ids.filter((v: unknown) => typeof v === "string" && UUID_RE.test(v)).slice(0, 20)
     : [];
+  // Client-generated idempotency key (a UUID). A retried POST — the client
+  // rides out a transient Railway edge blip that drops the RESPONSE of a send
+  // the server already processed — carries the SAME token, so we return the
+  // existing turn instead of inserting a duplicate. Null for any legacy/other
+  // caller; the partial unique index ignores nulls. (migration 20260805150000)
+  const clientToken =
+    typeof body.client_token === "string" && UUID_RE.test(body.client_token)
+      ? body.client_token
+      : null;
   // A message with only attachments is legitimate ("look at this") — but a turn
   // with neither text nor files has nothing to say.
   if (!message && attachmentIds.length === 0) {
@@ -833,6 +842,20 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
     return res.status(500).json({ error: "could not fetch thread" });
   }
   if (!thread) return res.status(404).json({ error: "thread not found" });
+
+  // Idempotent retry: a send the server already processed, whose response was
+  // lost to a transient edge blip, comes back with the SAME client_token. Return
+  // that existing turn so the retry succeeds instead of creating a second one.
+  const runShape = "id, turn_index, status, user_prompt, created_at";
+  if (clientToken) {
+    const { data: existing } = await db
+      .from("claude_runs")
+      .select(runShape)
+      .eq("thread_id", thread.id)
+      .eq("client_token", clientToken)
+      .maybeSingle();
+    if (existing) return res.status(201).json({ run: existing });
+  }
 
   // One ENGINE PROCESS at a time — across the whole WORKSPACE group, not just this
   // thread. A fork child shares its parent's directory, so a parent turn and a
@@ -914,16 +937,38 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
       // The account this conversation runs on — the header switcher writes it onto
       // the thread; here it rides onto each turn so the runner picks the right token.
       claude_account: thread.claude_account,
+      client_token: clientToken,
       status: hasLive ? "waiting" : "queued",
     })
-    .select("id, turn_index, status, user_prompt, created_at")
+    .select(runShape)
     .single();
 
   if (error) {
-    // 23505 on uniq_claude_runs_thread_turn: another request won the race for this
-    // turn index. The check above is advisory; THIS is what actually prevents two
-    // engine processes resuming the same session.
+    // 23505: a unique conflict. It can be either index, and they mean opposite
+    // things:
+    //   • uniq_claude_runs_thread_client_token — a retried send raced the
+    //     original insert. Same message, not a new turn: return the existing run
+    //     so the retry SUCCEEDS (this is the whole point of the idempotency key).
+    //   • uniq_claude_runs_thread_turn — a different request won this turn index.
+    //     That is the real "a turn is still running" guard (prevents two engine
+    //     processes resuming one session), so keep the 409.
     if (error.code === "23505") {
+      if (clientToken) {
+        const { data: existing, error: lookErr } = await db
+          .from("claude_runs")
+          .select(runShape)
+          .eq("thread_id", thread.id)
+          .eq("client_token", clientToken)
+          .maybeSingle();
+        if (existing) return res.status(201).json({ run: existing });
+        // The lookup itself blipped — we can't tell a client_token conflict (our
+        // turn exists) from a turn_index conflict (it doesn't). A 409 isn't
+        // retried, so returning it would resurrect the exact false-error this
+        // feature kills. Return 503 — the ONE non-network status api() retries
+        // (idempotent:true) — so the retry's early short-circuit resolves it
+        // correctly once the read succeeds. (500 is NOT retried; 503 is.)
+        if (lookErr) return res.status(503).json({ error: "could not confirm message" });
+      }
       return res.status(409).json({ error: "a turn is still running" });
     }
     // 23514: the status CHECK does not know 'waiting' yet — the migration
