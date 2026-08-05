@@ -43,8 +43,10 @@ function enabled(): boolean {
 /** Deploy when the batch has been quiet this long (no server fix entered/updated
  *  the queue) — the user's wave has stopped. */
 const SETTLE_MS = 3 * 60_000;
-/** …or when the earliest queued fix has waited this long, no matter what. */
-const MAX_WAIT_MS = 30 * 60_000;
+/** …or when the earliest queued fix has waited this long, no matter what. Exported
+ *  so the threads list can show each queued thread its "will merge by" deadline
+ *  (created_at + MAX_WAIT_MS) without duplicating the magic number. */
+export const MAX_WAIT_MS = 30 * 60_000;
 /** A 'building' row whose run stopped heartbeating this long ago is an abandoned
  *  fix — dropped so it can't hold the batch forever. */
 const STALE_BUILDING_MS = 5 * 60_000;
