@@ -974,10 +974,22 @@ export function ClaudeChat() {
       setTurns((prev) => [...prev, optimistic]);
       // Read the board into THIS turn only if the user armed it in the project panel.
       const includeBoard = attachBoard;
+      // A per-send idempotency key. It rides every internal retry of this ONE
+      // api() call (same body), so a POST the server already processed whose
+      // response was lost to a transient edge blip is retried and returns the
+      // SAME turn — no false error, no duplicate turn. `idempotent: true` opts
+      // this POST into the retry path (server dedupes on the token).
+      const clientToken = crypto.randomUUID();
       try {
         await api(`/api/claude/threads/${id}/messages`, {
           method: "POST",
-          body: { message, attachment_ids: attachmentIds, include_board: includeBoard },
+          idempotent: true,
+          body: {
+            message,
+            attachment_ids: attachmentIds,
+            include_board: includeBoard,
+            client_token: clientToken,
+          },
         });
       } catch (e) {
         setTurns((prev) => prev.filter((x) => x.id !== optimistic.id));
