@@ -699,6 +699,51 @@ export function detectUsageLimit(text: string): boolean {
   return USAGE_LIMIT_RE.test(text);
 }
 
+/**
+ * Persist Anthropic's own usage-window ground truth from a CLI `rate_limit_event`
+ * line's `rate_limit_info`. One UPSERTed row per (account, window_kind) — the
+ * latest observation, which the usage meter reads in preference to its cost
+ * estimate. `resetsAt` is the exact reset instant (unix SECONDS — 10 digits;
+ * guarded in case a future CLI sends ms). `utilization` is the real fraction used,
+ * present only past the warning threshold. Fire-and-forget by design: any write
+ * failure is logged and swallowed so a live turn is never affected.
+ */
+async function recordUsageWindow(
+  account: string,
+  kind: "five_hour" | "seven_day",
+  info: Record<string, unknown>,
+): Promise<void> {
+  const raw = info.resetsAt;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return;
+  const resetsMs = raw < 1e12 ? raw * 1000 : raw;
+  // Clamp to [0,1] in code, not only via the table CHECK: an over-limit reading
+  // (utilization > 1) must NOT make the whole upsert violate the CHECK and lose the
+  // exact resets_at with it — the moment the meter matters most. The meter clamps
+  // the displayed percent to 100 anyway.
+  const utilRaw = typeof info.utilization === "number" ? info.utilization : null;
+  const util = utilRaw == null ? null : Math.min(1, Math.max(0, utilRaw));
+  const status = typeof info.status === "string" ? info.status : null;
+  try {
+    const { error } = await db.from("claude_usage_windows").upsert(
+      {
+        claude_account: account,
+        window_kind: kind,
+        resets_at: new Date(resetsMs).toISOString(),
+        utilization: util,
+        status,
+        observed_at: new Date().toISOString(),
+      },
+      { onConflict: "claude_account,window_kind" },
+    );
+    if (error) console.error("[claude/runner] usage-window upsert failed:", error.message);
+  } catch (e) {
+    console.error(
+      "[claude/runner] usage-window upsert threw:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+}
+
 function truncate(v: unknown, max = MAX_TEXT): string | null {
   if (typeof v !== "string") return null;
   return v.length > max ? `${v.slice(0, max)}\n…[truncated]` : v;
@@ -1473,6 +1518,20 @@ async function executeRunBody(runId: string): Promise<void> {
         if (obj.type === "result") {
           resultEvent = obj;
           if (typeof obj.result === "string") lastResult = obj.result;
+        }
+        // Anthropic's OWN usage-window ground truth rides on rate_limit_event lines,
+        // which the CLI emits on every run (not only at exhaustion). Capture the exact
+        // reset instant + real percent for the meter, keyed to this run's account.
+        // A NULL claude_account IS the primary account (loadAccountToken reads it that
+        // way); normalize to PRIMARY_ACCOUNT so the row is written under the same id
+        // the usage endpoint queries by — else the live meter is dead for the default
+        // account. Fire-and-forget: a write failure must never fail the turn.
+        if (obj.type === "rate_limit_event") {
+          const info = obj.rate_limit_info as Record<string, unknown> | undefined;
+          const kind = info?.rateLimitType;
+          if (info && (kind === "five_hour" || kind === "seven_day")) {
+            void recordUsageWindow(run.claude_account ?? PRIMARY_ACCOUNT, kind, info);
+          }
         }
         const mapped = mapLine(parsed, nextSeq);
         // Live push to any open stream BEFORE the DB batch — this is the whole
