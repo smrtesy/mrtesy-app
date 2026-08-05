@@ -340,11 +340,25 @@ thing:
 | `DEPLOY_QUEUE_ENABLED=1` **and** diff touches `server/**` | Pushes the **branch**, POSTs `/claude-deploy/mark-ready`, and stops — `main` is untouched. A background coordinator merges the whole `ready` batch and redeploys **once**. |
 | flag off, **or** no `server/**` change (frontend/docs) | Today's `--no-ff` merge into `main` + push — exactly the shared workflow above. |
 
-**The flag gates everything.** `DEPLOY_QUEUE_ENABLED` is a Railway env var on the
-backend service (currently **unset**). While unset, `ship.sh` always takes the
-direct-push path and the whole feature is inert — nothing queues, nothing waits.
-Flip it to `1` in Railway → Variables to arm the queue (that also arms the phase-3
-coordinator).
+**The flag is ARMED.** `DEPLOY_QUEUE_ENABLED` is a Railway env var on the backend
+service, **set to `1` since 2026-08-04** — the queue and the phase-3 coordinator
+are **live in production**. Every `server/**` change now routes through the queue:
+`ship.sh` pushes the branch + marks it `ready`, and the background coordinator
+merges the whole `ready` batch and redeploys **once**. A manual `git push origin
+main` carrying a `server/**` change is blocked by `deploy-gate.sh` — use `ship.sh`.
+Frontend/docs pushes are unaffected: Railway's `watchPatterns` for the backend
+service is `["/server/**"]` (verified 2026-08-04), so only server changes redeploy
+it. To disarm, set the var to `0` or delete it in Railway → Variables (that also
+disarms the coordinator, which no-ops unless the value is exactly `1`).
+
+**Known coordinator behaviour (2026-08-04):** a merge conflict during the batch
+merge is marked terminal `conflict` and is **not** auto-retried — even when the
+conflict was *transient* (origin/main moved under the coordinator mid-batch, as
+happens when several sessions push at once). A stranded `conflict` row needs a
+fresh `mark-ready` to re-enter the queue. Improvement on file: on a merge
+conflict, re-fetch origin/main and, if it advanced since the batch's snapshot,
+reset the batch to `ready` and retry on the newer main before parking as
+`conflict` (mirrors the existing non-fast-forward push-retry). Not yet built.
 
 **Pre-push protocol ordering, for server changes:** run the **full** pre-push
 protocol on the feature branch **before** calling `ship.sh` — i.e. before the fix
