@@ -28,12 +28,18 @@ interface AccountUsage {
   disclaimer: string;
 }
 
-/** gray < 70% → amber ≥ 70% → red ≥ 90%. currentColor drives the SVG stroke. */
+/**
+ * Claude coral < 70% → amber ≥ 70% → red ≥ 90%. currentColor drives the SVG
+ * stroke and the bar fill. The resting/normal color is Anthropic's brand coral
+ * (#D97757) to match claude.ai's own usage indicator, not a neutral gray — only
+ * the near-limit warning tiers escalate to amber/red. `null` (no reading yet)
+ * stays muted so an unresolved meter reads as "unknown", not "empty".
+ */
 function meterColor(pct: number | null | undefined): string {
   if (pct == null) return "text-muted-foreground/50";
   if (pct >= 90) return "text-red-500";
   if (pct >= 70) return "text-amber-500";
-  return "text-muted-foreground";
+  return "text-[#D97757]";
 }
 
 /** A 16px progress ring filled clockwise to `pct` (0–100). */
@@ -156,7 +162,7 @@ export function UsageMeter({ account }: { account: string }) {
           <Ring pct={sessionPct} />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 space-y-3 text-xs">
+      <PopoverContent align="start" className="w-64 space-y-3 p-3.5 text-xs">
         {/* 5-hour window */}
         <div className="space-y-1">
           <div className="flex items-center justify-between font-medium">
