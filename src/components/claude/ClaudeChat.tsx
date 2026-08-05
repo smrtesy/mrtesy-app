@@ -840,10 +840,26 @@ export function ClaudeChat() {
   }, [streamRunId]);
 
   const scrollToBottom = useCallback(() => {
+    let isMobile = false;
+    try {
+      isMobile = window.matchMedia("(max-width: 767.98px)").matches;
+    } catch {
+      /* SSR / no matchMedia */
+    }
+    if (isMobile && !inPane) {
+      // Mobile scrolls the whole document, and the composer sits BELOW the
+      // messages' end-marker (bottomRef) — scrolling to the marker stops on the
+      // last message and leaves the input off-screen. Scroll the page all the way
+      // down so the composer/input banner is visible, which is where the user
+      // types next.
+      const de = document.scrollingElement || document.documentElement;
+      de.scrollTo({ top: de.scrollHeight });
+      return;
+    }
     // nearest, not the default: scrollIntoView on a pane-embedded screen otherwise
     // scrolls the ancestor pane too, yanking the whole workspace.
     bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
-  }, []);
+  }, [inPane]);
   useEffect(() => {
     // rAF so the just-loaded turns are laid out before we measure the bottom;
     // activeId in deps so opening a thread (even one the same length as the last)
@@ -925,13 +941,17 @@ export function ClaudeChat() {
         {
           type: "claude-chat:title",
           title: thread?.title?.trim() || firstMessagePreview(firstPrompt) || "",
+          // The open thread's id, so the drawer's "expand" button can continue
+          // THIS conversation in the full screen (?thread=<id>) instead of the
+          // latest. Null while the composer is still blank — expand opens fresh.
+          threadId: activeId ?? null,
         },
         window.location.origin,
       );
     } catch {
       /* cross-origin parent — ignored */
     }
-  }, [embedded, thread?.title, firstPrompt]);
+  }, [embedded, thread?.title, firstPrompt, activeId]);
 
   // The org's default model/effort for new chats. Read once on mount; a failure is
   // ambient (the app's built-in default stays in effect).
