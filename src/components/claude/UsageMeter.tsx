@@ -24,7 +24,7 @@ interface AccountUsage {
   session:
     | { pct: number; pct_raw: number; cost_used: number; cap: number; window_end: string }
     | null;
-  weekly: { pct: number | null; cost_used: number; cap: number | null };
+  weekly: { pct: number | null; cost_used: number; cap: number | null; window_end?: string | null };
   disclaimer: string;
 }
 
@@ -188,7 +188,14 @@ export function UsageMeter({ account }: { account: string }) {
             </span>
           </div>
           {data?.weekly?.pct != null ? (
-            <Bar pct={data.weekly.pct} color={meterColor(data.weekly.pct)} />
+            <>
+              <Bar pct={data.weekly.pct} color={meterColor(data.weekly.pct)} />
+              {data.weekly.window_end && (
+                <div className="text-[10px] text-muted-foreground">
+                  {resetsInLabel(data.weekly.window_end, locale, t)}
+                </div>
+              )}
+            </>
           ) : (
             <div className="text-[10px] text-muted-foreground">{t("noCalibration")}</div>
           )}

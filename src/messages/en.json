@@ -4664,7 +4664,16 @@
     "tokenHint": "Generate in a terminal: npx @anthropic-ai/claude-code setup-token — sign in to the account you want, not another. For genuinely separate budget, use a separate subscription.",
     "save": "Save",
     "cancel": "Cancel",
-    "saved": "Saved"
+    "saved": "Saved",
+    "weeklyReset": {
+      "label": "Weekly limit reset (New York time)",
+      "hint": "The day and time Anthropic resets this account's weekly window — as shown in Claude's usage tool (\"Resets Sun 7:59 PM\"). Feeds the weekly meter's window. Leave the day on \"—\" to use a rolling 7-day window.",
+      "dayNone": "—",
+      "timeLabel": "Reset time",
+      "summary": "Weekly reset: {schedule}",
+      "unset": "No weekly reset set (rolling 7 days)",
+      "incomplete": "Pick both a day and a time, or leave both empty"
+    }
   },
   "claudeActivity": {
     "finished": "Claude finished",

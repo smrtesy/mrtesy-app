@@ -1,14 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { CircleUser, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { CalendarClock, CircleUser, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
+
+/** A weekly-limit reset schedule (NY wall-clock): dow 0–6 (0=Sunday) + "HH:MM". */
+interface WeeklyReset {
+  dow: number;
+  time: string;
+}
 
 /** One account as GET /api/admin/claude-accounts reports it. */
 interface AdminAccount {
@@ -16,6 +22,19 @@ interface AdminAccount {
   label: string | null;
   configured: boolean;
   removable: boolean;
+  weeklyReset: WeeklyReset | null;
+}
+
+/** Locale-correct long weekday name for a dow (0=Sunday), no i18n day keys needed. */
+function weekdayName(dow: number, locale: string): string {
+  // 2024-01-07 is a Sunday; add dow days and format the weekday in the UI locale.
+  const d = new Date(Date.UTC(2024, 0, 7 + dow));
+  return new Intl.DateTimeFormat(locale, { weekday: "long", timeZone: "UTC" }).format(d);
+}
+
+/** "Sunday 19:59" style summary for a set schedule. */
+function resetSummary(r: WeeklyReset, locale: string): string {
+  return `${weekdayName(r.dow, locale)} ${r.time}`;
 }
 
 /**
@@ -27,6 +46,7 @@ interface AdminAccount {
  */
 export function ClaudeAccountsPanel() {
   const t = useTranslations("claudeAccounts");
+  const locale = useLocale();
   const [accounts, setAccounts] = useState<AdminAccount[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -150,6 +170,16 @@ export function ClaudeAccountsPanel() {
                 </Button>
               )}
             </div>
+            {/* Weekly-reset schedule at a glance (NY). Quiet muted row; the pencil opens
+                the editor to change it. */}
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <CalendarClock className="h-3 w-3 shrink-0" />
+              {a.weeklyReset ? (
+                <span>{t("weeklyReset.summary", { schedule: resetSummary(a.weeklyReset, locale) })}</span>
+              ) : (
+                <span className="italic">{t("weeklyReset.unset")}</span>
+              )}
+            </div>
             {editingId === a.id && (
               <div className="mt-2">
                 <AccountForm
@@ -184,9 +214,15 @@ function AccountForm({
   onDone: () => void;
 }) {
   const t = useTranslations("claudeAccounts");
+  const locale = useLocale();
   const [id, setId] = useState(account?.id ?? "");
   const [label, setLabel] = useState(account?.label ?? "");
   const [token, setToken] = useState("");
+  // Weekly-reset schedule (NY). "" dow = no schedule (rolling 7-day window).
+  const [resetDow, setResetDow] = useState<string>(
+    account?.weeklyReset ? String(account.weeklyReset.dow) : "",
+  );
+  const [resetTime, setResetTime] = useState<string>(account?.weeklyReset?.time ?? "");
   const [saving, setSaving] = useState(false);
 
   // Mirrors the server's ACCOUNT_ID_RE so a bad id is caught before the round trip.
@@ -195,6 +231,12 @@ function AccountForm({
   const canSave = mode === "edit" ? true : idValid && token.trim().length > 0;
 
   async function save() {
+    // A day chosen without a time (or vice-versa) is incomplete — block it so we
+    // never store half a schedule.
+    if ((resetDow === "") !== (resetTime.trim() === "")) {
+      toast.error(t("weeklyReset.incomplete"));
+      return;
+    }
     setSaving(true);
     try {
       await api("/api/admin/claude-accounts", {
@@ -203,6 +245,9 @@ function AccountForm({
           id: mode === "edit" ? account!.id : cleanId,
           label: label.trim() || undefined,
           token: token.trim() || undefined,
+          // Always send the reset pair so the operator can also CLEAR it (dow=null).
+          weekly_reset_dow: resetDow === "" ? null : Number(resetDow),
+          weekly_reset_time: resetTime.trim() || null,
         },
       });
       toast.success(t("saved"));
@@ -248,6 +293,38 @@ function AccountForm({
           autoComplete="off"
         />
         <p className="mt-1 text-[11px] text-muted-foreground">{t("tokenHint")}</p>
+      </div>
+      {/* Weekly-limit reset schedule (NY wall-clock). Each account resets on its own
+          day/time — the value the user reads in Claude's usage tool ("Resets Sun
+          7:59 PM"). Drives the weekly meter's window. Leave the day on "—" for none. */}
+      <div>
+        <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+          {t("weeklyReset.label")}
+        </label>
+        <div className="flex gap-2">
+          <select
+            value={resetDow}
+            onChange={(e) => setResetDow(e.target.value)}
+            dir="auto"
+            className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+          >
+            <option value="">{t("weeklyReset.dayNone")}</option>
+            {[0, 1, 2, 3, 4, 5, 6].map((n) => (
+              <option key={n} value={String(n)}>
+                {weekdayName(n, locale)}
+              </option>
+            ))}
+          </select>
+          <Input
+            type="time"
+            value={resetTime}
+            onChange={(e) => setResetTime(e.target.value)}
+            dir="ltr"
+            className="h-9 w-28 text-xs"
+            aria-label={t("weeklyReset.timeLabel")}
+          />
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">{t("weeklyReset.hint")}</p>
       </div>
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" className="h-7" onClick={onDone} disabled={saving}>
