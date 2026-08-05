@@ -24,6 +24,7 @@ import { executeRun, describeAccounts, isRunLive, runEventBus, type LiveEvent } 
 import { composePrompt } from "./playbooks";
 import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
 import { deployStatus } from "./deploy-status";
+import { analyzeRun, normalizeDbEvent, type EfficiencyFlag } from "./efficiency";
 import { transcribeAudio } from "../../gemini";
 
 // The auth chain (requireAuth → requireOrg → requireSuperAdmin) is installed once
@@ -245,6 +246,143 @@ router.get("/claude/usage", async (req: Request, res: Response) => {
         "on a Team plan. See the plan usage screens at claude.ai for those.",
       scope: "Covers only runs launched from this console, not other Claude usage.",
     },
+  });
+});
+
+/**
+ * GET /api/claude/efficiency — the "is the console wasting tools/turns" panel.
+ *
+ * Runs the Level-1 waste detector (efficiency.ts) over the org's most recent
+ * runs and returns, per run, its tool counts + waste flags (each citing the
+ * `seq` it was found at), plus normalized aggregate RATES — because raw totals
+ * are not comparable across runs of different sizes, only rates are. This is
+ * pure analysis of events already stored: zero paid tokens, no model call.
+ *
+ * Deliberately bounded: it analyzes the newest `limit` runs (not the whole
+ * history) and caps events per run, so a huge backlog can't make one screen load
+ * scan millions of rows. A run whose events hit the cap is marked
+ * `events_truncated` rather than silently analyzed half-way.
+ */
+const EFF_EVENT_CAP = 4000;
+
+router.get("/claude/efficiency", async (req: Request, res: Response) => {
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 15, 1), 30);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: runRows, error: runErr } = await db
+    .from("claude_runs")
+    .select("id, title, status, num_turns, created_at")
+    .eq("org_id", req.org!.id)
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (runErr) {
+    console.error("[claude/efficiency] runs query failed:", runErr.message);
+    return res.status(500).json({ error: "could not load efficiency" });
+  }
+
+  const runs = runRows ?? [];
+  const disclaimer = {
+    scope:
+      "Level-1 mechanical waste only: a re-read of an unchanged file, an identical " +
+      "repeated search, a retried failing call, and read-only shell issued one call " +
+      "at a time. Each flag cites the seq it was found at. It does NOT judge whether " +
+      "an approach was smart — that needs a model and a model cannot be the authority " +
+      "on it.",
+    tokens:
+      "A re-read of an unchanged file usually hits the prompt cache, so it costs a " +
+      "turn and latency more than tokens. Token cost is per RUN (from claude_runs), " +
+      "not attributable to a single tool call.",
+    coverage: "Covers only runs launched from this console, newest first.",
+  };
+
+  if (runs.length === 0) {
+    return res.json({ window_days: days, runs: [], rates: null, disclaimer });
+  }
+
+  // One bounded query per run (≤ `limit` runs), in parallel. Per-run keeps the
+  // seq ordering coherent for dedup — a single cross-run query with a global cap
+  // would truncate whole runs, corrupting the analysis of the ones that survived.
+  const analyzed = await Promise.all(
+    runs.map(async (run) => {
+      const { data: evRows, error: evErr } = await db
+        .from("claude_run_events")
+        .select("seq, kind, tool_name, text, payload")
+        .eq("run_id", run.id)
+        .in("kind", ["tool_use", "tool_result"])
+        .order("seq", { ascending: true })
+        .limit(EFF_EVENT_CAP);
+      if (evErr) {
+        console.error(`[claude/efficiency] events query failed for ${run.id}:`, evErr.message);
+        return null;
+      }
+      const rows = evRows ?? [];
+      const eff = analyzeRun(rows.map(normalizeDbEvent));
+      const topTools = Object.entries(eff.toolCounts)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6);
+      return {
+        id: run.id,
+        title: run.title,
+        status: run.status,
+        created_at: run.created_at,
+        num_turns: run.num_turns,
+        tool_calls: eff.toolCalls,
+        top_tools: topTools,
+        flags: eff.flags.slice(0, 30),
+        flag_count: eff.flags.length,
+        waste_score: eff.wasteScore,
+        events_truncated: rows.length >= EFF_EVENT_CAP,
+      };
+    }),
+  );
+
+  const ok = analyzed.filter((r): r is NonNullable<typeof r> => r !== null);
+  const runsFailed = analyzed.length - ok.length;
+  if (runsFailed > 0 && ok.length === 0) {
+    // Every per-run events query errored — this is a failure, not "no waste".
+    console.error(`[claude/efficiency] all ${runsFailed} run analyses failed`);
+    return res.status(500).json({ error: "could not analyze runs" });
+  }
+
+  // Aggregate RATES, not totals: error_retry sums its retry counts, the others
+  // count flags, and per-100-calls normalizes so runs of different sizes compare.
+  const byCode = { duplicate_read: 0, redundant_search: 0, error_retry: 0, unbatched_reads: 0 };
+  let totalToolCalls = 0;
+  let totalTurns = 0;
+  for (const r of ok) {
+    totalToolCalls += r.tool_calls;
+    totalTurns += typeof r.num_turns === "number" ? r.num_turns : 0;
+    for (const f of r.flags as EfficiencyFlag[]) {
+      if (f.code === "error_retry") byCode.error_retry += f.count ?? 1;
+      else byCode[f.code] += 1;
+    }
+  }
+  const per100 = (n: number) =>
+    totalToolCalls > 0 ? Math.round((n / totalToolCalls) * 1000) / 10 : 0;
+
+  return res.json({
+    window_days: days,
+    runs: ok.sort((a, b) => b.waste_score - a.waste_score),
+    rates: {
+      runs_analyzed: ok.length,
+      runs_failed: runsFailed,
+      total_tool_calls: totalToolCalls,
+      total_turns: totalTurns,
+      flags_by_code: byCode,
+      per_100_calls: {
+        duplicate_read: per100(byCode.duplicate_read),
+        redundant_search: per100(byCode.redundant_search),
+        error_retry: per100(byCode.error_retry),
+        unbatched_reads: per100(byCode.unbatched_reads),
+      },
+      avg_tool_calls: ok.length ? Math.round((totalToolCalls / ok.length) * 10) / 10 : 0,
+      avg_turns: ok.length ? Math.round((totalTurns / ok.length) * 10) / 10 : 0,
+    },
+    disclaimer,
   });
 });
 
