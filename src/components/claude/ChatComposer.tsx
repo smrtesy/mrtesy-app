@@ -425,7 +425,7 @@ export function ChatComposer({
               </SelectContent>
             </Select>
 
-            {account && <UsageMeter account={account} />}
+            {account && <UsageMeter account={account} running={running} />}
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">

@@ -8,11 +8,18 @@
  * cost-equivalent vs a calibrated cap), NOT Anthropic's real remaining quota,
  * which is not exposed on a Team plan. The weekly figure is display-only until a
  * weekly limit-hit calibrates it (backend returns pct:null then). Compact-UI rule:
- * icon-only by default, detail on click; fetch only while the popover is open, no
- * continuous poll.
+ * icon-only by default, detail on click.
+ *
+ * The reading is kept LIVE, not frozen at mount: the account's 5-hour window is
+ * SHARED across every thread on that account, so the meter must move when OTHER
+ * chats (or background runs) consume it, even while nothing runs here. So it polls
+ * lightly in the background (every 30s), and also refreshes the instant a turn in
+ * this chat starts or ends. The poll is a dry-run estimator read — zero paid
+ * tokens. Every fetch is guarded to the CURRENT account: a reply for an account
+ * that is no longer selected is dropped, so the figure is always this account's.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -101,12 +108,19 @@ function Bar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
-export function UsageMeter({ account }: { account: string }) {
+export function UsageMeter({ account, running }: { account: string; running?: boolean }) {
   const t = useTranslations("claudeChat.meter");
   const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<AccountUsage | null>(null);
   const [loading, setLoading] = useState(false);
+  // The account this meter must reflect RIGHT NOW. A fetch started for an older
+  // account (a mid-flight switch, or an overlapping poll) is dropped on return so
+  // it can never paint another account's figure onto the current one — the meter
+  // is always this account's reading. Compared against the endpoint's echoed
+  // `account`, so the match is exact.
+  const accountRef = useRef(account);
+  accountRef.current = account;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,7 +128,7 @@ export function UsageMeter({ account }: { account: string }) {
       const res = await api<AccountUsage>(
         `/api/claude/account-usage?account=${encodeURIComponent(account)}`,
       );
-      setData(res);
+      if (res.account === accountRef.current) setData(res);
     } catch {
       // A read that fails leaves the last snapshot (or the empty icon) — the meter
       // is an aid, never a blocker for the composer, so it swallows its own errors.
@@ -123,19 +137,41 @@ export function UsageMeter({ account }: { account: string }) {
     }
   }, [account]);
 
+  // On account change, drop the previous account's reading at once so the ring
+  // shows "unknown" (muted) for the brief moment until the new fetch lands, never
+  // another account's fill. Keyed on `account` alone, so an ordinary same-account
+  // poll never blanks the icon.
+  useEffect(() => {
+    setData(null);
+  }, [account]);
+
   // One fetch on mount / account change so the resting icon reflects the real fill
-  // (not a permanent empty ring) — a single call, not a poll.
+  // (not a permanent empty ring) — for the account this thread runs on.
   useEffect(() => {
     void load();
   }, [load]);
 
-  // While the popover is open, refresh every 60s so an open panel stays current.
-  // Closed → no polling (compact/economical: the icon is the passive indicator).
+  // Keep the RESTING icon current in the background, not only while the popover is
+  // open. The 5-hour window is SHARED across every thread on this account, so
+  // consumption from OTHER chats moves the meter even when nothing runs here — a
+  // light GET every 30s (dry-run estimator, zero paid tokens) tracks that. The open
+  // popover refreshes on the same tick, so its figures stay live too.
   useEffect(() => {
-    if (!open) return;
-    const id = window.setInterval(() => void load(), 60_000);
+    const id = window.setInterval(() => void load(), 30_000);
     return () => window.clearInterval(id);
-  }, [open, load]);
+  }, [load]);
+
+  // A turn boundary in THIS chat (start or end) is the moment its own cost has just
+  // landed in the DB — refresh at once instead of waiting for the next background
+  // tick, so the meter reacts immediately to work done here. Guarded on a real
+  // change so it never double-fires with the mount fetch above.
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    if (prevRunning.current !== running) {
+      prevRunning.current = running;
+      void load();
+    }
+  }, [running, load]);
 
   const sessionPct = data?.session?.pct ?? 0;
   const iconColor = meterColor(data?.session ? sessionPct : null);
