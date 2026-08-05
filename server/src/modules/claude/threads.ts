@@ -879,12 +879,22 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   if (lErr) return res.status(500).json({ error: "could not check thread state" });
   const hasLive = Boolean(live && live.length > 0);
 
-  const { count: prior, error: cErr } = await db
+  // The next turn index is max(turn_index)+1, NOT count(*)+1. A thread's turn
+  // indices are not always contiguous — a canceled/failed sequence can leave a
+  // gap (e.g. 1,2,3,4,6,7 with 5 missing). With count(*)+1 the "next" index
+  // (here 7) collides with an existing row and the insert below hits the
+  // uniq_claude_runs_thread_turn constraint (23505) — surfaced to the user as
+  // a false "a turn is still running" 409 on EVERY send, permanently wedging
+  // the thread. max(turn_index)+1 is always free.
+  const { data: last, error: cErr } = await db
     .from("claude_runs")
-    .select("id", { count: "exact", head: true })
-    .eq("thread_id", thread.id);
-  if (cErr) return res.status(500).json({ error: "could not count turns" });
-  const turnIndex = (prior ?? 0) + 1;
+    .select("turn_index")
+    .eq("thread_id", thread.id)
+    .order("turn_index", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (cErr) return res.status(500).json({ error: "could not read thread turns" });
+  const turnIndex = (last?.turn_index ?? 0) + 1;
 
   // First turn carries the standing instructions and the working method; later
   // turns don't, because the resumed session still holds them. A turn queued
