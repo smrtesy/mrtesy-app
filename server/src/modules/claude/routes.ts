@@ -339,38 +339,102 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
   const manualWeekly = /^manual calib/i.test(String(capRow?.note ?? ""));
   const weeklyCalibrated = weekCap > 0 && ((weeklyHits ?? 0) > 0 || manualWeekly);
 
+  // Anthropic's OWN ground truth for this account's windows, captured live from the
+  // CLI's rate_limit_event (runner.ts → claude_usage_windows). A window row still
+  // "live" (its reset instant is in the FUTURE, i.e. the window it describes hasn't
+  // closed) OVERRIDES the reconstructed estimate: the reset time is exact, and the
+  // percent is exact whenever the CLI reported utilization (it does so only past its
+  // warning threshold, ~>75% — below that, utilization is absent and we keep the
+  // cost estimate for the percent while still using the exact reset time). Once
+  // resets_at is in the past the row describes a window that already reset, so it is
+  // stale → fall back to the estimator until the next run refreshes it.
+  const { data: winRows, error: winErr } = await db
+    .from("claude_usage_windows")
+    .select("window_kind, resets_at, utilization, status")
+    .eq("claude_account", account);
+  if (winErr) console.error("[claude/account-usage] usage-windows read failed:", winErr.message);
+  const nowMs = Date.now();
+  const liveWindow = (kind: "five_hour" | "seven_day") => {
+    const w = (winRows ?? []).find((r) => r.window_kind === kind);
+    if (!w?.resets_at || new Date(w.resets_at).getTime() <= nowMs) return null;
+    return w;
+  };
+  const utilPct = (w: { utilization: number | null }) =>
+    w.utilization != null ? Math.round(Number(w.utilization) * 100) : null;
+
+  // Session (5-hour): live window wins; else the reconstructed estimate; else null.
+  const liveSession = liveWindow("five_hour");
+  let sessionOut: {
+    pct: number;
+    pct_raw: number;
+    cost_used: number;
+    cap: number;
+    window_end: string;
+    source: "anthropic" | "estimate";
+    pct_source: "anthropic" | "estimate";
+  } | null = null;
+  if (liveSession) {
+    const real = utilPct(liveSession);
+    const pct = real ?? (s ? s.pct : 0);
+    sessionOut = {
+      pct: Math.min(100, pct),
+      pct_raw: pct,
+      cost_used: s ? Number(s.cost_used) : 0,
+      cap: s ? Number(s.cap_cost) : 0,
+      window_end: liveSession.resets_at,
+      source: "anthropic",
+      pct_source: real != null ? "anthropic" : "estimate",
+    };
+  } else if (s) {
+    sessionOut = {
+      pct: Math.min(100, s.pct),
+      pct_raw: s.pct,
+      cost_used: Number(s.cost_used),
+      cap: Number(s.cap_cost),
+      window_end: s.window_end,
+      source: "estimate",
+      pct_source: "estimate",
+    };
+  }
+
+  // Weekly (7-day): live window wins for reset time (always) and percent (when the
+  // CLI gave utilization); else fall back to the calibrated-cost estimate over the
+  // schedule-aligned window; else display-only.
+  const liveWeekly = liveWindow("seven_day");
+  const estWeeklyEnd = acctInfo?.weeklyReset
+    ? new Date(
+        mostRecentWeeklyReset(
+          acctInfo.weeklyReset,
+          weekStartMs + 7 * 24 * 60 * 60 * 1000 + 60_000,
+        ),
+      ).toISOString()
+    : null;
+  const estWeeklyPct = weeklyCalibrated
+    ? Math.min(100, Math.floor((weekCost / weekCap) * 100))
+    : null;
+  const weeklyReal = liveWeekly ? utilPct(liveWeekly) : null;
+  const weeklyOut = {
+    pct: weeklyReal ?? estWeeklyPct,
+    cost_used: Math.round(weekCost * 100) / 100,
+    cap: weeklyCalibrated ? weekCap : null,
+    window_end: liveWeekly ? liveWeekly.resets_at : estWeeklyEnd,
+    source: (liveWeekly ? "anthropic" : "estimate") as "anthropic" | "estimate",
+    pct_source: (weeklyReal != null ? "anthropic" : "estimate") as "anthropic" | "estimate",
+  };
+
+  // The meter is on real Anthropic figures when BOTH windows resolved from a live
+  // rate_limit_event — then the reset times are exact (and the percents too, once
+  // past the warning threshold). Otherwise it is still partly the cost estimate.
+  const live = sessionOut?.source === "anthropic" && weeklyOut.source === "anthropic";
+
   return res.json({
     account,
-    // Clamp the displayed percent to 100 — over-100 means "used up", and a meter
-    // that fills past full reads as broken (this was the 272% bug in the alert).
-    session: s
-      ? {
-          pct: Math.min(100, s.pct),
-          pct_raw: s.pct,
-          cost_used: Number(s.cost_used),
-          cap: Number(s.cap_cost),
-          window_end: s.window_end,
-        }
-      : null,
-    weekly: weeklyCalibrated
-      ? {
-          pct: Math.min(100, Math.floor((weekCost / weekCap) * 100)),
-          cost_used: Math.round(weekCost * 100) / 100,
-          cap: weekCap,
-          // Next reset, only when a schedule is set. Computed as the reset AT-OR-BEFORE
-          // (this window's start + ~7 days) rather than a flat +7d, so it lands on the
-          // exact wall-clock reset even across a DST boundary (a flat +7d would drift ±1h).
-          window_end: acctInfo?.weeklyReset
-            ? new Date(
-                mostRecentWeeklyReset(
-                  acctInfo.weeklyReset,
-                  weekStartMs + 7 * 24 * 60 * 60 * 1000 + 60_000,
-                ),
-              ).toISOString()
-            : null,
-        }
-      : { pct: null, cost_used: Math.round(weekCost * 100) / 100, cap: null, window_end: null },
-    disclaimer: "אומדן מהצריכה דרך הכלים שלנו — לא נתון רשמי מאנתרופיק",
+    session: sessionOut,
+    weekly: weeklyOut,
+    live,
+    disclaimer: live
+      ? "זמן האיפוס מדויק מאנתרופיק; האחוז מדויק כשקרוב למגבלה, אחרת אומדן מהצריכה"
+      : "אומדן מהצריכה דרך הכלים שלנו — לא נתון רשמי מאנתרופיק",
   });
 });
 

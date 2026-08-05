@@ -29,9 +29,28 @@ import { cn } from "@/lib/utils";
 interface AccountUsage {
   account: string;
   session:
-    | { pct: number; pct_raw: number; cost_used: number; cap: number; window_end: string }
+    | {
+        pct: number;
+        pct_raw: number;
+        cost_used: number;
+        cap: number;
+        window_end: string;
+        // 'anthropic' when the reset time / percent came from the CLI's own
+        // rate_limit_event (ground truth); 'estimate' when reconstructed from cost.
+        source?: "anthropic" | "estimate";
+        pct_source?: "anthropic" | "estimate";
+      }
     | null;
-  weekly: { pct: number | null; cost_used: number; cap: number | null; window_end?: string | null };
+  weekly: {
+    pct: number | null;
+    cost_used: number;
+    cap: number | null;
+    window_end?: string | null;
+    source?: "anthropic" | "estimate";
+    pct_source?: "anthropic" | "estimate";
+  };
+  // Both windows resolved from a live rate_limit_event — reset times are exact.
+  live?: boolean;
   disclaimer: string;
 }
 
@@ -233,12 +252,23 @@ export function UsageMeter({ account, running }: { account: string; running?: bo
               )}
             </>
           ) : (
-            <div className="text-[10px] text-muted-foreground">{t("noCalibration")}</div>
+            <div className="space-y-0.5 text-[10px] text-muted-foreground">
+              {/* Even without a calibrated percent we may hold Anthropic's exact
+                  weekly reset time (from a live rate_limit_event) — show it. */}
+              {data?.weekly?.window_end && (
+                <div>{resetsInLabel(data.weekly.window_end, locale, t)}</div>
+              )}
+              <div>{t("noCalibration")}</div>
+            </div>
           )}
         </div>
 
         <div className="border-t pt-2 text-[10px] leading-snug text-muted-foreground">
-          {loading && !data ? t("loading") : t("estimateDisclaimer")}
+          {loading && !data
+            ? t("loading")
+            : data?.live
+              ? t("liveDisclaimer")
+              : t("estimateDisclaimer")}
         </div>
       </PopoverContent>
     </Popover>
