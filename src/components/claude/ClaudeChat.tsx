@@ -1020,32 +1020,6 @@ export function ClaudeChat() {
           body: { message, attachment_ids: attachmentIds, include_board: includeBoard },
         });
       } catch (e) {
-        // The POST response was lost — a mobile network blip, or the backend was
-        // SIGTERM'd by a redeploy mid-request. But the server inserts AND dispatches
-        // the run BEFORE it responds, so the message may already be running even
-        // though the client saw an error. Reconcile before declaring failure: reload
-        // the thread and check whether a real (non-optimistic) run for THIS message
-        // landed. If it did, keep it and let the poll take over — this is the "shows
-        // failed but was actually sent" bug. Only a message that truly didn't land is
-        // yanked back to the composer.
-        const knownIds = new Set(turns.map((x) => x.id));
-        let landed = false;
-        try {
-          const r = await api<{ turns: Turn[] }>(`/api/claude/threads/${id}`);
-          const fresh = (r.turns ?? []).filter((x) => !knownIds.has(x.id));
-          // Match this message by text; an attachment-only turn (empty text, stored
-          // as null) is confirmed by any new run appearing.
-          landed = message ? fresh.some((x) => x.user_prompt === message) : fresh.length > 0;
-          if (landed && activeIdRef.current === id) await loadThread(id).catch(() => {});
-        } catch {
-          // The reconcile fetch failed too (still offline) — treat as not landed.
-        }
-        if (landed) {
-          // It sent after all: leave the message on screen, drop the error.
-          if (includeBoard) setAttachBoard(false);
-          setSending(false);
-          return;
-        }
         setTurns((prev) => prev.filter((x) => x.id !== optimistic.id));
         toast.error(e instanceof Error ? e.message : String(e));
         setSending(false);
