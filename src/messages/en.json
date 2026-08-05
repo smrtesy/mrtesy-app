@@ -720,6 +720,8 @@
       "wokeHint": "Woke from snooze — first interaction clears this",
       "followup48Chip": "48h follow-up",
       "followup48Hint": "You reached out and got no reply — follow-up reminder after 48 hours",
+      "resolvedHintChip": "Looks resolved",
+      "resolvedHintHint": "A reply arrived that appears to close the matter — read the update, and if it's done you can dismiss the suggestion in one click",
       "sitting": "Sitting {days} days",
       "sittingHint": "Working days without interaction",
       "sizeQuick": "Quick",
@@ -4572,7 +4574,8 @@
       "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic.",
       "chooseDevice": "Choose microphone",
       "defaultDevice": "System default microphone",
-      "unnamedDevice": "Microphone {n}"
+      "unnamedDevice": "Microphone {n}",
+      "needPermission": "Allow microphone access to see your devices"
     },
     "playbooks": {
       "title": "Working methods",
@@ -4825,6 +4828,17 @@
       "tokens": "tokens",
       "tooltip": "Tokens in this conversation — input: {input} · output: {output}"
     },
+    "meter": {
+      "title5h": "5-hour window",
+      "titleWeekly": "Weekly",
+      "resetsIn": "Resets in {h}h {m}m (around {at} NY)",
+      "resetsInMins": "Resets in {m}m (around {at} NY)",
+      "noCalibration": "Not calibrated yet",
+      "estimateDisclaimer": "Estimate from usage through our tools — not an official Anthropic figure",
+      "tooltip": "5-hour usage: {pct}% (~${cost} of ~${cap} equivalent)",
+      "empty": "No active window right now",
+      "loading": "Loading…"
+    },
     "queue": {
       "waiting": "Waiting in line — runs when the current turn finishes",
       "remove": "Remove from queue"
@@ -4995,6 +5009,11 @@
     "seedRoute": "Screen (route)",
     "seedTime": "When it appeared",
     "seedBrowser": "Browser",
+    "seedEndpoint": "Failed server path",
+    "seedStatus": "Status code",
+    "seedResponse": "Server response",
+    "seedStack": "Error stack",
+    "seedScreenshot": "Before diagnosing, first screenshot the screen to see what the user saw: run `node /app/dist/modules/claude/browser-helper.js shot {route} --out shot.png --attach`. If the error is a server call (endpoint and status above), reproduce it against the platform API.",
     "seedTask": "Locate where this error comes from in the code (search for the text or its translation key in src/messages/en.json, then the call that shows it and the server path behind it), diagnose the root cause, and fix it.",
     "seedProblem": "Extra context (optional):"
   },
