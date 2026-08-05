@@ -29,6 +29,7 @@ import {
   describeAccounts,
   tokenKeyFor,
   labelKeyFor,
+  resetKeyFor,
   ACCOUNT_ID_RE,
   ACCOUNTS_REGISTRY_KEY,
   ACCOUNTS_APP_SLUG,
@@ -98,13 +99,53 @@ router.get("/admin/claude-accounts", async (_req: Request, res: Response) => {
  * id, adds it to the registry — all under the platform app.
  */
 router.post("/admin/claude-accounts", async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { id?: string; label?: string; token?: string };
+  const body = (req.body ?? {}) as {
+    id?: string;
+    label?: string;
+    token?: string;
+    // Weekly-reset schedule (NY wall-clock). `weekly_reset_dow` is 0–6 (0=Sunday)
+    // or null/"" to clear; `weekly_reset_time` is "HH:MM". Both present → set the
+    // schedule; either absent/blank → the field is omitted (unchanged); an explicit
+    // null dow clears it (falls back to the rolling window).
+    weekly_reset_dow?: number | string | null;
+    weekly_reset_time?: string | null;
+  };
   const id = typeof body.id === "string" ? body.id.trim().toLowerCase() : "";
   const label = typeof body.label === "string" ? body.label.trim() : "";
   const token = typeof body.token === "string" ? body.token.trim() : "";
 
   if (!ACCOUNT_ID_RE.test(id)) {
     return res.status(400).json({ error: "id must be lowercase letters, digits or _ (max 32)" });
+  }
+
+  // Normalize the weekly-reset input into either a "<dow> <HH:MM>" string to store,
+  // an empty string to clear, or `undefined` to leave it untouched. `weeklyResetOp`
+  // being present at all (dow or time key sent) means the operator submitted the
+  // reset field; a null/blank dow clears; a valid dow + time sets.
+  let resetValue: string | undefined;
+  const dowSent = "weekly_reset_dow" in body;
+  const timeSent = "weekly_reset_time" in body;
+  if (dowSent || timeSent) {
+    const dowRaw = body.weekly_reset_dow;
+    const dowBlank = dowRaw === null || dowRaw === "" || dowRaw === undefined;
+    const timeRaw = typeof body.weekly_reset_time === "string" ? body.weekly_reset_time.trim() : "";
+    const timeBlank = timeRaw === "";
+    if (dowBlank && timeBlank) {
+      resetValue = ""; // both blank → clear the schedule (rolling-window fallback)
+    } else if (dowBlank !== timeBlank) {
+      // Exactly one half sent — reject rather than silently clearing (the frontend
+      // guards this; a raw API caller must send both or neither).
+      return res
+        .status(400)
+        .json({ error: "weekly reset needs both a day (0–6) and a HH:MM time, or neither" });
+    } else {
+      const dow = Number(dowRaw);
+      const tm = /^([0-2]?\d):([0-5]\d)$/.exec(timeRaw);
+      if (!Number.isInteger(dow) || dow < 0 || dow > 6 || !tm || Number(tm[1]) > 23) {
+        return res.status(400).json({ error: "weekly reset must be a day 0–6 and a HH:MM time" });
+      }
+      resetValue = `${dow} ${String(Number(tm[1])).padStart(2, "0")}:${tm[2]}`;
+    }
   }
 
   const appId = await resolveAppId();
@@ -124,6 +165,11 @@ router.post("/admin/claude-accounts", async (req: Request, res: Response) => {
     const failure = await writeAppSecret(appId, ACCOUNTS_APP_SLUG, labelKeyFor(id), label, false);
     if (failure) return res.status(500).json({ error: failure });
     invalidateAppSecretCache(ACCOUNTS_APP_SLUG, labelKeyFor(id));
+  }
+  if (resetValue !== undefined) {
+    const failure = await writeAppSecret(appId, ACCOUNTS_APP_SLUG, resetKeyFor(id), resetValue, false);
+    if (failure) return res.status(500).json({ error: failure });
+    invalidateAppSecretCache(ACCOUNTS_APP_SLUG, resetKeyFor(id));
   }
 
   // Reserved ids are always known without being listed; every other id must be in

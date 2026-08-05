@@ -141,6 +141,85 @@ export function tokenKeyFor(id: string): string {
 export function labelKeyFor(id: string): string {
   return id === PRIMARY_ACCOUNT ? PRIMARY_LABEL_KEY : `CLAUDE_ACCOUNT_LABEL_${id.toUpperCase()}`;
 }
+/**
+ * The config key holding a given account's weekly-limit reset schedule — the
+ * day-of-week + time-of-day at which Anthropic resets THIS account's weekly
+ * usage window. Each account resets on its own schedule, so this is per-account.
+ * Value format: "<dow> <HH:MM>" where dow is 0–6 (0=Sunday, JS getDay) and HH:MM
+ * is 24-hour wall-clock in America/New_York (the user reads Claude's "Resets Sun
+ * 7:59 PM" in NY time). Unset → the usage endpoint falls back to a rolling 7-day
+ * window. Config, not secret. */
+const PRIMARY_RESET_KEY = "CLAUDE_ACCOUNT_WEEKLY_RESET";
+export function resetKeyFor(id: string): string {
+  return id === PRIMARY_ACCOUNT ? PRIMARY_RESET_KEY : `CLAUDE_ACCOUNT_WEEKLY_RESET_${id.toUpperCase()}`;
+}
+
+/** A parsed weekly-reset schedule (NY wall-clock). */
+export interface WeeklyReset {
+  /** 0–6, 0 = Sunday (JS getDay convention). */
+  dow: number;
+  /** "HH:MM", 24-hour, America/New_York. */
+  time: string;
+}
+
+/** Parse a stored "<dow> <HH:MM>" reset value; null on empty/malformed (fail-safe:
+ *  a bad value means "no schedule", i.e. fall back to the rolling window). */
+export function parseWeeklyReset(raw: string | null | undefined): WeeklyReset | null {
+  const v = raw?.trim();
+  if (!v) return null;
+  const m = /^([0-6])\s+([0-2]?\d):([0-5]\d)$/.exec(v);
+  if (!m) return null;
+  const dow = Number(m[1]);
+  const hh = Number(m[2]);
+  if (hh > 23) return null;
+  return { dow, time: `${String(hh).padStart(2, "0")}:${m[3]}` };
+}
+
+/** America/New_York offset (ms, e.g. -4h in EDT) at a given instant. Compares the
+ *  same instant formatted as UTC vs NY — the difference is the zone offset, DST and
+ *  all, without a tz library. */
+function nyOffsetMs(instant: Date): number {
+  const utc = new Date(instant.toLocaleString("en-US", { timeZone: "UTC" }));
+  const ny = new Date(instant.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  return ny.getTime() - utc.getTime();
+}
+
+/**
+ * The UTC epoch (ms) of the most recent past weekly reset, given a schedule in NY
+ * wall-clock and "now" (ms). Finds the latest instant whose NY weekday = `dow` and
+ * NY time = the schedule time, at or before now. DST-safe: the reset time (never
+ * near the 2 AM transition in practice) sits in one offset regime, so a single
+ * offset correction is exact. Exported for the usage endpoint's weekly window.
+ */
+export function mostRecentWeeklyReset(reset: WeeklyReset, nowMs: number): number {
+  const [hh, mm] = reset.time.split(":").map(Number);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(new Date(nowMs));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const wdMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const nowDow = wdMap[get("weekday")] ?? 0;
+  const y = Number(get("year"));
+  const mo = Number(get("month")) - 1;
+  const d = Number(get("day"));
+  const nowH = Number(get("hour")) % 24;
+  const nowMi = Number(get("minute"));
+  let back = (nowDow - reset.dow + 7) % 7;
+  // Reset day is today but its time hasn't passed yet → the current window opened a
+  // week ago, not today.
+  if (back === 0 && (nowH < hh || (nowH === hh && nowMi < mm))) back = 7;
+  // Build the NY wall-clock instant (Date.UTC normalizes the day rollback) and shift
+  // by the NY offset at that instant to get the true UTC epoch.
+  const wallGuess = Date.UTC(y, mo, d - back, hh, mm);
+  return wallGuess - nyOffsetMs(new Date(wallGuess));
+}
 
 /**
  * The ordered account ids the console can route to — `primary` first, then the
@@ -172,6 +251,9 @@ export interface AccountInfo {
    *  disables an unconfigured account so the user can't route a thread to a
    *  phantom credential that would silently fall back to the primary token. */
   configured: boolean;
+  /** This account's weekly-limit reset schedule (NY wall-clock), or null when the
+   *  operator hasn't set one — the usage endpoint then uses a rolling 7-day window. */
+  weeklyReset: WeeklyReset | null;
 }
 
 /**
@@ -186,11 +268,17 @@ export async function describeAccounts(): Promise<AccountInfo[]> {
   const ids = await listAccountIds();
   return Promise.all(
     ids.map(async (id) => {
-      const [tok, label] = await Promise.all([
+      const [tok, label, reset] = await Promise.all([
         getAppSecret(TOKEN_APP_SLUG, tokenKeyFor(id), tokenKeyFor(id)),
         getAppSecret(TOKEN_APP_SLUG, labelKeyFor(id), labelKeyFor(id)),
+        getAppSecret(TOKEN_APP_SLUG, resetKeyFor(id), resetKeyFor(id)),
       ]);
-      return { id, label: label?.trim() || null, configured: !!tok?.trim() };
+      return {
+        id,
+        label: label?.trim() || null,
+        configured: !!tok?.trim(),
+        weeklyReset: parseWeeklyReset(reset),
+      };
     }),
   );
 }
