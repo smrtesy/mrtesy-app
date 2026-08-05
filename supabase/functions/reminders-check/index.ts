@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
     // old snoozed_until from before dismissal must NOT bounce back into inbox.
     const { data: snoozedTasks } = await supabase
       .from("tasks")
-      .select("id, user_id, title_he, task_type, source_message_id, status, completion_signal_detected")
+      .select("id, user_id, title, title_he, task_type, source_message_id, status, completion_signal_detected")
       .lte("snoozed_until", now)
       .not("snoozed_until", "is", null)
       .not("status", "in", "(archived,completed,dismissed)");
@@ -185,6 +185,24 @@ Deno.serve(async (req) => {
             woke_from_snooze_at: now,
             updated_at: now,
           };
+          // Reflect the reply in the CARD ITSELF — title + description — not only
+          // the activity trail: the user reads those first. Title leads with the
+          // state ("נראה סגור: <subject>" / "התקבלה תגובה: <subject>"), description
+          // becomes the reply gist + deep link. Only when we actually read a reply
+          // AND got a model summary — fail closed: a failed read / empty summary
+          // leaves title+description untouched (never overwrite with nothing). The
+          // prefix strip keeps re-runs from stacking ("נראה סגור: נראה סגור: …").
+          if (reply?.body && outcome.summary) {
+            const base = String(task.title_he || task.title || "")
+              .replace(/^\s*(מעקב|נראה סגור|התקבלה תגובה)\s*:\s*/u, "")
+              .trim();
+            const titlePrefix = outcome.resolved ? "נראה סגור: " : "התקבלה תגובה: ";
+            wakePayload.title = titlePrefix + base;
+            wakePayload.title_he = titlePrefix + base;
+            const newDesc = reply.url ? `${outcome.summary}\nקישור לתגובה: ${reply.url}` : outcome.summary;
+            wakePayload.description = newDesc;
+            wakePayload.description_he = newDesc;
+          }
           // Only touch `updates` when the read succeeded — writing on a failed
           // read would replace the task's whole history with one entry.
           if (taskRow) {
