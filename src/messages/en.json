@@ -4844,7 +4844,8 @@
       "resetsInMins": "Resets in {m}m (around {at} NY)",
       "noCalibration": "Not calibrated yet",
       "estimateDisclaimer": "Estimate from usage through our tools — not an official Anthropic figure",
-      "liveDisclaimer": "Reset time is exact from Anthropic; the percent is exact near the limit, otherwise an estimate",
+      "realTooltip": "Real datum from Anthropic — not an estimate",
+      "realLegend": "The green dot = a real datum from Anthropic; the other figures are usage estimates",
       "tooltip": "5-hour usage: {pct}% (~${cost} of ~${cap} equivalent)",
       "empty": "No active window right now",
       "loading": "Loading…"
