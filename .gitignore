@@ -55,3 +55,6 @@ android-app/app/google-services.json
 
 # page-check harness runtime artifacts (browser screenshots + temp env backup)
 .page-check/
+
+# Chat attachment scratch (harness) — never track
+.claude-attachments/
