@@ -14,6 +14,28 @@
 
 export type SystemMessageType = "error" | "warning" | "success" | "info";
 
+/**
+ * The rich diagnostic context the global error catcher attaches to an error
+ * entry (see `src/lib/error-capture.ts`). Optional and backward-compatible:
+ * old entries (and every non-error toast) simply have no `detail`. When present
+ * it turns a bare "thread not found" into a debuggable record — which endpoint
+ * failed, with what status and body, or which JS stack threw.
+ */
+export interface ClientErrorDetail {
+  /** Where the error originated. */
+  kind: "api" | "js" | "promise" | "toast";
+  /** HTTP status, for `kind:"api"`. */
+  status?: number;
+  /** HTTP method, for `kind:"api"`. */
+  method?: string;
+  /** The API path that failed, for `kind:"api"` (e.g. `/api/claude/threads/<id>`). */
+  url?: string;
+  /** The server's response body (truncated), for `kind:"api"`. */
+  responseBody?: string;
+  /** The JS error stack (truncated), for `kind:"js"`/`kind:"promise"`. */
+  stack?: string;
+}
+
 export interface SystemMessageEntry {
   /** Unique per entry (toast id + timestamp — toast ids repeat across reloads). */
   id: string;
@@ -23,6 +45,8 @@ export interface SystemMessageEntry {
   path: string;
   /** ISO UTC; converted to America/New_York only at display. */
   at: string;
+  /** Rich diagnostic context for error entries (undefined for plain toasts). */
+  detail?: ClientErrorDetail;
 }
 
 const STORAGE_KEY = "smrtesy-system-messages";

@@ -15,6 +15,13 @@
 
 import { createClient } from "@/lib/supabase/client";
 import { navigateTop } from "@/lib/navigate";
+import { reportApiError, REPORTED_FLAG } from "@/lib/error-capture";
+
+/** Tag an error so the window-level catcher won't re-report it if it bubbles up
+ *  as an unhandled rejection (a bare `await api()`). */
+function markReported(err: unknown) {
+  if (err && typeof err === "object") (err as Record<string, unknown>)[REPORTED_FLAG] = true;
+}
 
 const supabase = createClient();
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -205,6 +212,13 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
           await new Promise((r) => setTimeout(r, attempt * 400));
           continue;
         }
+        // Retries exhausted on a network-level failure. Report as status 0, but
+        // not while OFFLINE — an offline device fails every call and the report
+        // POST would fail too; the reconnect makes the next real call succeed.
+        if (typeof navigator === "undefined" || navigator.onLine !== false) {
+          reportApiError({ message: (e as Error)?.message ?? "Network error", method, url: path, status: 0 });
+          markReported(e);
+        }
         throw e;
       }
 
@@ -231,7 +245,22 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
           headers = await buildHeaders(); // re-resolves via /api/orgs/me
           continue orgHeal; // retry the whole request with the corrected org
         }
-        throw new ApiError(res.status, errMsg, json);
+        // Report the failure to the global error catcher (bell + backend log_entries)
+        // BEFORE throwing, so the detail is stashed before the call site's toast.error
+        // fires and the recorder can attach it. Skip the benign/self-healing statuses:
+        // 401 routes to login, and the org-membership 403 self-heals above.
+        const apiErr = new ApiError(res.status, errMsg, json);
+        if (res.status !== 401 && !/not a member of this organization/i.test(errMsg)) {
+          reportApiError({
+            message: errMsg,
+            method,
+            url: path,
+            status: res.status,
+            responseBody: typeof json === "string" ? json : json != null ? JSON.stringify(json) : undefined,
+          });
+          markReported(apiErr);
+        }
+        throw apiErr;
       }
 
       return json as T;
@@ -276,7 +305,19 @@ export async function apiStream(path: string, opts: ApiOptions = {}): Promise<Re
     const text = await res.text();
     let json: unknown;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-    throw new ApiError(res.status, (json as { error?: string })?.error ?? `HTTP ${res.status}`, json);
+    const errMsg = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
+    const streamErr = new ApiError(res.status, errMsg, json);
+    if (res.status !== 401 && !/not a member of this organization/i.test(errMsg)) {
+      reportApiError({
+        message: errMsg,
+        method: (opts.method ?? "GET").toUpperCase(),
+        url: path,
+        status: res.status,
+        responseBody: typeof json === "string" ? json : json != null ? JSON.stringify(json) : undefined,
+      });
+      markReported(streamErr);
+    }
+    throw streamErr;
   }
   return res;
 }
