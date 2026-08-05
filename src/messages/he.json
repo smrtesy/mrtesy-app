@@ -4717,6 +4717,10 @@
       "notConnected": "לא מחובר"
     },
     "empty": "כתוב הודעה כדי להתחיל",
+    "loadingThread": "טוען שיחה…",
+    "loadError": "לא הצלחנו לטעון את השיחה",
+    "retry": "נסה שוב",
+    "threadGone": "השיחה כבר לא קיימת",
     "thinking": "חושב…",
     "live": {
       "starting": "מתחיל…",

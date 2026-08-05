@@ -266,6 +266,12 @@ export function ClaudeChat() {
   const [thread, setThread] = useState<Thread | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [loading, setLoading] = useState(true);
+  /** How the CURRENTLY-selected conversation's load went — kept separate from
+   *  `loading` (the rail list). Overloading `thread == null` to mean new-chat AND
+   *  loading AND failed made a failed load render identical to a blank new chat:
+   *  the "thread not found → opens a new chat" bug. 'idle' = new/blank composer,
+   *  'error' = a transient load failure the user can retry. */
+  const [threadLoad, setThreadLoad] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [listOpen, setListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Inside a tabs-workspace pane the floating grip (TabsWorkspace PaneControls)
@@ -486,7 +492,7 @@ export function ClaudeChat() {
    *  holding the NEWEST ticket may apply. */
   const loadSeqRef = useRef(0);
 
-  const loadThread = useCallback(async (id: string) => {
+  const loadThread = useCallback(async (id: string, opts?: { background?: boolean }) => {
     const ticket = ++loadSeqRef.current;
     try {
       const r = await api<{
@@ -506,14 +512,43 @@ export function ClaudeChat() {
       setSplitProposal(r.split_proposal ?? null);
       setChildren(r.children ?? []);
       setParent(r.parent ?? null);
+      setThreadLoad("ready");
       // The account you're now working in becomes the new-chat default. Only a
       // non-null (explicitly non-primary) account overrides — opening an old
       // default thread never resets an account you deliberately picked.
       rememberAccount(r.thread.claude_account);
     } catch (e) {
-      if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
+      // A stale failure — the user already switched away, or a newer load won the
+      // ticket race. Do nothing: acting on it would paint over the live thread.
+      if (activeIdRef.current !== id || ticket !== loadSeqRef.current) return;
+      if (e instanceof ApiError && e.status === 401) return; // handled globally (redirect)
+      if (e instanceof ApiError && e.status === 404) {
+        // A 404 from a BACKGROUND poll reload (tickLive) is NOT proof the thread is
+        // gone — it can be a transient read blip while the backend redeploys. Don't
+        // yank the user out of a live conversation on it; leave a user-initiated load
+        // (a rail click / deep-link) to be the one that prunes. Quiet no-op here.
+        if (opts?.background) return;
+        // The conversation genuinely doesn't exist under this org — deleted from
+        // another tab/session, or a stale deep-link (?thread=<id>). Leaving activeId
+        // pointed at it renders a blank screen indistinguishable from a brand-new
+        // chat (the "thread not found → opens a new chat" bug). Prune the dead row
+        // from the rail and fall back to a clean composer.
+        setThreads((prev) => prev.filter((x) => x.id !== id));
+        setActiveId(null);
+        activeIdRef.current = null;
+        setThread(null);
+        setTurns([]);
+        setThreadLoad("idle");
+        toast.error(t("threadGone"));
+      } else {
+        // A transient failure (network drop, or a gateway blip while the backend
+        // redeploys). The conversation still exists — keep it selected and let the
+        // user retry, instead of blanking it as if it were new.
+        setThreadLoad("error");
+        toast.error((e as Error).message);
+      }
     }
-  }, [rememberAccount]);
+  }, [rememberAccount, t]);
 
   const loadTopics = useCallback(async () => {
     try {
@@ -599,6 +634,10 @@ export function ClaudeChat() {
     // reading A's turns as if they were B's.
     setThread(null);
     setTurns([]);
+    // 'loading' (not the blank empty-state) while an existing thread's turns are
+    // fetched, so a slow/failed load never masquerades as a fresh chat; 'idle' for
+    // a genuine new chat (activeId null).
+    setThreadLoad(activeId ? "loading" : "idle");
     if (activeId) void loadThread(activeId);
   }, [activeId, loadThread]);
 
@@ -681,7 +720,8 @@ export function ClaudeChat() {
       // Then the canonical reload for anything the light patch can't carry
       // (attachments, split proposal, a run this screen didn't know about).
       if (unknown || finished) {
-        void loadThread(id);
+        // Background reload — a transient 404 here must not evict a live conversation.
+        void loadThread(id, { background: true });
         void loadThreads();
       }
     } catch {
@@ -1556,7 +1596,30 @@ export function ClaudeChat() {
         {/* Conversation */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {turns.length === 0 ? (
-            <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
+            activeId && threadLoad === "loading" ? (
+              <div className="flex items-center justify-center gap-2 pt-8 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                {t("loadingThread")}
+              </div>
+            ) : activeId && threadLoad === "error" ? (
+              // The load failed transiently (the thread still exists) — offer a
+              // retry instead of a blank canvas that reads as a new chat.
+              <div className="flex flex-col items-center gap-2 pt-8 text-sm text-muted-foreground">
+                <p>{t("loadError")}</p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setThreadLoad("loading");
+                    void loadThread(activeId);
+                  }}
+                >
+                  {t("retry")}
+                </Button>
+              </div>
+            ) : (
+              <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
+            )
           ) : (
             // Keyed by the thread so switching conversations remounts cleanly,
             // while WITHIN a thread the turns stay keyed by turn_index (below) —

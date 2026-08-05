@@ -4718,6 +4718,10 @@
       "notConnected": "not connected"
     },
     "empty": "Write a message to begin",
+    "loadingThread": "Loading conversation…",
+    "loadError": "Couldn't load the conversation",
+    "retry": "Try again",
+    "threadGone": "This conversation no longer exists",
     "thinking": "Thinking…",
     "live": {
       "starting": "Starting…",
