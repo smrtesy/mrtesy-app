@@ -248,9 +248,16 @@ async function reconcileDeploying(rows: QueueRow[], env: NodeJS.ProcessEnv): Pro
       await setState(row.id, "ready");
       continue;
     }
-    await exec("git", ["fetch", "origin", row.branch], { cwd: DEPLOY_DIR, timeoutMs: GIT_TIMEOUT_MS, env }).catch(
-      () => undefined,
-    );
+    // Explicit refspec: DEPLOY_DIR was cloned `--depth 1 --branch main`, so its
+    // configured fetch refspec is single-branch (`+refs/heads/main:…`). A plain
+    // `git fetch origin <branch>` would land the tip in FETCH_HEAD WITHOUT creating
+    // `refs/remotes/origin/<branch>`, so `branchInMain`'s `origin/<branch>` below
+    // would not resolve and every reconcile would read the deploy as "not landed".
+    await exec("git", ["fetch", "origin", `+${row.branch}:refs/remotes/origin/${row.branch}`], {
+      cwd: DEPLOY_DIR,
+      timeoutMs: GIT_TIMEOUT_MS,
+      env,
+    }).catch(() => undefined);
     if (await branchInMain(row.branch, env)) {
       await tellOwner(row, "success", "התיקון נפרס ✅", `הענף \`${row.branch}\` מוזג ל-main ונפרס.`);
       await removeRow(row.id);
@@ -317,7 +324,13 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
       settled.add(row.id);
       continue;
     }
-    const f = await exec("git", ["fetch", "origin", row.branch], {
+    // Explicit refspec — see reconcileDeploying: the single-branch clone means a
+    // plain `git fetch origin <branch>` never creates `refs/remotes/origin/<branch>`,
+    // so the `git merge --no-ff origin/<branch>` below could not resolve the ref and
+    // exited non-zero. That non-zero exit was then misread as a merge CONFLICT, which
+    // is why a clean, alone-in-queue, fast-forward branch was parked `conflict` every
+    // time. Writing the tracking ref makes `origin/<branch>` resolve and the merge run.
+    const f = await exec("git", ["fetch", "origin", `+${row.branch}:refs/remotes/origin/${row.branch}`], {
       cwd: DEPLOY_DIR,
       timeoutMs: GIT_TIMEOUT_MS,
       env,
@@ -388,7 +401,13 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
   // Build once on the merged result — the integration gate (each fix already
   // passed the full pre-push protocol on its own branch). Server build: this is
   // what decides whether Railway boots after the deploy.
-  const install = await exec("npm", ["install", "--no-audit", "--no-fund"], {
+  // `--include=dev` is REQUIRED: the coordinator runs with NODE_ENV=production
+  // (Railway sets it), under which npm omits devDependencies — but the build below
+  // is `tsc`, and both `typescript` and every `@types/*` package are devDeps. A
+  // plain `npm install` here leaves them out, so `npm run build` fails with
+  // "Could not find a declaration file for module 'express'" and a perfectly good
+  // merged batch is parked `failed`. `--include=dev` overrides the production omit.
+  const install = await exec("npm", ["install", "--no-audit", "--no-fund", "--include=dev"], {
     cwd: path.join(DEPLOY_DIR, "server"),
     timeoutMs: BUILD_TIMEOUT_MS,
     env,

@@ -20,10 +20,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Mic, Square, Loader2 } from "lucide-react";
+import { Mic, Square, Loader2, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +46,9 @@ const MIN_SPEECH_LEVEL = 0.02;
 const NOISE_MULTIPLIER = 2.5;
 /** Hard cap on one dictation, so a forgotten open mic can't upload an hour. */
 const MAX_MS = 120_000;
+/** Where the chosen input device survives reloads. Per-browser, not per-org —
+ *  which microphone this machine should use is a property of the machine. */
+const DEVICE_KEY = "claude.dictation.deviceId";
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -74,6 +85,68 @@ export function DictationButton({
   /** Seconds of silence counted so far, surfaced so the auto-stop is visible
    *  rather than something that just happens. */
   const [quiet, setQuiet] = useState(0);
+
+  /** The audio-input devices the browser reports, and the one the user picked
+   *  ("" = system default). The pick is per-machine, so it lives in localStorage
+   *  rather than the DB. */
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(DEVICE_KEY) ?? "";
+  });
+  /** Read inside `start()`, which is a closure — a ref keeps it current without
+   *  re-creating `start` on every device change. */
+  const deviceIdRef = useRef(deviceId);
+  deviceIdRef.current = deviceId;
+
+  const refreshDevices = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      setDevices(all.filter((d) => d.kind === "audioinput"));
+    } catch {
+      // enumerateDevices can reject in locked-down contexts; the picker just
+      // stays hidden and dictation falls back to the default device.
+    }
+  }, []);
+
+  // Enumerate once so we know whether there is even a choice to offer (a single
+  // input means no picker), and stay in sync as devices are plugged/unplugged.
+  useEffect(() => {
+    void refreshDevices();
+    const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
+    if (!md?.addEventListener) return;
+    const handler = () => void refreshDevices();
+    md.addEventListener("devicechange", handler);
+    return () => md.removeEventListener("devicechange", handler);
+  }, [refreshDevices]);
+
+  // Device labels are only exposed after a mic permission has been granted. When
+  // the user opens the picker with unlabeled devices, ask once (a silent grant we
+  // immediately release) so the list reads "MacBook Microphone" instead of blanks.
+  const onPickerOpenChange = useCallback(
+    async (open: boolean) => {
+      if (!open) return;
+      const needLabels = devices.some((d) => !d.label);
+      if (needLabels && navigator.mediaDevices?.getUserMedia) {
+        try {
+          const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+          s.getTracks().forEach((tr) => tr.stop());
+          await refreshDevices();
+        } catch {
+          // Permission refused — keep the generic labels; selection still works.
+        }
+      }
+    },
+    [devices, refreshDevices],
+  );
+
+  const chooseDevice = useCallback((id: string) => {
+    setDeviceId(id);
+    if (typeof window === "undefined") return;
+    if (id) window.localStorage.setItem(DEVICE_KEY, id);
+    else window.localStorage.removeItem(DEVICE_KEY);
+  }, []);
 
   /** Held in a ref because the transcript is delivered from `mr.onstop`, a closure
    *  created when the mic was pressed. Calling the captured `onText` would use the
@@ -152,7 +225,29 @@ export function DictationButton({
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chosen = deviceIdRef.current;
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: chosen ? { deviceId: { exact: chosen } } : true,
+        });
+      } catch (err) {
+        // The saved device may be gone (unplugged / disabled). Fall back to the
+        // default rather than failing the whole recording — but only for that
+        // case; a genuine permission denial (NotAllowedError/SecurityError) must
+        // still surface as an error. Key only on the error NAME: Chrome does not
+        // implement OverconstrainedError as a DOMException, so an `instanceof`
+        // check would be false there and skip the fallback in the very case the
+        // picker exists for.
+        if (chosen && (err as { name?: string })?.name === "OverconstrainedError") {
+          // Forget the dead device so later presses don't retry the doomed
+          // constraint and double-call getUserMedia every time.
+          chooseDevice("");
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw err;
+        }
+      }
       streamRef.current = stream;
       chunksRef.current = [];
       heardSpeechRef.current = false;
@@ -238,33 +333,72 @@ export function DictationButton({
     }
   }
 
+  // Only devices with a real id are pickable — before a mic grant the browser
+  // may return placeholder entries with an empty deviceId, which would collide
+  // with the "default" radio option (value="") and duplicate its key.
+  const pickable = devices.filter((d) => d.deviceId);
+
   const label = busy ? t("transcribing") : recording ? t("stop") : t("start");
   // Whole seconds remaining until the auto-stop, so the countdown reads 3·2·1.
   const remaining = recording && quiet > 0 ? Math.ceil((SILENCE_MS - quiet) / 1000) : null;
 
   return (
-    <Button
-      type="button"
-      size="sm"
-      variant={recording ? "destructive" : "outline"}
-      disabled={disabled || busy}
-      onClick={() => (recording ? stop() : void start())}
-      aria-label={label}
-      title={label}
-      aria-pressed={recording}
-      className={cn(iconOnly ? "h-9 w-9 p-0" : "gap-1.5", className)}
-    >
-      {busy ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : recording ? (
-        <Square className="size-4" />
-      ) : (
-        <Mic className="size-4" />
+    <span className="inline-flex items-center">
+      <Button
+        type="button"
+        size="sm"
+        variant={recording ? "destructive" : "outline"}
+        disabled={disabled || busy}
+        onClick={() => (recording ? stop() : void start())}
+        aria-label={label}
+        title={label}
+        aria-pressed={recording}
+        className={cn(iconOnly ? "h-9 w-9 p-0" : "gap-1.5", className)}
+      >
+        {busy ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : recording ? (
+          <Square className="size-4" />
+        ) : (
+          <Mic className="size-4" />
+        )}
+        {!iconOnly && <span>{label}</span>}
+        {/* The silence countdown survives icon-only mode: it is the one piece of
+            state a static icon cannot convey, and it is why the mic stops by itself. */}
+        {remaining !== null && <span className="tabular-nums text-[10px] opacity-80">{remaining}</span>}
+      </Button>
+
+      {/* Compact-by-default: a single quiet chevron that opens the input picker
+          on demand. Shown only when there is an actual choice (>1 input) and
+          never mid-recording, so it isn't permanent chrome. */}
+      {pickable.length > 1 && !recording && !busy && (
+        <DropdownMenu onOpenChange={(open) => void onPickerOpenChange(open)}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled}
+              aria-label={t("chooseDevice")}
+              title={t("chooseDevice")}
+              className="h-8 w-4 shrink-0 p-0 text-muted-foreground"
+            >
+              <ChevronDown className="size-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="max-w-[16rem]">
+            <DropdownMenuLabel>{t("chooseDevice")}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={deviceId} onValueChange={chooseDevice}>
+              <DropdownMenuRadioItem value="">{t("defaultDevice")}</DropdownMenuRadioItem>
+              {pickable.map((d, i) => (
+                <DropdownMenuRadioItem key={d.deviceId || i} value={d.deviceId}>
+                  {d.label || t("unnamedDevice", { n: i + 1 })}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
-      {!iconOnly && <span>{label}</span>}
-      {/* The silence countdown survives icon-only mode: it is the one piece of
-          state a static icon cannot convey, and it is why the mic stops by itself. */}
-      {remaining !== null && <span className="tabular-nums text-[10px] opacity-80">{remaining}</span>}
-    </Button>
+    </span>
   );
 }
