@@ -8,7 +8,7 @@
  * + the component that hangs off one of the anchor points. No migration.
  */
 
-export type DayToolSlug = "method131" | "marathon" | "planfocus" | "workclock" | "dailyreport";
+export type DayToolSlug = "method131" | "marathon" | "planfocus" | "workclock" | "dailyreport" | "dailyreset";
 
 export interface DayToolConfig {
   enabled: boolean;
@@ -79,6 +79,17 @@ export const DAY_TOOLS: readonly DayToolDef[] = [
       // (user_settings.timezone; defaults to America/New_York server-side).
       report_hour: 8,
     },
+  },
+  {
+    // Daily reset — full return-to-inbox. When ON, every night at the user's
+    // LOCAL midnight every open, non-postponed task is pulled back to a clean
+    // inbox (in_progress → inbox, today markers cleared, "×N returned" badge).
+    // Postponed (future-dated / snoozed), completed, and pending_completion
+    // tasks are left alone. Enforced entirely server-side by the SQL function
+    // public.daily_task_reset() (migration 20260805120000), gated on this
+    // toggle. Default OFF — an opt-in tool. See CLAUDE.md daily-reset decision.
+    slug: "dailyreset",
+    defaultConfig: { enabled: false },
   },
 ] as const;
 
