@@ -127,6 +127,26 @@ function Bar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
+/**
+ * A tiny green dot marking one figure as Anthropic's OWN datum (captured from a
+ * live rate_limit_event), not our cost estimate. Rendered ONLY next to a value
+ * that really came from Anthropic — so its presence is itself the "this is exact"
+ * signal, and its absence means the neighbouring figure is still an estimate. Per
+ * figure, because Anthropic gives the reset time on every run but the percent only
+ * near the limit, and the weekly window only occasionally — so a single blanket
+ * "real" label would misstate whichever part isn't.
+ */
+function RealBadge() {
+  const t = useTranslations("claudeChat.meter");
+  return (
+    <span
+      title={t("realTooltip")}
+      aria-label={t("realTooltip")}
+      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+    />
+  );
+}
+
 export function UsageMeter({ account, running }: { account: string; running?: boolean }) {
   const t = useTranslations("claudeChat.meter");
   const locale = useLocale();
@@ -194,6 +214,13 @@ export function UsageMeter({ account, running }: { account: string; running?: bo
 
   const sessionPct = data?.session?.pct ?? 0;
   const iconColor = meterColor(data?.session ? sessionPct : null);
+  // Any figure on the card sourced from Anthropic's own rate_limit_event → the
+  // footer explains the green dot; otherwise it's the plain "estimate" note.
+  const anyReal =
+    data?.session?.source === "anthropic" ||
+    data?.session?.pct_source === "anthropic" ||
+    data?.weekly?.source === "anthropic" ||
+    data?.weekly?.pct_source === "anthropic";
   const tooltip = data?.session
     ? t("tooltip", {
         pct: data.session.pct_raw,
@@ -222,14 +249,22 @@ export function UsageMeter({ account, running }: { account: string; running?: bo
         <div className="space-y-1">
           <div className="flex items-center justify-between font-medium">
             <span>{t("title5h")}</span>
-            <span dir="ltr" className={meterColor(data?.session ? sessionPct : null)}>
+            <span
+              dir="ltr"
+              className={cn(
+                "flex items-center gap-1",
+                meterColor(data?.session ? sessionPct : null),
+              )}
+            >
+              {data?.session?.pct_source === "anthropic" && <RealBadge />}
               {data?.session ? `${data.session.pct}%` : "—"}
             </span>
           </div>
           <Bar pct={sessionPct} color={meterColor(data?.session ? sessionPct : null)} />
           {data?.session?.window_end && (
-            <div className="text-[10px] text-muted-foreground">
-              {resetsInLabel(data.session.window_end, locale, t)}
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              {data.session.source === "anthropic" && <RealBadge />}
+              <span>{resetsInLabel(data.session.window_end, locale, t)}</span>
             </div>
           )}
         </div>
@@ -238,7 +273,11 @@ export function UsageMeter({ account, running }: { account: string; running?: bo
         <div className="space-y-1">
           <div className="flex items-center justify-between font-medium">
             <span>{t("titleWeekly")}</span>
-            <span dir="ltr" className={meterColor(data?.weekly?.pct)}>
+            <span
+              dir="ltr"
+              className={cn("flex items-center gap-1", meterColor(data?.weekly?.pct))}
+            >
+              {data?.weekly?.pct_source === "anthropic" && <RealBadge />}
               {data?.weekly?.pct != null ? `${data.weekly.pct}%` : ""}
             </span>
           </div>
@@ -246,17 +285,21 @@ export function UsageMeter({ account, running }: { account: string; running?: bo
             <>
               <Bar pct={data.weekly.pct} color={meterColor(data.weekly.pct)} />
               {data.weekly.window_end && (
-                <div className="text-[10px] text-muted-foreground">
-                  {resetsInLabel(data.weekly.window_end, locale, t)}
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  {data.weekly.source === "anthropic" && <RealBadge />}
+                  <span>{resetsInLabel(data.weekly.window_end, locale, t)}</span>
                 </div>
               )}
             </>
           ) : (
             <div className="space-y-0.5 text-[10px] text-muted-foreground">
               {/* Even without a calibrated percent we may hold Anthropic's exact
-                  weekly reset time (from a live rate_limit_event) — show it. */}
+                  weekly reset time (from a live rate_limit_event) — show it, marked. */}
               {data?.weekly?.window_end && (
-                <div>{resetsInLabel(data.weekly.window_end, locale, t)}</div>
+                <div className="flex items-center gap-1">
+                  {data.weekly.source === "anthropic" && <RealBadge />}
+                  <span>{resetsInLabel(data.weekly.window_end, locale, t)}</span>
+                </div>
               )}
               <div>{t("noCalibration")}</div>
             </div>
@@ -266,8 +309,8 @@ export function UsageMeter({ account, running }: { account: string; running?: bo
         <div className="border-t pt-2 text-[10px] leading-snug text-muted-foreground">
           {loading && !data
             ? t("loading")
-            : data?.live
-              ? t("liveDisclaimer")
+            : anyReal
+              ? t("realLegend")
               : t("estimateDisclaimer")}
         </div>
       </PopoverContent>
