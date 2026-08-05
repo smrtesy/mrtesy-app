@@ -633,6 +633,10 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
             // reminder — mirror the desk (TaskRow) and frame it as "מעקב 48 שעות"
             // instead of the generic snooze badge, so it reads the same in both places.
             const isFollowup48 = woke && task.task_type === "followup";
+            // A woken follow-up whose reply Haiku read as "looks resolved". The
+            // pipeline never closes it (user decision: update, don't close) — this
+            // chip just makes the one-click dismiss the obvious next step.
+            const looksResolved = task.last_updated_reason === "followup_reply_resolved_hint";
             const wokeAt = woke && !isFollowup48
               ? new Date(task.woke_from_snooze_at!).toLocaleDateString(locale === "he" ? "he-IL" : "en-US", {
                   day: "numeric",
@@ -672,6 +676,15 @@ export function MessageSuggestions({ locale, onUpdate }: { locale: string; onUpd
                       {displayTitle}
                     </h4>
                     <div dir="ltr" className="flex shrink-0 items-center gap-1">
+                      {looksResolved && (
+                        <span
+                          title={tTasks("row.resolvedHintHint")}
+                          className="inline-flex items-center gap-0.5 rounded-full border border-status-ok/40 bg-status-ok-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-status-ok"
+                        >
+                          <CheckCircle2 className="h-3 w-3" />
+                          <span dir="auto">{tTasks("row.resolvedHintChip")}</span>
+                        </span>
+                      )}
                       {isFollowup48 && (
                         <span
                           title={tTasks("row.followup48Hint")}
