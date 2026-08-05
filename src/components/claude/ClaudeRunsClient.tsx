@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BarChart3, BookOpen, ChevronDown, ChevronRight, Loader2, Play, Plus, Sparkles, X } from "lucide-react";
+import { BarChart3, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Play, Plus, Sparkles, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
@@ -86,6 +86,50 @@ interface Usage {
   disclaimer: { billing: string; remaining: string; scope: string };
 }
 
+interface EffFlag {
+  code: "duplicate_read" | "redundant_search" | "error_retry" | "unbatched_reads";
+  severity: "low" | "med";
+  seq: number;
+  detail: string;
+  count?: number;
+}
+
+interface EffRun {
+  id: string;
+  title: string;
+  status: Run["status"];
+  created_at: string;
+  num_turns: number | null;
+  tool_calls: number;
+  top_tools: { name: string; count: number }[];
+  flags: EffFlag[];
+  flag_count: number;
+  waste_score: number;
+  events_truncated: boolean;
+}
+
+interface Efficiency {
+  window_days: number;
+  runs: EffRun[];
+  rates: {
+    runs_analyzed: number;
+    total_tool_calls: number;
+    total_turns: number;
+    flags_by_code: { duplicate_read: number; redundant_search: number; error_retry: number; unbatched_reads: number };
+    per_100_calls: { duplicate_read: number; redundant_search: number; error_retry: number; unbatched_reads: number };
+    avg_tool_calls: number;
+    avg_turns: number;
+  } | null;
+  disclaimer: { scope: string; tokens: string; coverage: string };
+}
+
+const FLAG_CODES: EffFlag["code"][] = [
+  "duplicate_read",
+  "redundant_search",
+  "error_retry",
+  "unbatched_reads",
+];
+
 /** A run in one of these states is still moving, so the view keeps polling. */
 const LIVE: Run["status"][] = ["queued", "running"];
 const POLL_MS = 2500;
@@ -132,11 +176,13 @@ export function ClaudeRunsClient() {
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [efficiencyOpen, setEfficiencyOpen] = useState(false);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   /** The free-text task router ("עדכון"), which used to be its own sidebar button.
    *  It kept its place in the product by moving here rather than being deleted. */
   const [updateOpen, setUpdateOpen] = useState(false);
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [efficiency, setEfficiency] = useState<Efficiency | null>(null);
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<string>(DEFAULT_OPT);
@@ -171,6 +217,14 @@ export function ClaudeRunsClient() {
   const loadUsage = useCallback(async () => {
     try {
       setUsage(await api<Usage>("/api/claude/usage"));
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
+    }
+  }, []);
+
+  const loadEfficiency = useCallback(async () => {
+    try {
+      setEfficiency(await api<Efficiency>("/api/claude/efficiency"));
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
     }
@@ -212,6 +266,12 @@ export function ClaudeRunsClient() {
     const next = !usageOpen;
     setUsageOpen(next);
     if (next && !usage) void loadUsage();
+  }
+
+  function toggleEfficiency() {
+    const next = !efficiencyOpen;
+    setEfficiencyOpen(next);
+    if (next && !efficiency) void loadEfficiency();
   }
 
   /**
@@ -296,6 +356,15 @@ export function ClaudeRunsClient() {
             title={t("usage.title")}
           >
             <BarChart3 className="size-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant={efficiencyOpen ? "secondary" : "ghost"}
+            onClick={toggleEfficiency}
+            aria-label={t("efficiency.title")}
+            title={t("efficiency.title")}
+          >
+            <Gauge className="size-4" />
           </Button>
           <Button
             size="sm"
@@ -387,6 +456,115 @@ export function ClaudeRunsClient() {
                   <p>{t("usage.disclaimer.billing")}</p>
                   <p>{t("usage.disclaimer.remaining")}</p>
                   <p>{t("usage.disclaimer.scope")}</p>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {efficiencyOpen && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">
+              {t("efficiency.title")}
+              {efficiency ? ` · ${t("usage.windowDays", { days: efficiency.window_days })}` : ""}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!efficiency ? (
+              <Skeleton className="h-20 w-full" />
+            ) : !efficiency.rates ? (
+              <p className="text-sm text-muted-foreground">{t("efficiency.noRuns")}</p>
+            ) : (
+              <>
+                {/* RATES, not totals: normalized so runs of different sizes compare. */}
+                <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                  <Stat label={t("efficiency.runsAnalyzed")} value={String(efficiency.rates.runs_analyzed)} />
+                  <Stat label={t("efficiency.avgToolCalls")} value={String(efficiency.rates.avg_tool_calls)} />
+                  <Stat label={t("efficiency.avgTurns")} value={String(efficiency.rates.avg_turns)} />
+                  <Stat label={t("efficiency.totalToolCalls")} value={fmtInt(efficiency.rates.total_tool_calls)} />
+                </div>
+
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">{t("efficiency.per100")}</p>
+                  <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                    {FLAG_CODES.map((code) => (
+                      <div
+                        key={code}
+                        className="flex items-center justify-between gap-2 rounded border px-2 py-1"
+                      >
+                        <span className="truncate">{t(`efficiency.flag.${code}`)}</span>
+                        <span className="shrink-0 font-mono text-muted-foreground">
+                          {efficiency.rates!.per_100_calls[code]}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Per run, worst first (the backend sorts by waste score). */}
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">{t("efficiency.perRun")}</p>
+                  {efficiency.runs.map((r) => (
+                    <div key={r.id} className="rounded border px-2 py-1.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium">{r.title || t("efficiency.untitled")}</span>
+                        {r.waste_score > 0 ? (
+                          <Badge variant="destructive" className="shrink-0">
+                            {t("efficiency.score")}: {r.waste_score}
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="shrink-0">
+                            {t("efficiency.clean")}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-muted-foreground">
+                        {t("efficiency.toolCalls")}: {r.tool_calls} · {t("usage.turns")}: {fmtInt(r.num_turns)}
+                        {r.top_tools.length > 0 && (
+                          <> · {r.top_tools.map((tt) => `${tt.name}×${tt.count}`).join(", ")}</>
+                        )}
+                      </div>
+                      {r.flags.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {r.flags.map((f, i) => (
+                            <li key={i} className="flex items-center gap-1.5">
+                              <span
+                                className={
+                                  f.severity === "med"
+                                    ? "text-destructive"
+                                    : "text-amber-600 dark:text-amber-500"
+                                }
+                              >
+                                ●
+                              </span>
+                              <span>{t(`efficiency.flag.${f.code}`)}</span>
+                              <span className="shrink-0 font-mono text-muted-foreground">seq {f.seq}</span>
+                              {f.count ? <span className="text-muted-foreground">×{f.count}</span> : null}
+                              {f.detail && <span className="truncate text-muted-foreground">— {f.detail}</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {r.flag_count > r.flags.length && (
+                        <p className="mt-1 text-muted-foreground">
+                          {t("efficiency.moreFlags", { n: r.flag_count - r.flags.length })}
+                        </p>
+                      )}
+                      {r.events_truncated && (
+                        <p className="mt-1 text-muted-foreground">{t("efficiency.truncated")}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* The honest limits, in the user's language — the same four the API
+                    states, so a reader never mistakes a flag for proof of a bug. */}
+                <div className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+                  <p>{t("efficiency.disclaimer.scope")}</p>
+                  <p>{t("efficiency.disclaimer.tokens")}</p>
+                  <p>{t("efficiency.disclaimer.coverage")}</p>
                 </div>
               </>
             )}
