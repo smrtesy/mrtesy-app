@@ -30,6 +30,7 @@ import {
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { DictationButton } from "./DictationButton";
+import { UsageMeter } from "./UsageMeter";
 
 /** Mirrors the bucket's own limit (25 MB) so the file is rejected here rather than
  *  after a slow upload. */
@@ -86,6 +87,7 @@ export function ChatComposer({
   effort,
   onEffortChange,
   effortDefaultValue,
+  account,
 }: {
   /** Null until a thread exists. Used only to decide whether one has to be created
    *  before an upload can be addressed to it. */
@@ -119,6 +121,9 @@ export function ChatComposer({
   effort: string;
   onEffortChange: (value: string) => void;
   effortDefaultValue: string;
+  /** The Claude subscription account this thread runs on — drives the usage meter
+   *  in the toolbar. Undefined (no account resolved yet) hides the meter. */
+  account?: string;
 }) {
   const t = useTranslations("claudeChat");
   const [text, setText] = useState("");
@@ -419,6 +424,8 @@ export function ChatComposer({
                 ))}
               </SelectContent>
             </Select>
+
+            {account && <UsageMeter account={account} />}
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">

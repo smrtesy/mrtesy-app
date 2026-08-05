@@ -30,7 +30,7 @@ function isWhatsAppTab(tab: WorkspaceTab): boolean {
 
 /** True if the tab is the Claude console pane. Pinned to the physical-left edge
  *  (just inside WhatsApp) so it reads as a narrow companion — see orderedTabs
- *  and companionSourceFraction in TabsWorkspaceContext. */
+ *  and companionSplit in TabsWorkspaceContext. */
 function isClaudeTab(tab: WorkspaceTab): boolean {
   const path = tab.href.split("?")[0].split("#")[0].replace(/\/+$/, "");
   return path.endsWith("/claude");

@@ -26,6 +26,7 @@ import {
   APP_REPO,
   deliverInspectSeed,
 } from "@/components/claude/ClaudeInspector";
+import { composeDebugSeed } from "@/lib/error-seed";
 import {
   SYSTEM_MESSAGES_EVENT,
   clearSystemMessages,
@@ -77,22 +78,13 @@ export function SystemMessagesBell({ isAdmin }: { isAdmin: boolean }) {
     };
   }, []);
 
-  /** Compose the diagnostic seed and land it in the Claude composer as a draft. */
+  /** Compose the diagnostic seed and land it in the Claude composer as a draft.
+   *  Uses the shared builder so the rich detail (endpoint/status/body/stack) and
+   *  the "screenshot the screen first" instruction match the global catcher. */
   const sendToClaude = useCallback(
     (entry: SystemMessageEntry) => {
-      const lines = [
-        t("seedHeader"),
-        "",
-        `- ${t("seedMessage")}: "${entry.text}"`,
-        `- ${t("seedRoute")}: \`${entry.path}\``,
-        `- ${t("seedTime")}: ${nyTime(entry.at, locale)} (America/New_York)`,
-        `- ${t("seedBrowser")}: ${navigator.userAgent}`,
-        "",
-        t("seedTask"),
-        "",
-        `${t("seedProblem")} `,
-      ];
-      deliverInspectSeed({ text: lines.join("\n"), repo: APP_REPO, branch: APP_BRANCH });
+      const seed = composeDebugSeed(entry, t, nyTime(entry.at, locale), navigator.userAgent);
+      deliverInspectSeed({ text: seed, repo: APP_REPO, branch: APP_BRANCH });
       router.push(`/${locale}/claude`);
     },
     [locale, router, t],

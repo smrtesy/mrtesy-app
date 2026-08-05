@@ -22,6 +22,7 @@ import { db } from "./db";
 import quickActionRouter from "./routes/quick-action";
 import inboxRouter from "./routes/inbox";
 import messagesRouter from "./routes/messages";
+import clientErrorsRouter from "./routes/client-errors";
 import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
@@ -228,6 +229,8 @@ app.use("/api", claudeActionM2MRouter);
 app.use("/api/quick-action", quickActionRouter);
 app.use("/api/inbox", inboxRouter);
 app.use("/api/messages", messagesRouter);
+// Frontend global error catcher sink (requireAuth only; user-scoped log_entries).
+app.use("/api/client-errors", clientErrorsRouter);
 
 // ── Global error safety-net ───────────────────────────────────────────────────
 // Any error reaching here was NOT handled by a route's own try/catch (those

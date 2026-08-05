@@ -4573,7 +4573,8 @@
       "costNote": "הכתבה מתמללת דרך ג'מיני — קריאה אחת בתשלום לכל לחיצה על המיקרופון.",
       "chooseDevice": "בחר מיקרופון",
       "defaultDevice": "מיקרופון ברירת המחדל",
-      "unnamedDevice": "מיקרופון {n}"
+      "unnamedDevice": "מיקרופון {n}",
+      "needPermission": "אשר גישה למיקרופון כדי לראות את רשימת המכשירים"
     },
     "playbooks": {
       "title": "שיטות עבודה",
@@ -4812,9 +4813,30 @@
       "done": "האיגוד עודכן",
       "none": "ללא נושא"
     },
+    "mergeQueue": {
+      "pending": "ממתין למיזוג",
+      "building": "בונה…",
+      "deploying": "ממזג ומעלה…",
+      "mergeBy": "יימזג עד {time}",
+      "countdown": "עוד ~{mins} דק׳",
+      "soon": "מיד",
+      "failed": "המיזוג נכשל",
+      "conflict": "התנגשות מיזוג"
+    },
     "usage": {
       "tokens": "טוקנים",
       "tooltip": "טוקנים בשיחה הזו — קלט: {input} · פלט: {output}"
+    },
+    "meter": {
+      "title5h": "חלון 5 שעות",
+      "titleWeekly": "שבועי",
+      "resetsIn": "מתאפס בעוד {h}ש {m}ד (בערך {at} ניו יורק)",
+      "resetsInMins": "מתאפס בעוד {m}ד (בערך {at} ניו יורק)",
+      "noCalibration": "אין עדיין כיול",
+      "estimateDisclaimer": "אומדן מהצריכה דרך הכלים שלנו — לא נתון רשמי מאנתרופיק",
+      "tooltip": "שימוש בחלון 5 השעות: {pct}% (כ-${cost} מתוך ~${cap} שווה-ערך)",
+      "empty": "אין חלון פעיל כרגע",
+      "loading": "טוען…"
     },
     "queue": {
       "waiting": "ממתין בתור — ירוץ כשהתור הנוכחי יסתיים",
@@ -4986,6 +5008,11 @@
     "seedRoute": "המסך (route)",
     "seedTime": "מתי הופיעה",
     "seedBrowser": "דפדפן",
+    "seedEndpoint": "נתיב השרת שנכשל",
+    "seedStatus": "קוד סטטוס",
+    "seedResponse": "תשובת השרת",
+    "seedStack": "עקבת השגיאה (stack)",
+    "seedScreenshot": "לפני האבחון צלם קודם את המסך כדי לראות מה המשתמש ראה: הרץ `node /app/dist/modules/claude/browser-helper.js shot {route} --out shot.png --attach`. אם השגיאה היא בקריאת שרת (יש נתיב וסטטוס למעלה) — שחזר אותה מול ה-API של הפלטפורמה.",
     "seedTask": "אתר מאיפה השגיאה הזו מגיעה בקוד (חפש את הטקסט או את מפתח התרגום שלו ב-src/messages/he.json, ומשם את הקריאה שמציגה אותו ואת נתיב השרת שמאחוריה), אבחן את סיבת השורש, ותקן.",
     "seedProblem": "הקשר נוסף (אופציונלי):"
   },
