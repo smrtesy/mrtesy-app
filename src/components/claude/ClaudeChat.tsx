@@ -1741,6 +1741,14 @@ export function ClaudeChat() {
           }
           onEffortChange={(v) => void patchThread({ effort: v === EFFORT_DEFAULT ? "" : v })}
           effortDefaultValue={EFFORT_DEFAULT}
+          // Same account resolution as the AccountSwitcher above — the meter reads
+          // the account this thread's turns actually run on.
+          account={
+            thread?.claude_account ??
+            (pending.claude_account as string | undefined) ??
+            lastAccount ??
+            DEFAULT_ACCOUNT
+          }
         />
       </div>
 
