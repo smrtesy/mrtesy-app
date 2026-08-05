@@ -204,6 +204,17 @@ async function prepWorkspace(token: string): Promise<boolean> {
     }
   }
 
+  // Scrub any leftover state from a prior tick that died or aborted mid-merge BEFORE
+  // touching main — a lingering in-progress merge or a stray untracked file makes the
+  // next `merge --no-ff` conflict even for a clean fast-forward branch (the dirty
+  // DEPLOY_DIR bug that parked a lone, mathematically un-conflictable row four times).
+  // Each is a no-op on an already-clean checkout, so a non-zero exit here is expected
+  // and NOT fatal — the fetch/checkout/reset below is the real guarantee. `clean -fd`
+  // spares gitignored build artifacts (node_modules/dist), so the build stays fast.
+  await exec("git", ["merge", "--abort"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
+  await exec("git", ["reset", "--hard"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
+  await exec("git", ["clean", "-fd"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
+
   const steps: string[][] = [
     ["fetch", "origin", "main", "--prune"],
     ["checkout", "main"],
@@ -237,9 +248,16 @@ async function reconcileDeploying(rows: QueueRow[], env: NodeJS.ProcessEnv): Pro
       await setState(row.id, "ready");
       continue;
     }
-    await exec("git", ["fetch", "origin", row.branch], { cwd: DEPLOY_DIR, timeoutMs: GIT_TIMEOUT_MS, env }).catch(
-      () => undefined,
-    );
+    // Explicit refspec: DEPLOY_DIR was cloned `--depth 1 --branch main`, so its
+    // configured fetch refspec is single-branch (`+refs/heads/main:…`). A plain
+    // `git fetch origin <branch>` would land the tip in FETCH_HEAD WITHOUT creating
+    // `refs/remotes/origin/<branch>`, so `branchInMain`'s `origin/<branch>` below
+    // would not resolve and every reconcile would read the deploy as "not landed".
+    await exec("git", ["fetch", "origin", `+${row.branch}:refs/remotes/origin/${row.branch}`], {
+      cwd: DEPLOY_DIR,
+      timeoutMs: GIT_TIMEOUT_MS,
+      env,
+    }).catch(() => undefined);
     if (await branchInMain(row.branch, env)) {
       await tellOwner(row, "success", "התיקון נפרס ✅", `הענף \`${row.branch}\` מוזג ל-main ונפרס.`);
       await removeRow(row.id);
@@ -280,20 +298,39 @@ async function dropStaleBuilding(): Promise<void> {
  * The batch deploy: merge every ready branch into main, build once, push once.
  * Rows are already 'deploying'. Never auto-resolves a conflict — it surfaces it.
  */
-async function runBatchDeploy(rows: QueueRow[], token: string): Promise<void> {
+async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean): Promise<void> {
   const env = gitEnvForRun(token);
   if (!(await prepWorkspace(token))) {
     for (const r of rows) await setState(r.id, "ready"); // couldn't even prep — retry later
     return;
   }
 
+  // Snapshot the main we're building this batch on. A merge conflict below is only
+  // GENUINE if main is still at this SHA when it happens; if main advanced under us
+  // the conflict is transient (a branch cut from a newer main) and the batch just
+  // needs to retry on that newer main — see the conflict handler.
+  const baseMain = (
+    await exec("git", ["rev-parse", "origin/main"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env })
+  ).stdout.trim();
+
   const merged: QueueRow[] = [];
+  // Rows already given a TERMINAL state this pass (a real fetch failure) — the
+  // transient-conflict reset below must not resurrect them back to 'ready', which
+  // would re-fire their failure notification and re-churn a legitimately-dead fix.
+  const settled = new Set<string>();
   for (const row of rows) {
     if (!row.branch) {
       await setState(row.id, "failed", "no branch recorded");
+      settled.add(row.id);
       continue;
     }
-    const f = await exec("git", ["fetch", "origin", row.branch], {
+    // Explicit refspec — see reconcileDeploying: the single-branch clone means a
+    // plain `git fetch origin <branch>` never creates `refs/remotes/origin/<branch>`,
+    // so the `git merge --no-ff origin/<branch>` below could not resolve the ref and
+    // exited non-zero. That non-zero exit was then misread as a merge CONFLICT, which
+    // is why a clean, alone-in-queue, fast-forward branch was parked `conflict` every
+    // time. Writing the tracking ref makes `origin/<branch>` resolve and the merge run.
+    const f = await exec("git", ["fetch", "origin", `+${row.branch}:refs/remotes/origin/${row.branch}`], {
       cwd: DEPLOY_DIR,
       timeoutMs: GIT_TIMEOUT_MS,
       env,
@@ -301,6 +338,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string): Promise<void> {
     if (f.code !== 0) {
       await setState(row.id, "failed", redact(f.stderr, token).slice(0, 300));
       await tellOwner(row, "action_required", "פריסה נכשלה", `לא הצלחתי להביא את הענף \`${row.branch}\`.`);
+      settled.add(row.id);
       continue;
     }
     const m = await exec(
@@ -310,6 +348,39 @@ async function runBatchDeploy(rows: QueueRow[], token: string): Promise<void> {
     );
     if (m.code !== 0) {
       await exec("git", ["merge", "--abort"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
+
+      // Transient vs. genuine conflict. If origin/main moved since we snapshotted it,
+      // this batch was cut against a stale main: reset the WHOLE claimed batch back to
+      // 'ready' and bail, so the next tick re-preps on the newer main and retries —
+      // the same retry philosophy as the non-fast-forward push failure below. Only a
+      // conflict against an UNCHANGED main is real and gets parked. Past the 30-min cap
+      // we stop deferring and park it, so a genuinely stuck row can't spin forever.
+      if (!pastCap) {
+        await exec("git", ["fetch", "origin", "main", "--prune"], {
+          cwd: DEPLOY_DIR,
+          timeoutMs: GIT_TIMEOUT_MS,
+          env,
+        });
+        const freshMain = (
+          await exec("git", ["rev-parse", "origin/main"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env })
+        ).stdout.trim();
+        if (freshMain && baseMain && freshMain !== baseMain) {
+          // Retry the whole batch on the newer main — except rows already terminal
+          // this pass (a fetch failure), which stay failed.
+          for (const r of rows) if (!settled.has(r.id)) await setState(r.id, "ready");
+          await exec("git", ["reset", "--hard", "origin/main"], {
+            cwd: DEPLOY_DIR,
+            timeoutMs: GIT_TIMEOUT_MS,
+            env,
+          });
+          console.log(
+            `[deploy-coord] transient conflict on ${row.branch}: origin/main moved ` +
+              `${baseMain.slice(0, 7)}→${freshMain.slice(0, 7)} mid-batch — batch reset to ready, will retry`,
+          );
+          return;
+        }
+      }
+
       await setState(row.id, "conflict", "merge conflict with the batch");
       await tellOwner(
         row,
@@ -330,7 +401,13 @@ async function runBatchDeploy(rows: QueueRow[], token: string): Promise<void> {
   // Build once on the merged result — the integration gate (each fix already
   // passed the full pre-push protocol on its own branch). Server build: this is
   // what decides whether Railway boots after the deploy.
-  const install = await exec("npm", ["install", "--no-audit", "--no-fund"], {
+  // `--include=dev` is REQUIRED: the coordinator runs with NODE_ENV=production
+  // (Railway sets it), under which npm omits devDependencies — but the build below
+  // is `tsc`, and both `typescript` and every `@types/*` package are devDeps. A
+  // plain `npm install` here leaves them out, so `npm run build` fails with
+  // "Could not find a declaration file for module 'express'" and a perfectly good
+  // merged batch is parked `failed`. `--include=dev` overrides the production omit.
+  const install = await exec("npm", ["install", "--no-audit", "--no-fund", "--include=dev"], {
     cwd: path.join(DEPLOY_DIR, "server"),
     timeoutMs: BUILD_TIMEOUT_MS,
     env,
@@ -445,7 +522,7 @@ async function coordinatorTick(): Promise<void> {
         .maybeSingle();
       if (!cErr && data) claimed.push({ ...row, state: "deploying" });
     }
-    if (claimed.length > 0) await runBatchDeploy(claimed, token);
+    if (claimed.length > 0) await runBatchDeploy(claimed, token, pastCap);
   } catch (e) {
     console.error("[deploy-coord] tick error:", e instanceof Error ? e.message : e);
   } finally {

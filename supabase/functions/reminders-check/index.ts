@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { nextOccurrence, recurrenceFreq } from "../_shared/recurrence.ts";
+import { anthropicCostUsdFromCounts } from "../_shared/ai-pricing.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -146,15 +147,41 @@ Deno.serve(async (req) => {
         const completionRecorded =
           task.status === "pending_completion" || task.completion_signal_detected === true;
         if (!completionRecorded && (await matterStillPending(task))) {
-          // Surface with a visible explanation (tasks.updates feeds the task's
-          // activity trail in the UI) — the reply alone did not close the matter.
+          // A reply arrived and the coarse thread state still isn't "resolved".
+          // Rather than bounce the follow-up back with a generic note, READ the
+          // reply: pull its body + deep link (layer A) and ask Haiku whether it
+          // reads as resolved and what it actually said (layer B). We NEVER
+          // auto-close on that verdict (user decision 2026-08-05: "update me,
+          // don't close") — a "resolved" read only TAGS the card via
+          // last_updated_reason=followup_reply_resolved_hint so the existing
+          // one-click dismiss becomes the obvious next step. Fail closed: any
+          // read/model error falls back to a plain surface, nothing is hidden.
           const { data: taskRow, error: updatesReadError } = await supabase
             .from("tasks").select("updates").eq("id", task.id).single();
           if (updatesReadError) console.error("tasks updates read failed:", updatesReadError);
+
+          const reply = await latestInboundReply(task);
+          const outcome = reply?.body
+            ? await classifyReplyOutcome(task, reply)
+            : { resolved: false, summary: "" };
+
+          // Build the activity-trail update: the reply's gist + a deep link to
+          // the actual message, so the user sees the answer without opening Gmail.
+          const lines: string[] = [];
+          lines.push(outcome.resolved
+            ? "נראה שהעניין נסגר לפי התשובה שהתקבלה — אם כן, אפשר לסגור את ההצעה."
+            : "התקבלה תגובה בשיחה. הנה מה שכתבו:");
+          if (outcome.summary) lines.push(outcome.summary);
+          else if (reply?.body) lines.push(reply.body.slice(0, 500));
+          else lines.push("(לא הצלחתי לקרוא את גוף התגובה — פתח את השיחה כדי לראות.)");
+          if (reply?.url) lines.push(`קישור לתגובה: ${reply.url}`);
+
           const wakePayload: Record<string, unknown> = {
             snoozed_until: null,
             status: "inbox",
-            last_updated_reason: "followup_reply_pending_outcome",
+            last_updated_reason: outcome.resolved
+              ? "followup_reply_resolved_hint"
+              : "followup_reply_pending_outcome",
             woke_from_snooze_at: now,
             updated_at: now,
           };
@@ -166,7 +193,7 @@ Deno.serve(async (req) => {
               created_at: now,
               type: "reminder",
               actor: "system",
-              content: "התקבלה תגובה בשיחה, אך העניין עדיין לא נסגר — המעקב הוחזר לתיבה לבדיקה",
+              content: lines.join("\n"),
             }];
           }
           const { error: pendingWakeError } = await supabase.from("tasks").update(wakePayload).eq("id", task.id);
@@ -503,6 +530,170 @@ async function replyArrived(task: { user_id: string | null; source_message_id: s
 
   // No thread handle to match a reply against — surface the follow-up.
   return false;
+}
+
+// ── Follow-up reply reading (layers A + B) ──────────────────────────────────
+// Layer A: fetch the actual inbound reply on the follow-up's thread so its
+// content (and a deep link to it) can be shown on the suggestion instead of a
+// generic "a reply arrived" note. Gmail by threadId, with the same
+// recipient+subject fallback replyArrived uses (the outgoing row's threadId
+// isn't always stamped); WhatsApp/SMS from the whatsapp_messages ledger.
+// Best-effort: a null return just means we surface without the body — it never
+// blocks the wake.
+async function latestInboundReply(
+  task: { user_id: string | null; source_message_id: string | null },
+): Promise<{ body: string; url: string | null } | null> {
+  if (!task.source_message_id || !task.user_id) return null;
+  const { data: sent } = await supabase
+    .from("source_messages")
+    .select("source_type, received_at, metadata, recipient, subject")
+    .eq("id", task.source_message_id)
+    .maybeSingle();
+  if (!sent) return null;
+  const sentAt = sent.received_at ?? new Date(0).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meta = (sent.metadata ?? {}) as any;
+  const threadId = meta.threadId as string | undefined;
+  const chatId = meta.chatId as string | undefined;
+
+  // WhatsApp / SMS: newest incoming (non-reaction) message on the chat after we sent.
+  if (chatId) {
+    const { data: msg } = await supabase
+      .from("whatsapp_messages")
+      .select("body_text")
+      .eq("user_id", task.user_id)
+      .eq("chat_id", chatId)
+      .eq("direction", "incoming")
+      .eq("is_reaction", false)
+      .gt("received_at", sentAt)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!msg?.body_text) return null;
+    return { body: String(msg.body_text).slice(0, 4000), url: null };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pick = (row: any): { body: string; url: string | null } | null => {
+    if (!row?.body_text) return null;
+    const url = row.source_url
+      ?? (row.source_id ? `https://mail.google.com/mail/u/0/#all/${row.source_id}` : null);
+    return { body: String(row.body_text).slice(0, 4000), url };
+  };
+
+  // Gmail: newest inbound on the same thread.
+  if (threadId) {
+    const { data: row } = await supabase
+      .from("source_messages")
+      .select("source_id, source_url, body_text")
+      .eq("user_id", task.user_id)
+      .eq("source_type", "gmail")
+      .gt("received_at", sentAt)
+      .filter("metadata->>threadId", "eq", threadId)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const got = pick(row);
+    if (got) return got;
+  }
+
+  // Gmail fallback: newest inbound FROM the address we wrote to, subject-scoped
+  // (mirrors replyArrived, so both agree on what "the reply" is).
+  const recipientRaw = (sent.recipient as string | undefined) || (meta.to as string | undefined) || null;
+  if (recipientRaw) {
+    const addr = (recipientRaw.match(/<([^>]+)>/)?.[1] ?? recipientRaw).trim();
+    if (addr) {
+      const baseSubject = String(sent.subject ?? "")
+        .replace(/^((re|fwd|fw|aw|תשובה|הועבר)\s*:\s*)+/i, "")
+        .trim();
+      let q = supabase
+        .from("source_messages")
+        .select("source_id, source_url, body_text")
+        .eq("user_id", task.user_id)
+        .eq("source_type", "gmail")
+        .gt("received_at", sentAt)
+        .ilike("sender_email", addr)
+        .order("received_at", { ascending: false })
+        .limit(1);
+      if (baseSubject) {
+        const escaped = baseSubject.replace(/[%_\\]/g, "\\$&");
+        q = q.ilike("subject", `%${escaped}%`);
+      }
+      const { data: row } = await q.maybeSingle();
+      const got = pick(row);
+      if (got) return got;
+    }
+  }
+  return null;
+}
+
+// Layer B: ask Haiku whether the reply reads as "the matter is resolved, nothing
+// left for the user to do", plus a one-line Hebrew gist of what it said. This is
+// a PROPOSAL only — the caller never auto-closes on it (user decision: update,
+// don't close). Fail closed: any missing key / API / parse error returns
+// not-resolved + empty summary, so the follow-up is surfaced plainly.
+const REPLY_OUTCOME_MODEL = "claude-haiku-4-5-20251001";
+async function classifyReplyOutcome(
+  task: { id: string; user_id: string | null; title_he: string | null },
+  reply: { body: string; url: string | null },
+): Promise<{ resolved: boolean; summary: string }> {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) return { resolved: false, summary: "" };
+  const system = [
+    "You read the latest reply on a follow-up thread and return ONLY JSON.",
+    "The follow-up tracks a message the user sent and was waiting on a reply for.",
+    "1) resolved: true ONLY if the reply clearly ends the matter with NOTHING left for the user to do",
+    "   (request declined/cancelled, task done by the other side, question fully answered with no action back).",
+    "   If the reply answers something but the user must still act, or it is partial/clarifying, resolved MUST be false.",
+    "2) summary_he: one short Hebrew sentence stating what the reply actually said; keep concrete details (amount, date, decision).",
+    'Output exactly: {"resolved": <true|false>, "summary_he": "<sentence>"}',
+  ].join("\n");
+  const user = [
+    `Follow-up title: ${task.title_he ?? ""}`,
+    "Latest reply body:",
+    '"""',
+    reply.body.slice(0, 3500),
+    '"""',
+  ].join("\n");
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: REPLY_OUTCOME_MODEL, max_tokens: 300, system, messages: [{ role: "user", content: user }] }),
+    });
+    if (!resp.ok) {
+      console.error("classifyReplyOutcome API", resp.status, await resp.text());
+      return { resolved: false, summary: "" };
+    }
+    const data = await resp.json();
+    const text = data.content?.[0]?.text ?? "";
+    // Cost ledger — one row per paid call (best-effort; never blocks the wake).
+    try {
+      const inTok = data.usage?.input_tokens ?? 0;
+      const outTok = data.usage?.output_tokens ?? 0;
+      const { error: usageErr } = await supabase.from("ai_usage").insert({
+        user_id: task.user_id ?? null,
+        provider: "anthropic",
+        component: "followup_reply_outcome",
+        model: REPLY_OUTCOME_MODEL,
+        input_tokens: inTok,
+        output_tokens: outTok,
+        cost_usd: anthropicCostUsdFromCounts(REPLY_OUTCOME_MODEL, inTok, outTok),
+        ref_id: task.id,
+      });
+      if (usageErr) console.error("ai_usage insert failed:", usageErr);
+    } catch (_e) { /* ledger insert must not break the wake */ }
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return { resolved: false, summary: "" };
+    const parsed = JSON.parse(match[0]);
+    return {
+      resolved: parsed.resolved === true,
+      summary: typeof parsed.summary_he === "string" ? parsed.summary_he.slice(0, 500) : "",
+    };
+  } catch (e) {
+    console.error("classifyReplyOutcome failed:", (e as Error).message);
+    return { resolved: false, summary: "" };
+  }
 }
 
 function calculateNextOccurrence(currentRemindAt: string, rule: string): string {

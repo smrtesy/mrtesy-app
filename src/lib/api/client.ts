@@ -122,6 +122,12 @@ interface ApiOptions extends Omit<RequestInit, "body"> {
   orgId?: string | null;
   /** Skip X-Org-Id (e.g. for /api/orgs collection endpoints) */
   noOrg?: boolean;
+  /** Retry this non-GET the way GETs are retried. Only for endpoints the caller
+   *  has made idempotent (e.g. a POST carrying a client_token the server dedupes
+   *  on) — otherwise a retried write could act twice. Lets a POST ride out the
+   *  transient Railway edge blip that drops a response for a request the server
+   *  already processed, instead of surfacing a false "Failed to fetch". */
+  idempotent?: boolean;
 }
 
 export class ApiError extends Error {
@@ -177,7 +183,7 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   // it never reaches the UI. Only GETs are retried (idempotent); a real HTTP
   // error response (4xx, or 5xx that isn't a gateway) is thrown immediately.
   const method = (opts.method ?? "GET").toUpperCase();
-  const isIdempotent = method === "GET";
+  const isIdempotent = method === "GET" || opts.idempotent === true;
   const maxAttempts = isIdempotent ? 3 : 1;
   const GATEWAY = new Set([502, 503, 504]);
 

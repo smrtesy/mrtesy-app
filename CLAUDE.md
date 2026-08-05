@@ -351,29 +351,36 @@ service is `["/server/**"]` (verified 2026-08-04), so only server changes redepl
 it. To disarm, set the var to `0` or delete it in Railway → Variables (that also
 disarms the coordinator, which no-ops unless the value is exactly `1`).
 
-**Known coordinator behaviour (2026-08-04):** a merge conflict during the batch
-merge is marked terminal `conflict` and is **not** auto-retried — even when the
-conflict was *transient* (origin/main moved under the coordinator mid-batch, as
-happens when several sessions push at once). A stranded `conflict` row needs a
-fresh `mark-ready` to re-enter the queue. Improvement on file: on a merge
-conflict, re-fetch origin/main and, if it advanced since the batch's snapshot,
-reset the batch to `ready` and retry on the newer main before parking as
-`conflict` (mirrors the existing non-fast-forward push-retry). Not yet built.
+**Root cause of the recurring `conflict` parking — FIXED 2026-08-05 (commit
+`fix/deploy-coord-missing-refspec`).** For months a server-only branch that was a
+clean fast-forward over `origin/main`, alone in the queue, with `origin/main` NOT
+moving, was still parked terminal `conflict` on every `mark-ready` retry. Two
+earlier diagnoses were **both wrong** and neither fixed it: (a) "transient conflict
+— origin/main moved mid-batch" (the transient re-fetch/reset-to-ready retry that
+guards against it **is** built, `runBatchDeploy`); (b) "dirty `DEPLOY_DIR` checkout"
+(the `merge --abort`/`reset --hard`/`clean -fd` scrub before touching main **is**
+built too, `prepWorkspace`). Both were built and the bug survived, because the real
+cause was elsewhere: `DEPLOY_DIR` is cloned `git clone --depth 1 --branch main`,
+which gives it a **single-branch fetch refspec** (`+refs/heads/main:…`). A plain
+`git fetch origin <branch>` therefore landed the tip only in `FETCH_HEAD` and
+**never created `refs/remotes/origin/<branch>`** — so `git merge --no-ff
+origin/<branch>` (and `branchInMain`'s `merge-base --is-ancestor`) could not resolve
+the ref, exited non-zero, and the coordinator **misread every non-zero merge exit as
+a merge conflict**. Deterministic, not intermittent — which is why it hit *every*
+server change once the flag was armed (2026-08-04) and re-`mark-ready` never helped
+(same broken fetch each time). The fix: fetch with an explicit refspec
+`+<branch>:refs/remotes/origin/<branch>` so the tracking ref is written despite the
+single-branch clone (both fetch sites in `deploy-coordinator.ts`). Lesson for the
+next stall: a `conflict` on a branch that *cannot* textually conflict is almost
+never a real merge conflict — read what the merge command actually exited on
+(unresolved ref? unrelated histories?) before theorising, and don't misclassify a
+non-zero `git` exit as a content conflict.
 
-**Worse than transient (seen 2026-08-05):** a row that is ALONE in the queue and
-whose branch is a clean fast-forward over the current `origin/main` (a server-only
-change, mathematically un-conflictable) was still parked `conflict` on **four**
-consecutive `mark-ready` retries, with `origin/main` NOT moving between them. The
-`--no-ff` merge cannot produce that textually, so the cause is the coordinator's
-persistent `DEPLOY_DIR` checkout staying dirty between ticks (an aborted merge from
-a prior tick not fully reset). Re-`mark-ready` alone does NOT clear it — it re-runs
-against the same dirty checkout. When you've confirmed the branch is a clean
-fast-forward and alone in the queue yet keeps parking `conflict`, stop retrying the
-queue: rebuild the change as a clean server-only branch off fresh `origin/main`
-(no merge history) and ship it with the documented bypass
-(`DEPLOY_GATE_SKIP=1 git push origin main` after a `--no-ff` merge). The real fix is
-to have the coordinator `git reset --hard`/`clean -fd` the checkout at the START of
-every tick, not only after a batch — not yet built.
+**If the queue ever strands a clean branch again:** confirm it in the coordinator
+logs (does `origin/<branch>` resolve in `DEPLOY_DIR`?), and as an escape hatch ship
+that one fix via the documented bypass — rebuild it as a clean server-only branch
+off fresh `origin/main` and `DEPLOY_GATE_SKIP=1 git push origin main` after a
+`--no-ff` merge.
 
 **Pre-push protocol ordering, for server changes:** run the **full** pre-push
 protocol on the feature branch **before** calling `ship.sh` — i.e. before the fix
@@ -452,7 +459,29 @@ partial fixes*. Shipping the rule is not following it.
 ### Step 1 — Real build (not just tsc)
 
 ```
-npm install --no-audit --no-fund && npm run build
+npm install --include=dev --no-audit --no-fund && npm run build
+```
+
+**`--include=dev` is NOT optional here.** This backend runs with
+`NODE_ENV=production` (a Railway service variable), under which a plain
+`npm install` OMITS devDependencies — and `typescript` plus every `@types/*`
+package the build needs are devDeps. Without the flag the build fails with a
+false "Cannot find declaration file for module '…'" / `TS2584: Cannot find name
+'console'` on perfectly correct code. The flag overrides the production omit;
+it is a no-op on a machine where NODE_ENV isn't production, so it's always safe
+to include. (This bit the deploy coordinator's own build on 2026-08-05, and
+several repo threads that burned whole turns hand-recovering.)
+
+**If `npm install` says "up to date" but the build then fails on a MISSING
+module, the checkout's `node_modules` is corrupt — not the code.** This happens
+when a prior `npm install` was killed mid-extraction (a Railway redeploy
+SIGTERMs live runs), leaving empty package dirs plus a lockfile-ledger that
+records them as installed, so the next `npm install` is a no-op. `--force` does
+NOT fix it (it honours the same ledger). Recover with a clean reinstall, which
+wipes `node_modules` first and installs exactly the lockfile:
+
+```
+rm -rf node_modules && npm ci
 ```
 
 **`npm run build` is the only authoritative check.** It runs the

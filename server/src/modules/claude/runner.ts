@@ -1110,7 +1110,13 @@ async function executeRunBody(runId: string): Promise<void> {
    * resume target turns out to be gone (the fallback below).
    */
   const buildArgs = (resume: string | null, fork = false): string[] => {
-    const a = ["-p", promptText, "--output-format", "stream-json", "--verbose"];
+    // promptText is a POSITIONAL argument (`claude [options] [prompt]`), passed
+    // LAST after a `--` separator (see the return below) — NOT here right after
+    // `-p`. A prompt that starts with "-" (a Hebrew bullet list, "- …") sitting
+    // among the options is parsed by the CLI as an unknown option and the whole
+    // turn fails ("error: unknown option '- …'"); `--` forces everything after it
+    // to be read as the prompt. Verified against the installed binary.
+    const a = ["-p", "--output-format", "stream-json", "--verbose"];
     // Token-level deltas ride the stream as `stream_event` lines (verified
     // against the 2.1.220 binary: the flag requires --print + stream-json,
     // both present here). They feed the live NDJSON stream ONLY — the stdout
@@ -1170,6 +1176,9 @@ async function executeRunBody(runId: string): Promise<void> {
     // Force Hebrew (and New York time) on every turn — see HEBREW_DIRECTIVE.
     a.push("--append-system-prompt", HEBREW_DIRECTIVE);
     a.push(...extra);
+    // The prompt goes LAST, behind `--`, so a "-"-leading message is read as the
+    // positional prompt instead of an option. Must stay the final push.
+    a.push("--", promptText);
     return a;
   };
 
@@ -1678,8 +1687,11 @@ export async function runOneShot(
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
 
-  const args = ["-p", prompt, "--output-format", "text"];
+  const args = ["-p", "--output-format", "text"];
   if (opts.model) args.push("--model", opts.model);
+  // The prompt is a positional argument, passed LAST behind `--` so a "-"-leading
+  // prompt isn't parsed as a CLI option (same fix as buildArgs above).
+  args.push("--", prompt);
 
   const startedAt = Date.now();
   // One best-effort provenance row per background call: which model/account ran
