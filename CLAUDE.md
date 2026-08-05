@@ -360,6 +360,21 @@ conflict, re-fetch origin/main and, if it advanced since the batch's snapshot,
 reset the batch to `ready` and retry on the newer main before parking as
 `conflict` (mirrors the existing non-fast-forward push-retry). Not yet built.
 
+**Worse than transient (seen 2026-08-05):** a row that is ALONE in the queue and
+whose branch is a clean fast-forward over the current `origin/main` (a server-only
+change, mathematically un-conflictable) was still parked `conflict` on **four**
+consecutive `mark-ready` retries, with `origin/main` NOT moving between them. The
+`--no-ff` merge cannot produce that textually, so the cause is the coordinator's
+persistent `DEPLOY_DIR` checkout staying dirty between ticks (an aborted merge from
+a prior tick not fully reset). Re-`mark-ready` alone does NOT clear it — it re-runs
+against the same dirty checkout. When you've confirmed the branch is a clean
+fast-forward and alone in the queue yet keeps parking `conflict`, stop retrying the
+queue: rebuild the change as a clean server-only branch off fresh `origin/main`
+(no merge history) and ship it with the documented bypass
+(`DEPLOY_GATE_SKIP=1 git push origin main` after a `--no-ff` merge). The real fix is
+to have the coordinator `git reset --hard`/`clean -fd` the checkout at the START of
+every tick, not only after a batch — not yet built.
+
 **Pre-push protocol ordering, for server changes:** run the **full** pre-push
 protocol on the feature branch **before** calling `ship.sh` — i.e. before the fix
 enters the queue, not before a push to `main`. Only a clean branch should reach
