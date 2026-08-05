@@ -96,6 +96,9 @@ export interface Task {
   context?: "home" | "work" | "outside" | null;
   /** Set when the row wakes from snooze; cleared on first interaction (drives the chip). */
   woke_from_snooze_at?: string | null;
+  /** Why the row was last updated by the pipeline. `followup_reply_resolved_hint`
+   *  drives the "נראה סגור" chip on a woken follow-up whose reply reads as resolved. */
+  last_updated_reason?: string | null;
   /** Set when the task is handed off to Claude (opened in the built-in console);
    *  null once the user marks Claude finished. Drives the "waiting on Claude" chip. */
   claude_waiting_since?: string | null;
