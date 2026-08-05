@@ -23,9 +23,34 @@
  */
 
 import { db } from "../../../db";
-import { executeRun } from "../../claude/runner";
+import { executeRun, AUTOMATION_ACCOUNT } from "../../claude/runner";
 import { maybeTitle, primaryRepoForOrg } from "../../claude/threads";
 import { composePrompt } from "../../claude/playbooks";
+
+/**
+ * The Claude account the user last worked on in the console, so a task chat opens
+ * on the same one they were just using (their explicit account choice carries over
+ * — the user's request, 2026-08-04). NULL (never switched) resolves to the primary
+ * account in the runner. Automation threads (autofix/diagnosis) are excluded — they
+ * carry the automation account and are not the user's own choice; a NULL account is
+ * kept, since "never switched" IS a valid last-used state (default account).
+ */
+async function lastUsedAccount(orgId: string, userId: string): Promise<string | null> {
+  const { data, error } = await db
+    .from("claude_threads")
+    .select("claude_account")
+    .eq("org_id", orgId)
+    .eq("created_by", userId)
+    .or(`claude_account.is.null,claude_account.neq.${AUTOMATION_ACCOUNT}`)
+    .order("last_message_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[tasks.claude-handoff] lastUsedAccount lookup failed:", error.message);
+    return null; // fall back to the default account — never fail the handoff
+  }
+  return (data?.claude_account as string | null) ?? null;
+}
 
 export interface TaskHandoffContext {
   id: string;
@@ -90,6 +115,8 @@ export async function createTaskThread(
 
     // Same default as a new console chat — and required for shell/curl (see header).
     const repo = await primaryRepoForOrg(orgId);
+    // Open on whichever account the user was last using (their request, 2026-08-04).
+    const account = await lastUsedAccount(orgId, userId);
 
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
@@ -103,6 +130,7 @@ export async function createTaskThread(
         task_serial: ctx.serial ?? null,
         repo,
         git_branch: null, // clone the default branch
+        claude_account: account,
       })
       .select("id")
       .single();
@@ -127,6 +155,9 @@ export async function createTaskThread(
         // run.repo is what flips the runner to bypassPermissions (full shell) — must
         // match the thread's repo so the loop-closing curl can run (see header).
         repo,
+        // loadAccountToken(run.claude_account) picks the token — carry the account
+        // here too so the first turn actually runs on the user's last-used account.
+        claude_account: account,
         status: "queued",
       })
       .select("id")

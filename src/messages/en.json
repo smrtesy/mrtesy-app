@@ -1199,6 +1199,10 @@
     "dailyreport": {
       "title": "Daily report",
       "desc": "Daily scored self-report questions, plus a weekly report delivered to the inbox every Tuesday."
+    },
+    "dailyreset": {
+      "title": "Daily reset",
+      "desc": "Every night at your local midnight, every open task you didn't finish or postpone to a later date returns to the inbox. Future-dated, snoozed and awaiting-confirmation tasks stay put."
     }
   },
   "dailyReport": {
