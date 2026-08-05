@@ -4574,7 +4574,8 @@
       "costNote": "Dictation is transcribed by Gemini — one paid call per press of the mic.",
       "chooseDevice": "Choose microphone",
       "defaultDevice": "System default microphone",
-      "unnamedDevice": "Microphone {n}"
+      "unnamedDevice": "Microphone {n}",
+      "needPermission": "Allow microphone access to see your devices"
     },
     "playbooks": {
       "title": "Working methods",
@@ -4998,6 +4999,11 @@
     "seedRoute": "Screen (route)",
     "seedTime": "When it appeared",
     "seedBrowser": "Browser",
+    "seedEndpoint": "Failed server path",
+    "seedStatus": "Status code",
+    "seedResponse": "Server response",
+    "seedStack": "Error stack",
+    "seedScreenshot": "Before diagnosing, first screenshot the screen to see what the user saw: run `node /app/dist/modules/claude/browser-helper.js shot {route} --out shot.png --attach`. If the error is a server call (endpoint and status above), reproduce it against the platform API.",
     "seedTask": "Locate where this error comes from in the code (search for the text or its translation key in src/messages/en.json, then the call that shows it and the server path behind it), diagnose the root cause, and fix it.",
     "seedProblem": "Extra context (optional):"
   },

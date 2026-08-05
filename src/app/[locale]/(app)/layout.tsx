@@ -21,6 +21,7 @@ import { ClaudeInspector } from "@/components/claude/ClaudeInspector";
 import { ClaudeDrawer } from "@/components/claude/ClaudeDrawer";
 import { ClaudeDrawerProvider } from "@/contexts/ClaudeDrawerContext";
 import { SystemMessagesRecorder } from "@/components/platform/layout/SystemMessagesRecorder";
+import { ClientErrorCatcher } from "@/components/platform/layout/ClientErrorCatcher";
 
 export default async function AppLayout({
   children,
@@ -230,6 +231,12 @@ export default async function AppLayout({
               Lives INSIDE TabsWorkspaceProvider so it can attribute each message
               to the active tab's screen (panes never change the top URL). */}
           <SystemMessagesRecorder />
+          {/* Global client-error catcher: records failed API calls, uncaught JS
+              errors and unhandled rejections to the bell + backend log_entries
+              (→ super-admin alert + daily health report). isAdmin gates only the
+              "debug in Claude" action on an uncaught-error toast — logging is for
+              everyone. Renders nothing. */}
+          <ClientErrorCatcher isAdmin={!!isAdmin} />
         </WhatsAppPanelProvider>
       </ClaudeDrawerProvider>
       </TabsWorkspaceProvider>

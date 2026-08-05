@@ -26,6 +26,7 @@
 import { useEffect, useRef } from "react";
 import { useSonner } from "sonner";
 import { useOptionalTabsWorkspace } from "@/contexts/TabsWorkspaceContext";
+import { takeStashedDetail } from "@/lib/error-capture";
 import {
   recordSystemMessage,
   type SystemMessageType,
@@ -83,12 +84,17 @@ export function SystemMessagesRecorder() {
       // Marked seen only once actually recorded, so a toast updated in place
       // (loading → error via the same id) is archived when it becomes recordable.
       seenRef.current.add(t.id);
+      // Error toasts may carry rich detail the global catcher stashed just before
+      // the throw (endpoint/status/body for an API failure). Attach it so the bell
+      // entry — and the Claude seed built from it — is fully debuggable.
+      const detail = type === "error" ? takeStashedDetail(t.title) : undefined;
       recordSystemMessage({
         id: `${t.id}-${Date.now()}`,
         type,
         text: t.title,
         path: currentPath(),
         at: new Date().toISOString(),
+        detail,
       });
     }
   }, [toasts]);
