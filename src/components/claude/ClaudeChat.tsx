@@ -1252,13 +1252,31 @@ export function ClaudeChat() {
       )}
 
       <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", listOpen && "hidden md:flex")}>
+        {/* Mobile-only floating toggle: pinned to the viewport's top-start (right
+            in RTL) corner so the thread list is always one tap away without
+            scrolling back up to the header. Hidden on desktop (md+), where the
+            header toggle below stays. It lives inside the chat column, so when the
+            rail opens the column is hidden and this button vanishes with it. The
+            avatar lives at end-2 (Sidebar), so start-2 keeps them on opposite
+            corners. */}
+        <Button
+          size="sm"
+          variant="outline"
+          className="fixed start-2 top-2 z-40 h-9 w-9 rounded-full p-0 shadow-md md:hidden"
+          onClick={() => setListOpen(true)}
+          aria-label={t("showList")}
+          title={t("showList")}
+        >
+          <PanelLeftOpen className="size-4" />
+        </Button>
         {/* Header: the title, and two quiet buttons. Everything configurable is
-            behind the second one. */}
-        <div className={cn("sticky top-0 z-20 flex items-center gap-1 border-b bg-background p-2", inPane && "pe-10")}>
+            behind the second one. On mobile the extra start padding clears the
+            floating toggle above. */}
+        <div className={cn("sticky top-0 z-20 flex items-center gap-1 border-b bg-background p-2 ps-12 md:ps-2", inPane && "pe-10")}>
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 w-8 p-0"
+            className="hidden h-8 w-8 p-0 md:inline-flex"
             onClick={() => setListOpen((v) => !v)}
             aria-label={listOpen ? t("hideList") : t("showList")}
             title={listOpen ? t("hideList") : t("showList")}
