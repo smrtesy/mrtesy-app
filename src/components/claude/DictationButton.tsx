@@ -90,6 +90,10 @@ export function DictationButton({
    *  ("" = system default). The pick is per-machine, so it lives in localStorage
    *  rather than the DB. */
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  /** Whether this browser can enumerate audio inputs at all. Set from a client
+   *  effect (never during SSR) so the picker trigger renders identically on the
+   *  server and the first client paint — no hydration mismatch — then appears. */
+  const [canPick, setCanPick] = useState(false);
   const [deviceId, setDeviceId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(DEVICE_KEY) ?? "";
@@ -110,31 +114,37 @@ export function DictationButton({
     }
   }, []);
 
-  // Enumerate once so we know whether there is even a choice to offer (a single
-  // input means no picker), and stay in sync as devices are plugged/unplugged.
+  // Enumerate on mount and stay in sync as devices are plugged/unplugged. The
+  // trigger is shown whenever the browser CAN enumerate — not gated on the count,
+  // because before a mic grant the browser hides device ids/labels, so gating on
+  // "more than one input" would hide the only entry point that can request the
+  // permission that reveals them (a chicken-and-egg that left the picker invisible).
   useEffect(() => {
-    void refreshDevices();
     const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
-    if (!md?.addEventListener) return;
+    if (!md?.enumerateDevices) return;
+    setCanPick(true);
+    void refreshDevices();
+    if (!md.addEventListener) return;
     const handler = () => void refreshDevices();
     md.addEventListener("devicechange", handler);
     return () => md.removeEventListener("devicechange", handler);
   }, [refreshDevices]);
 
-  // Device labels are only exposed after a mic permission has been granted. When
-  // the user opens the picker with unlabeled devices, ask once (a silent grant we
-  // immediately release) so the list reads "MacBook Microphone" instead of blanks.
+  // Device ids and labels are only exposed after a mic permission has been
+  // granted. When the user opens the picker before that, ask once (a silent grant
+  // we immediately release) so the list is populated and reads "AirPods" /
+  // "MacBook Microphone" instead of being empty or blank.
   const onPickerOpenChange = useCallback(
     async (open: boolean) => {
       if (!open) return;
-      const needLabels = devices.some((d) => !d.label);
-      if (needLabels && navigator.mediaDevices?.getUserMedia) {
+      const haveUsableList = devices.some((d) => d.deviceId && d.label);
+      if (!haveUsableList && navigator.mediaDevices?.getUserMedia) {
         try {
           const s = await navigator.mediaDevices.getUserMedia({ audio: true });
           s.getTracks().forEach((tr) => tr.stop());
           await refreshDevices();
         } catch {
-          // Permission refused — keep the generic labels; selection still works.
+          // Permission refused — the list stays empty and the picker shows a hint.
         }
       }
     },
@@ -369,9 +379,10 @@ export function DictationButton({
       </Button>
 
       {/* Compact-by-default: a single quiet chevron that opens the input picker
-          on demand. Shown only when there is an actual choice (>1 input) and
-          never mid-recording, so it isn't permanent chrome. */}
-      {pickable.length > 1 && !recording && !busy && (
+          on demand. Shown whenever the browser can enumerate inputs (not gated on
+          the count — opening it is what requests the permission that reveals the
+          list), and never mid-recording, so it isn't permanent chrome. */}
+      {canPick && !recording && !busy && (
         <DropdownMenu onOpenChange={(open) => void onPickerOpenChange(open)}>
           <DropdownMenuTrigger asChild>
             <Button
@@ -381,9 +392,9 @@ export function DictationButton({
               disabled={disabled}
               aria-label={t("chooseDevice")}
               title={t("chooseDevice")}
-              className="h-8 w-4 shrink-0 p-0 text-muted-foreground"
+              className="h-8 w-5 shrink-0 p-0 text-muted-foreground"
             >
-              <ChevronDown className="size-3" />
+              <ChevronDown className="size-3.5" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="max-w-[16rem]">
@@ -396,6 +407,11 @@ export function DictationButton({
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
+            {/* No usable list yet means the mic permission is still blocked — say
+                so instead of showing a lone, unexplained "default" option. */}
+            {pickable.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">{t("needPermission")}</p>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
