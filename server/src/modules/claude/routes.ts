@@ -20,7 +20,14 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, describeAccounts, isRunLive, runEventBus, type LiveEvent } from "./runner";
+import {
+  executeRun,
+  describeAccounts,
+  isRunLive,
+  runEventBus,
+  mostRecentWeeklyReset,
+  type LiveEvent,
+} from "./runner";
 import { composePrompt } from "./playbooks";
 import { getGitHubToken, listRepos, isValidRepo, isValidBranch, redact } from "./github";
 import { deployStatus } from "./deploy-status";
@@ -281,8 +288,17 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
       (r) => r.claude_account === account,
     ) ?? null;
 
-  // Weekly: rolling 7-day cost vs the weekly cap (calibrated per-account, else '*').
-  const weekSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Weekly window: from THIS account's last reset if the operator set a schedule
+  // (Anthropic resets each account on its own day/time — configured in the Claude
+  // accounts admin), else a rolling 7 days. Matching Claude's fixed reset is what
+  // keeps the weekly percent tracking Claude's own counter through the week and
+  // dropping to ~0 right after its reset, instead of a rolling sum that always
+  // carries the prior week.
+  const acctInfo = (await describeAccounts()).find((a) => a.id === account) ?? null;
+  const weekStartMs = acctInfo?.weeklyReset
+    ? mostRecentWeeklyReset(acctInfo.weeklyReset, Date.now())
+    : Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const weekSince = new Date(weekStartMs).toISOString();
   const { data: wkRows, error: wkErr } = await db
     .from("claude_runs")
     .select("total_cost_usd")
@@ -310,11 +326,11 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
   // Claude's own usage tool (the operator writes that cap with a note prefixed
   // "manual calib"). The bare seeded '*' placeholder ($200) has neither, so its
   // percent stays hidden (pct:null → the meter shows "not calibrated yet") while
-  // still displaying the 7-day cost. NOTE the window mismatch: we sum a ROLLING
-  // 7 days, whereas Claude's weekly limit resets on a fixed weekday — so this
-  // percent tracks Claude closely mid-week but will read higher than Claude's
-  // right after its reset (our window still carries the prior days). It is an
-  // estimate, per the disclaimer, not a mirror of Claude's counter.
+  // still displaying the cost. The window above is aligned to THIS account's
+  // configured reset (so the percent tracks Claude's counter and drops to ~0
+  // right after its reset); with no schedule set it falls back to a rolling 7
+  // days, which reads higher than Claude's right after a reset. Either way it is
+  // an estimate, per the disclaimer, not a mirror of Claude's counter.
   const { count: weeklyHits, error: whErr } = await db
     .from("claude_usage_hits")
     .select("id", { count: "exact", head: true })
@@ -341,8 +357,19 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
           pct: Math.min(100, Math.floor((weekCost / weekCap) * 100)),
           cost_used: Math.round(weekCost * 100) / 100,
           cap: weekCap,
+          // Next reset, only when a schedule is set. Computed as the reset AT-OR-BEFORE
+          // (this window's start + ~7 days) rather than a flat +7d, so it lands on the
+          // exact wall-clock reset even across a DST boundary (a flat +7d would drift ±1h).
+          window_end: acctInfo?.weeklyReset
+            ? new Date(
+                mostRecentWeeklyReset(
+                  acctInfo.weeklyReset,
+                  weekStartMs + 7 * 24 * 60 * 60 * 1000 + 60_000,
+                ),
+              ).toISOString()
+            : null,
         }
-      : { pct: null, cost_used: Math.round(weekCost * 100) / 100, cap: null },
+      : { pct: null, cost_used: Math.round(weekCost * 100) / 100, cap: null, window_end: null },
     disclaimer: "אומדן מהצריכה דרך הכלים שלנו — לא נתון רשמי מאנתרופיק",
   });
 });
