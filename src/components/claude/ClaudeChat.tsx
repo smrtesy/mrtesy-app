@@ -341,6 +341,7 @@ export function ClaudeChat() {
   const [defaultEffort, setDefaultEffort] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const railScrollRef = useRef<HTMLDivElement | null>(null);
   /** Mirrors activeId for the async guard in loadThread. Synced in an effect, not
    *  during render — a render-phase write is unsafe under StrictMode's double
    *  invocation. ensureThread also sets it directly, which is fine: that happens
@@ -804,8 +805,34 @@ export function ClaudeChat() {
     bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
   }, []);
   useEffect(() => {
-    scrollToBottom();
-  }, [turns.length, hasLive, scrollToBottom]);
+    // rAF so the just-loaded turns are laid out before we measure the bottom;
+    // activeId in deps so opening a thread (even one the same length as the last)
+    // always re-anchors to its final message rather than staying mid-scroll.
+    const id = requestAnimationFrame(scrollToBottom);
+    return () => cancelAnimationFrame(id);
+  }, [turns.length, hasLive, activeId, scrollToBottom]);
+  // Mobile-only scroll anchoring on the list⇄chat swap. On mobile the whole
+  // document is the scroller (the panels don't scroll internally), so a swap keeps
+  // whatever offset the previous view had. Opening the list → jump to its head so
+  // it never opens scrolled halfway down; closing back to the chat → jump to the
+  // latest message. Desktop scrolls inside the panels, so we no-op there; panes are
+  // excluded too (the window is the shared top workspace, which we must not yank).
+  useEffect(() => {
+    let isMobile = false;
+    try {
+      isMobile = window.matchMedia("(max-width: 767.98px)").matches;
+    } catch {
+      /* SSR / no matchMedia */
+    }
+    if (!isMobile || inPane) return;
+    if (listOpen) {
+      railScrollRef.current?.scrollTo({ top: 0 });
+      window.scrollTo({ top: 0 });
+    } else {
+      const id = requestAnimationFrame(scrollToBottom);
+      return () => cancelAnimationFrame(id);
+    }
+  }, [listOpen, inPane, scrollToBottom]);
   // Coming back to the Claude tab (un-minimized / re-focused) jumps to the latest
   // messages — the bottom is what the user wants on return, not wherever they'd
   // scrolled to. rAF so the paint after the tab shows has laid the content out.
@@ -1225,7 +1252,7 @@ export function ClaudeChat() {
               <X className="size-4" />
             </Button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={railScrollRef} className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
               <p className="p-2 text-xs text-muted-foreground">…</p>
             ) : threads.length === 0 ? (
