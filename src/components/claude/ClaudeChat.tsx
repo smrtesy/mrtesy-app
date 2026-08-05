@@ -51,6 +51,7 @@ import { cn } from "@/lib/utils";
 import { isEmbeddedPane } from "@/lib/navigate";
 import { AnswerContent } from "./interactive/AnswerContent";
 import { CopyButton } from "@/components/common/CopyButton";
+import { ZoomableImage } from "@/components/common/ZoomableImage";
 import { ChatComposer, draftKey } from "./ChatComposer";
 import { PlaybookList } from "./PlaybookList";
 import { RepoPicker } from "./RepoPicker";
@@ -2318,25 +2319,19 @@ function TurnView({
             // not full-size — a click opens the real image (signed URL, ~1h).
             <div className="flex flex-wrap gap-2">
               {screenshots.map((s) => (
-                <a
+                // A click opens the full image in an in-app popup (ZoomableImage),
+                // NOT a new browser window that leaves the workspace behind. The
+                // signed Supabase URL (~1h expiry) is passed straight through —
+                // next/image would proxy a URL that dies; these are ephemeral
+                // proofs, not site assets.
+                <ZoomableImage
                   key={s.id}
-                  href={s.signed_url!}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  src={s.signed_url!}
+                  alt={s.filename}
                   title={s.filename}
-                  className="block overflow-hidden rounded-lg border border-border"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element -- signed
-                      Supabase URL with ~1h expiry; next/image optimization would
-                      cache/proxy a URL that dies, and these are ephemeral proofs,
-                      not site assets. */}
-                  <img
-                    src={s.signed_url!}
-                    alt={s.filename}
-                    loading="lazy"
-                    className="max-h-48 w-auto max-w-full"
-                  />
-                </a>
+                  className="overflow-hidden rounded-lg border border-border"
+                  imgClassName="max-h-48 w-auto max-w-full"
+                />
               ))}
             </div>
           )}

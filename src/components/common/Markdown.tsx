@@ -35,6 +35,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { CopyButton } from "@/components/common/CopyButton";
+import { ZoomableImage } from "@/components/common/ZoomableImage";
 import { cn } from "@/lib/utils";
 
 /**
@@ -488,10 +489,14 @@ function buildComponents(
       </td>
     ),
 
-    img: ({ src, alt }) => (
-      // eslint-disable-next-line @next/next/no-img-element -- arbitrary doc-authored URLs, not app assets
-      <img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} className="my-3 max-w-full rounded-lg border" />
-    ),
+    img: ({ src, alt }) => {
+      const url = typeof src === "string" ? src : "";
+      if (!url) return null;
+      // A click opens the image in an in-app popup, not a new browser window.
+      return (
+        <ZoomableImage src={url} alt={alt ?? ""} className="my-3" imgClassName="max-w-full rounded-lg border" />
+      );
+    },
 
     strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
     del: ({ children }) => <del className="text-muted-foreground">{children}</del>,
