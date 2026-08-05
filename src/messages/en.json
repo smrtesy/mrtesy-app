@@ -4531,6 +4531,33 @@
         "scope": "Covers only runs launched from this console, not other Claude usage."
       }
     },
+    "efficiency": {
+      "title": "Efficiency",
+      "noRuns": "No runs in this window.",
+      "runsAnalyzed": "Runs analyzed",
+      "avgToolCalls": "Avg tool calls",
+      "avgTurns": "Avg turns",
+      "totalToolCalls": "Total tool calls",
+      "per100": "Flags per 100 tool calls (normalized)",
+      "perRun": "Per run — most wasteful first",
+      "toolCalls": "Tool calls",
+      "score": "Waste score",
+      "clean": "Clean",
+      "untitled": "Untitled",
+      "moreFlags": "and {n} more flags",
+      "truncated": "Analyzed partially — run with many events.",
+      "flag": {
+        "duplicate_read": "Re-read of an unchanged file",
+        "redundant_search": "Repeated identical search",
+        "error_retry": "Retry of a failing call",
+        "unbatched_reads": "Read-only shell not batched"
+      },
+      "disclaimer": {
+        "scope": "Level-1 mechanical waste only: a re-read of an unchanged file, an identical repeated search, a retried failing call, and read-only shell issued one call at a time. Each flag cites the seq it was found at. It does NOT judge whether an approach was “smart” — that needs a model, and a model cannot be the authority on it.",
+        "tokens": "A re-read of an unchanged file usually hits the cache, so it costs a turn and latency more than tokens. Token cost is measured per run, not per single tool call.",
+        "coverage": "Covers only runs launched from this console, newest first."
+      }
+    },
     "taskRouter": "Free-text task update",
     "dictation": {
       "start": "Dictate",
