@@ -7,9 +7,11 @@ const router = Router();
 /**
  * GET /api/inbox/count
  * Returns:
- *   - count: total unread inbox items (pending suggestions + unread notifications)
+ *   - count: total items that need the user to act (pending suggestions +
+ *            unread action_required notifications) — the sidebar badge number
  *   - suggestions: pending task suggestions awaiting review
- *   - notifications: unread notifications
+ *   - notifications: unread notifications of type action_required only
+ *            (success/info/warning are informational and do NOT count)
  *   - open_tasks: real tasks (manually_verified=true) currently in inbox or in_progress
  *
  * The sidebar uses `count` for the inbox badge and `open_tasks` for the
@@ -36,9 +38,14 @@ router.get("/count", requireAuth, requireOrg, async (req: Request, res: Response
       .eq("user_id", userId)
       .eq("org_id", orgId)
       .eq("is_read", false)
-      // inbox_digest is push-only (see NotificationsList) — exclude it from the
-      // unread badge so it never inflates the count. Keep NULL entity_types.
-      .or("entity_type.is.null,entity_type.neq.inbox_digest"),
+      // The badge counts only notifications that need the user to DO something.
+      // The `type` CHECK is ('info','warning','success','action_required'):
+      // `success` is a past-run confirmation ("clone finished", "campaign sent"),
+      // `info` is FYI, `warning` is heads-up — none demand immediate action.
+      // Only `action_required` (reconnect Google, expired token, …) does, so it
+      // is the sole type that inflates the badge. inbox_digest is `info`, so this
+      // also subsumes the old inbox_digest exclusion.
+      .eq("type", "action_required"),
     db
       .from("tasks")
       .select("*", { count: "exact", head: true })
