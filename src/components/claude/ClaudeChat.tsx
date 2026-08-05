@@ -266,6 +266,12 @@ export function ClaudeChat() {
   const [thread, setThread] = useState<Thread | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [loading, setLoading] = useState(true);
+  /** How the CURRENTLY-selected conversation's load went — kept separate from
+   *  `loading` (the rail list). Overloading `thread == null` to mean new-chat AND
+   *  loading AND failed made a failed load render identical to a blank new chat:
+   *  the "thread not found → opens a new chat" bug. 'idle' = new/blank composer,
+   *  'error' = a transient load failure the user can retry. */
+  const [threadLoad, setThreadLoad] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [listOpen, setListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Inside a tabs-workspace pane the floating grip (TabsWorkspace PaneControls)
@@ -341,6 +347,7 @@ export function ClaudeChat() {
   const [defaultEffort, setDefaultEffort] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const railScrollRef = useRef<HTMLDivElement | null>(null);
   /** Mirrors activeId for the async guard in loadThread. Synced in an effect, not
    *  during render — a render-phase write is unsafe under StrictMode's double
    *  invocation. ensureThread also sets it directly, which is fine: that happens
@@ -486,7 +493,7 @@ export function ClaudeChat() {
    *  holding the NEWEST ticket may apply. */
   const loadSeqRef = useRef(0);
 
-  const loadThread = useCallback(async (id: string) => {
+  const loadThread = useCallback(async (id: string, opts?: { background?: boolean }) => {
     const ticket = ++loadSeqRef.current;
     try {
       const r = await api<{
@@ -506,14 +513,43 @@ export function ClaudeChat() {
       setSplitProposal(r.split_proposal ?? null);
       setChildren(r.children ?? []);
       setParent(r.parent ?? null);
+      setThreadLoad("ready");
       // The account you're now working in becomes the new-chat default. Only a
       // non-null (explicitly non-primary) account overrides — opening an old
       // default thread never resets an account you deliberately picked.
       rememberAccount(r.thread.claude_account);
     } catch (e) {
-      if (!(e instanceof ApiError && e.status === 401)) toast.error((e as Error).message);
+      // A stale failure — the user already switched away, or a newer load won the
+      // ticket race. Do nothing: acting on it would paint over the live thread.
+      if (activeIdRef.current !== id || ticket !== loadSeqRef.current) return;
+      if (e instanceof ApiError && e.status === 401) return; // handled globally (redirect)
+      if (e instanceof ApiError && e.status === 404) {
+        // A 404 from a BACKGROUND poll reload (tickLive) is NOT proof the thread is
+        // gone — it can be a transient read blip while the backend redeploys. Don't
+        // yank the user out of a live conversation on it; leave a user-initiated load
+        // (a rail click / deep-link) to be the one that prunes. Quiet no-op here.
+        if (opts?.background) return;
+        // The conversation genuinely doesn't exist under this org — deleted from
+        // another tab/session, or a stale deep-link (?thread=<id>). Leaving activeId
+        // pointed at it renders a blank screen indistinguishable from a brand-new
+        // chat (the "thread not found → opens a new chat" bug). Prune the dead row
+        // from the rail and fall back to a clean composer.
+        setThreads((prev) => prev.filter((x) => x.id !== id));
+        setActiveId(null);
+        activeIdRef.current = null;
+        setThread(null);
+        setTurns([]);
+        setThreadLoad("idle");
+        toast.error(t("threadGone"));
+      } else {
+        // A transient failure (network drop, or a gateway blip while the backend
+        // redeploys). The conversation still exists — keep it selected and let the
+        // user retry, instead of blanking it as if it were new.
+        setThreadLoad("error");
+        toast.error((e as Error).message);
+      }
     }
-  }, [rememberAccount]);
+  }, [rememberAccount, t]);
 
   const loadTopics = useCallback(async () => {
     try {
@@ -599,6 +635,10 @@ export function ClaudeChat() {
     // reading A's turns as if they were B's.
     setThread(null);
     setTurns([]);
+    // 'loading' (not the blank empty-state) while an existing thread's turns are
+    // fetched, so a slow/failed load never masquerades as a fresh chat; 'idle' for
+    // a genuine new chat (activeId null).
+    setThreadLoad(activeId ? "loading" : "idle");
     if (activeId) void loadThread(activeId);
   }, [activeId, loadThread]);
 
@@ -681,7 +721,8 @@ export function ClaudeChat() {
       // Then the canonical reload for anything the light patch can't carry
       // (attachments, split proposal, a run this screen didn't know about).
       if (unknown || finished) {
-        void loadThread(id);
+        // Background reload — a transient 404 here must not evict a live conversation.
+        void loadThread(id, { background: true });
         void loadThreads();
       }
     } catch {
@@ -804,8 +845,34 @@ export function ClaudeChat() {
     bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
   }, []);
   useEffect(() => {
-    scrollToBottom();
-  }, [turns.length, hasLive, scrollToBottom]);
+    // rAF so the just-loaded turns are laid out before we measure the bottom;
+    // activeId in deps so opening a thread (even one the same length as the last)
+    // always re-anchors to its final message rather than staying mid-scroll.
+    const id = requestAnimationFrame(scrollToBottom);
+    return () => cancelAnimationFrame(id);
+  }, [turns.length, hasLive, activeId, scrollToBottom]);
+  // Mobile-only scroll anchoring on the list⇄chat swap. On mobile the whole
+  // document is the scroller (the panels don't scroll internally), so a swap keeps
+  // whatever offset the previous view had. Opening the list → jump to its head so
+  // it never opens scrolled halfway down; closing back to the chat → jump to the
+  // latest message. Desktop scrolls inside the panels, so we no-op there; panes are
+  // excluded too (the window is the shared top workspace, which we must not yank).
+  useEffect(() => {
+    let isMobile = false;
+    try {
+      isMobile = window.matchMedia("(max-width: 767.98px)").matches;
+    } catch {
+      /* SSR / no matchMedia */
+    }
+    if (!isMobile || inPane) return;
+    if (listOpen) {
+      railScrollRef.current?.scrollTo({ top: 0 });
+      window.scrollTo({ top: 0 });
+    } else {
+      const id = requestAnimationFrame(scrollToBottom);
+      return () => cancelAnimationFrame(id);
+    }
+  }, [listOpen, inPane, scrollToBottom]);
   // Coming back to the Claude tab (un-minimized / re-focused) jumps to the latest
   // messages — the bottom is what the user wants on return, not wherever they'd
   // scrolled to. rAF so the paint after the tab shows has laid the content out.
@@ -974,10 +1041,22 @@ export function ClaudeChat() {
       setTurns((prev) => [...prev, optimistic]);
       // Read the board into THIS turn only if the user armed it in the project panel.
       const includeBoard = attachBoard;
+      // A per-send idempotency key. It rides every internal retry of this ONE
+      // api() call (same body), so a POST the server already processed whose
+      // response was lost to a transient edge blip is retried and returns the
+      // SAME turn — no false error, no duplicate turn. `idempotent: true` opts
+      // this POST into the retry path (server dedupes on the token).
+      const clientToken = crypto.randomUUID();
       try {
         await api(`/api/claude/threads/${id}/messages`, {
           method: "POST",
-          body: { message, attachment_ids: attachmentIds, include_board: includeBoard },
+          idempotent: true,
+          body: {
+            message,
+            attachment_ids: attachmentIds,
+            include_board: includeBoard,
+            client_token: clientToken,
+          },
         });
       } catch (e) {
         setTurns((prev) => prev.filter((x) => x.id !== optimistic.id));
@@ -1213,7 +1292,7 @@ export function ClaudeChat() {
               <X className="size-4" />
             </Button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={railScrollRef} className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
               <p className="p-2 text-xs text-muted-foreground">…</p>
             ) : threads.length === 0 ? (
@@ -1240,13 +1319,31 @@ export function ClaudeChat() {
       )}
 
       <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", listOpen && "hidden md:flex")}>
+        {/* Mobile-only floating toggle: pinned to the viewport's top-start (right
+            in RTL) corner so the thread list is always one tap away without
+            scrolling back up to the header. Hidden on desktop (md+), where the
+            header toggle below stays. It lives inside the chat column, so when the
+            rail opens the column is hidden and this button vanishes with it. The
+            avatar lives at end-2 (Sidebar), so start-2 keeps them on opposite
+            corners. */}
+        <Button
+          size="sm"
+          variant="outline"
+          className="fixed start-2 top-2 z-40 h-9 w-9 rounded-full p-0 shadow-md md:hidden"
+          onClick={() => setListOpen(true)}
+          aria-label={t("showList")}
+          title={t("showList")}
+        >
+          <PanelLeftOpen className="size-4" />
+        </Button>
         {/* Header: the title, and two quiet buttons. Everything configurable is
-            behind the second one. */}
-        <div className={cn("sticky top-0 z-20 flex items-center gap-1 border-b bg-background p-2", inPane && "pe-10")}>
+            behind the second one. On mobile the extra start padding clears the
+            floating toggle above. */}
+        <div className={cn("sticky top-0 z-20 flex items-center gap-1 border-b bg-background p-2 ps-12 md:ps-2", inPane && "pe-10")}>
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 w-8 p-0"
+            className="hidden h-8 w-8 p-0 md:inline-flex"
             onClick={() => setListOpen((v) => !v)}
             aria-label={listOpen ? t("hideList") : t("showList")}
             title={listOpen ? t("hideList") : t("showList")}
@@ -1526,7 +1623,30 @@ export function ClaudeChat() {
         {/* Conversation */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {turns.length === 0 ? (
-            <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
+            activeId && threadLoad === "loading" ? (
+              <div className="flex items-center justify-center gap-2 pt-8 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                {t("loadingThread")}
+              </div>
+            ) : activeId && threadLoad === "error" ? (
+              // The load failed transiently (the thread still exists) — offer a
+              // retry instead of a blank canvas that reads as a new chat.
+              <div className="flex flex-col items-center gap-2 pt-8 text-sm text-muted-foreground">
+                <p>{t("loadError")}</p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setThreadLoad("loading");
+                    void loadThread(activeId);
+                  }}
+                >
+                  {t("retry")}
+                </Button>
+              </div>
+            ) : (
+              <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
+            )
           ) : (
             // Keyed by the thread so switching conversations remounts cleanly,
             // while WITHIN a thread the turns stay keyed by turn_index (below) —
