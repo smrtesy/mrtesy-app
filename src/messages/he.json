@@ -4810,6 +4810,16 @@
       "done": "האיגוד עודכן",
       "none": "ללא נושא"
     },
+    "mergeQueue": {
+      "pending": "ממתין למיזוג",
+      "building": "בונה…",
+      "deploying": "ממזג ומעלה…",
+      "mergeBy": "יימזג עד {time}",
+      "countdown": "עוד ~{mins} דק׳",
+      "soon": "מיד",
+      "failed": "המיזוג נכשל",
+      "conflict": "התנגשות מיזוג"
+    },
     "usage": {
       "tokens": "טוקנים",
       "tooltip": "טוקנים בשיחה הזו — קלט: {input} · פלט: {output}"

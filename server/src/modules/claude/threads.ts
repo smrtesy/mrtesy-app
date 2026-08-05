@@ -29,6 +29,7 @@ import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
 import { removeThreadWorkspace, sweepWorkspaces } from "./workspace";
+import { MAX_WAIT_MS } from "./deploy-coordinator";
 import {
   runSplitAnalysis,
   applySplit,
@@ -264,6 +265,36 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     }
   }
 
+  // Deploy-queue state per thread — the rail's "ממתין למיזוג" (pending-merge)
+  // category. One row per thread while a server/** fix waits for the coordinator to
+  // batch-merge it; the row is deleted once the deploy lands (state 'done'), so we
+  // skip 'done' and surface only the still-pending states (building/ready/deploying)
+  // plus the stuck terminals (failed/conflict, which stay so the rail can show why).
+  // `deadline` is the hard cap the coordinator honours: the batch ships by
+  // created_at + MAX_WAIT_MS at the latest ("will merge by"). Service-role only
+  // table (RLS, no client policy) — the browser can't read it, so the list carries it.
+  const deployByThread = new Map<
+    string,
+    { state: string; title: string; error: string | null; deadline: string }
+  >();
+  if (ids.length > 0) {
+    const { data: dqRows, error: dqErr } = await db
+      .from("claude_deploy_queue")
+      .select("thread_id, state, title, error, created_at")
+      .in("thread_id", ids)
+      .neq("state", "done");
+    if (dqErr) console.error("[claude/threads] deploy queue failed:", dqErr.message);
+    for (const r of dqRows ?? []) {
+      if (!r.thread_id) continue;
+      deployByThread.set(r.thread_id, {
+        state: r.state,
+        title: (r.title ?? "").trim(),
+        error: r.error ?? null,
+        deadline: new Date(new Date(r.created_at).getTime() + MAX_WAIT_MS).toISOString(),
+      });
+    }
+  }
+
   // First user message per thread — the deterministic title fallback (see
   // firstLinePreview). Fetched ONLY for the threads that lack an AI title, so the
   // response never carries prompt text we won't use. turn_index=1 is the first turn
@@ -290,6 +321,8 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     last_status: lastStatus.get(r.id) ?? null,
     // Only when the AI title is absent; the client uses it as the rail fallback.
     preview: (r.title ?? "").trim() ? null : firstPrompt.get(r.id) || null,
+    // Deploy-queue state (pending-merge category + countdown), null when not queued.
+    deploy: deployByThread.get(r.id) ?? null,
   }));
   return res.json({ threads });
 });

@@ -4811,6 +4811,16 @@
       "done": "Grouping updated",
       "none": "No topic"
     },
+    "mergeQueue": {
+      "pending": "Pending merge",
+      "building": "Building…",
+      "deploying": "Merging & deploying…",
+      "mergeBy": "Merges by {time}",
+      "countdown": "~{mins} min left",
+      "soon": "any moment",
+      "failed": "Merge failed",
+      "conflict": "Merge conflict"
+    },
     "usage": {
       "tokens": "tokens",
       "tooltip": "Tokens in this conversation — input: {input} · output: {output}"
