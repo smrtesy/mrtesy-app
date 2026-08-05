@@ -34,6 +34,16 @@ cap_cost numeric, pct int, threshold_crossed int, alerted bool)` — שורה
 (placeholder — אין עדיין אירוע-מיצוי שבועי לכיול). **המדד הוא
 `total_cost_usd`** — עלות-API-שקולה, פרוקסי, לא נתון-אמת מאנתרופיק.
 
+## מצב — הושלם (2026-08-05)
+
+כל שלב 4 נבנה ונדחף: endpoint `GET /claude/account-usage` (`routes.ts`), רכיב
+`UsageMeter.tsx`, חיווט ב-`ChatComposer`/`ClaudeChat`, ומפתחות `claudeChat.meter`
+בשני קבצי ההודעות. שני חידודים מעבר לספק המקורי: (1) המד השבועי מחזיר `pct=null`
+עד שקיים אירוע-מיצוי שבועי אמיתי (`claude_usage_hits kind='weekly'`) — התקרה
+`$200` היא placeholder, ואחוז מולה היה נקרא כמדידה אמיתית; (2) הכיול האוטומטי
+(שנבנה יחד, לפי ההמלצה למטה) רץ רק ב-`p_dry_run=false`, כדי שקריאת-מסך לא תכתוב
+ל-DB. פרטי הכיול: `docs/claude-usage-calibration-process.md`.
+
 ## מה נשאר לבנות — שלב 4
 
 ### 1. צד-שרת — endpoint `GET /claude/account-usage`

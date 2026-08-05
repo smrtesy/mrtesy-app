@@ -250,6 +250,98 @@ router.get("/claude/usage", async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /claude/account-usage?account=<acct> — the live limit ESTIMATE for one
+ * Claude account, for the composer's usage meter (the filling-circle icon).
+ *
+ * Reads the SAME estimator the alert cron uses (check_claude_usage_limits, called
+ * dry-run so no notifications fire) for the rolling 5-hour window, plus a rolling
+ * 7-day total for the weekly figure. This is an ESTIMATE from our own runs vs a
+ * calibrated cap — NOT Anthropic's real remaining quota, which is not exposed on
+ * a Team plan (see the /claude/usage disclaimer). Weekly has no calibration event
+ * yet, so it is display-only.
+ */
+router.get("/claude/account-usage", async (req: Request, res: Response) => {
+  const account =
+    typeof req.query.account === "string" && req.query.account.trim()
+      ? req.query.account.trim()
+      : null;
+  if (!account) return res.status(400).json({ error: "account required" });
+
+  // 5-hour window from the shared estimator. p_dry_run=true → read-only, never
+  // files an alert (that is the cron's job, not a screen read's).
+  const { data: sessRows, error: sErr } = await db.rpc("check_claude_usage_limits", {
+    p_dry_run: true,
+  });
+  if (sErr) {
+    console.error("[claude/account-usage] estimator failed:", sErr.message);
+    return res.status(500).json({ error: "usage unavailable" });
+  }
+  const s =
+    (sessRows as { claude_account: string; window_end: string; cost_used: number; cap_cost: number; pct: number }[] | null)?.find(
+      (r) => r.claude_account === account,
+    ) ?? null;
+
+  // Weekly: rolling 7-day cost vs the weekly cap (calibrated per-account, else '*').
+  const weekSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: wkRows, error: wkErr } = await db
+    .from("claude_runs")
+    .select("total_cost_usd")
+    .eq("claude_account", account)
+    .gte("created_at", weekSince);
+  if (wkErr) console.error("[claude/account-usage] weekly cost read failed:", wkErr.message);
+  const weekCost = (wkRows ?? []).reduce(
+    (a, r) => a + (Number(r.total_cost_usd) || 0),
+    0,
+  );
+  const { data: capRows, error: capErr } = await db
+    .from("claude_usage_limits")
+    .select("claude_account, cap_cost_usd")
+    .in("claude_account", [account, "*"])
+    .eq("window_kind", "weekly");
+  if (capErr) console.error("[claude/account-usage] weekly cap read failed:", capErr.message);
+  const weekCap = Number(
+    capRows?.find((c) => c.claude_account === account)?.cap_cost_usd ??
+      capRows?.find((c) => c.claude_account === "*")?.cap_cost_usd ??
+      0,
+  );
+
+  // A weekly PERCENT is only honest once a real weekly limit-hit has calibrated the
+  // cap — the seeded '*' weekly cap ($200) is an explicit placeholder, so a percent
+  // against it would read as a real reading when it is a guess. Until a weekly hit
+  // exists we return pct:null (the meter shows "not calibrated yet") but still show
+  // the 7-day cost. Matches docs test 4: weekly is display-only until it's calibrated.
+  const { count: weeklyHits, error: whErr } = await db
+    .from("claude_usage_hits")
+    .select("id", { count: "exact", head: true })
+    .eq("kind", "weekly");
+  if (whErr) console.error("[claude/account-usage] weekly-hits read failed:", whErr.message);
+  const weeklyCalibrated = (weeklyHits ?? 0) > 0 && weekCap > 0;
+
+  return res.json({
+    account,
+    // Clamp the displayed percent to 100 — over-100 means "used up", and a meter
+    // that fills past full reads as broken (this was the 272% bug in the alert).
+    session: s
+      ? {
+          pct: Math.min(100, s.pct),
+          pct_raw: s.pct,
+          cost_used: Number(s.cost_used),
+          cap: Number(s.cap_cost),
+          window_end: s.window_end,
+        }
+      : null,
+    weekly: weeklyCalibrated
+      ? {
+          pct: Math.min(100, Math.floor((weekCost / weekCap) * 100)),
+          cost_used: Math.round(weekCost * 100) / 100,
+          cap: weekCap,
+        }
+      : { pct: null, cost_used: Math.round(weekCost * 100) / 100, cap: null },
+    disclaimer: "אומדן מהצריכה דרך הכלים שלנו — לא נתון רשמי מאנתרופיק",
+  });
+});
+
+/**
  * GET /api/claude/efficiency — the "is the console wasting tools/turns" panel.
  *
  * Runs the Level-1 waste detector (efficiency.ts) over the org's most recent

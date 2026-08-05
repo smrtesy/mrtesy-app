@@ -1558,6 +1558,23 @@ async function executeRunBody(runId: string): Promise<void> {
       .maybeSingle();
     if (wErr) console.error("[claude/runner] usage-limit park failed:", wErr.message);
     if (parked) {
+      // Record the exhaustion event append-only RIGHT NOW — this park is the only
+      // moment the "100% used" ground truth exists. The recoverer will resume this
+      // run and flip error back to 'done', erasing the usage-limit-wait sign, so a
+      // field that flips cannot be the source (docs/claude-usage-calibration-process.md).
+      // record_claude_usage_hit reconstructs the account's window and snapshots its
+      // consumption from claude_runs; idempotent per (account, kind, window). The
+      // CLI names which limit was hit ("weekly limit" vs "session limit").
+      if (run.claude_account) {
+        const usageKind = /weekly\s+limit/i.test(failureText) ? "weekly" : "session";
+        const { error: hitErr } = await db.rpc("record_claude_usage_hit", {
+          p_account: run.claude_account,
+          p_kind: usageKind,
+          p_reset_at: resetAt ? resetAt.toISOString() : null,
+        });
+        if (hitErr)
+          console.error("[claude/runner] usage-hit record failed:", hitErr.message);
+      }
       if (appAccess) void revokeAppAccess(appAccess.token);
       return;
     }

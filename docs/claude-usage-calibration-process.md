@@ -97,10 +97,14 @@ append-only ברגע שהוא קורה — לא להסתמך על שדה שמת�
 - ✅ טבלת `claude_usage_limits` + פונקציית `check_claude_usage_limits` + cron
   15 דק' + התראות 70/90 — חי (migration `20260804200000`).
 - ✅ מדד = `total_cost_usd`; cap = $58 (מכויל מ-2 אירועים).
-- ⬜ **טבלת `claude_usage_hits`** (append-only) — לבנות.
-- ⬜ **תיעוד ברגע-park ב-`runner.ts`** — לבנות.
-- ⬜ **כיול אוטומטי בפונקציה** (cap = חציון מ-hits) — לבנות.
-- ⬜ בדיקות 1–5 מצטברות ככל שנאספים אירועים.
+- ✅ **טבלת `claude_usage_hits`** (append-only) — נבנתה (migration `20260805120000`).
+- ✅ **תיעוד ברגע-park ב-`runner.ts`** — קורא ל-`record_claude_usage_hit` מיד אחרי
+  ה-park המוצלח, מזהה `kind` מהטקסט (weekly/session), לפני שה-recoverer מוחק את הסימן.
+- ✅ **כיול אוטומטי בפונקציה** (cap = חציון cost בחלון מלא, נספר-מחדש חי מ-`claude_runs`) —
+  בתוך `check_claude_usage_limits`, רץ רק ב-`p_dry_run=false` (הקרון), נעצר עד ≥3
+  אירועי-session (weekly ≥1) כדי לא לדרוס את בסיס-הידע הידני ($58) בטרם עת.
+- ⬜ בדיקות 1–5 מצטברות ככל שנאספים אירועים (הטבלה מתחילה ריקה — האירועים
+  ההיסטוריים נמחקו כשהריצות התאוששו, אין גיבוי-לאחור; צוברים מכאן והלאה).
 
 היישום הוא backend בלבד (migration + runner + פונקציה) — עצמאי מכרטיס-ה-UI
 של שלב 4 (`docs/claude-usage-card-stage4.md`). אפשר לבנות במקביל.
