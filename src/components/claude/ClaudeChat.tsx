@@ -22,6 +22,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleUser,
+  Clock,
   Crosshair,
   Loader2,
   MessageSquarePlus,
@@ -173,6 +174,16 @@ interface Thread {
    *  endpoint ONLY when the AI `title` is absent — so an untitled thread still reads
    *  as something in the rail. Null when a title exists or there's no clean prompt. */
   preview?: string | null;
+  /** Deploy-queue state when this thread has a server/** fix waiting to merge into
+   *  main — drives the rail's "ממתין למיזוג" category and its countdown. Null when the
+   *  thread isn't queued (the coordinator deletes the row once the deploy lands).
+   *  `deadline` is the hard cap ISO ("will merge by"); `error` is set on failed/conflict. */
+  deploy?: {
+    state: "building" | "ready" | "deploying" | "failed" | "conflict";
+    title: string;
+    error: string | null;
+    deadline: string;
+  } | null;
 }
 
 /** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
@@ -1317,22 +1328,38 @@ export function ClaudeChat() {
               <p className="p-2 text-xs text-muted-foreground">…</p>
             ) : threads.length === 0 ? (
               <p className="p-2 text-xs text-muted-foreground">{t("noThreads")}</p>
-            ) : grouped ? (
-              renderGroupedRail(threads, topics, activeId, t, pickThread, remove, (id, h) =>
-                void setHandled(id, h),
-              )
             ) : (
-              sortHandledLast(threads).map((x) => (
-                <ThreadRow
-                  key={x.id}
-                  thread={x}
-                  active={activeId === x.id}
-                  onOpen={() => pickThread(x.id)}
-                  onRemove={() => void remove(x.id)}
-                  onToggleHandled={() => void setHandled(x.id, !x.handled_at)}
-                  t={t}
-                />
-              ))
+              (() => {
+                // Threads with a fix waiting in the deploy queue lift out into the
+                // pinned "ממתין למיזוג" category above; the rest render as usual
+                // (flat or topic-grouped) so a queued thread never shows twice.
+                const queued = threads.filter((x) => x.deploy);
+                const rest = threads.filter((x) => !x.deploy);
+                return (
+                  <>
+                    {queued.length > 0 && (
+                      <DeployQueueGroup threads={queued} activeId={activeId} onOpen={pickThread} t={t} />
+                    )}
+                    {grouped ? (
+                      renderGroupedRail(rest, topics, activeId, t, pickThread, remove, (id, h) =>
+                        void setHandled(id, h),
+                      )
+                    ) : (
+                      sortHandledLast(rest).map((x) => (
+                        <ThreadRow
+                          key={x.id}
+                          thread={x}
+                          active={activeId === x.id}
+                          onOpen={() => pickThread(x.id)}
+                          onRemove={() => void remove(x.id)}
+                          onToggleHandled={() => void setHandled(x.id, !x.handled_at)}
+                          t={t}
+                        />
+                      ))
+                    )}
+                  </>
+                );
+              })()
             )}
           </div>
         </aside>
@@ -1986,6 +2013,129 @@ function renderGroupedRail(
   }
 
   return <>{groups}</>;
+}
+
+/**
+ * The "ממתין למיזוג" (pending-merge) category, pinned above the rest of the rail. It
+ * groups the threads whose server/** fix is waiting in the deploy queue — building /
+ * ready (with a countdown to the hard-cap "will merge by" moment) / deploying — plus
+ * the stuck terminals (failed / conflict) shown with a red badge and the reason. A
+ * single 30s ticker drives every row's countdown so the minutes fall between the
+ * rail's 5s list polls; the deadline itself is authoritative from the server.
+ */
+function DeployQueueGroup({
+  threads,
+  activeId,
+  onOpen,
+  t,
+}: {
+  threads: Thread[];
+  activeId: string | null;
+  onOpen: (id: string) => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div>
+      <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        <Clock className="size-3" />
+        {t("mergeQueue.pending")}
+      </p>
+      {threads.map((x) => (
+        <DeployRow
+          key={`dq-${x.id}`}
+          thread={x}
+          active={activeId === x.id}
+          now={now}
+          onOpen={() => onOpen(x.id)}
+          t={t}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** One row of the pending-merge category: status dot, title, and a status line that is
+ *  either a countdown (ready), a spinner-word (building/deploying), or a red reason
+ *  (failed/conflict). */
+function DeployRow({
+  thread,
+  active,
+  now,
+  onOpen,
+  t,
+}: {
+  thread: Thread;
+  active: boolean;
+  now: number;
+  onOpen: () => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const d = thread.deploy;
+  if (!d) return null;
+  const stuck = d.state === "failed" || d.state === "conflict";
+  const running = d.state === "building" || d.state === "deploying";
+
+  let status: ReactNode;
+  if (stuck) {
+    const label = d.state === "conflict" ? t("mergeQueue.conflict") : t("mergeQueue.failed");
+    status = (
+      <span className="flex items-start gap-1 text-destructive">
+        <AlertTriangle className="mt-px size-3 shrink-0" />
+        <span className="line-clamp-2">{d.error ? `${label} · ${d.error}` : label}</span>
+      </span>
+    );
+  } else if (d.state === "building") {
+    status = <span>{t("mergeQueue.building")}</span>;
+  } else if (d.state === "deploying") {
+    status = <span>{t("mergeQueue.deploying")}</span>;
+  } else {
+    // ready → countdown to the hard-cap "will merge by" moment, shown in NY time.
+    const mins = Math.ceil((new Date(d.deadline).getTime() - now) / 60_000);
+    const time = new Date(d.deadline).toLocaleTimeString("he-IL", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "America/New_York",
+    });
+    status = (
+      <span>
+        {t("mergeQueue.mergeBy", { time })} · {mins > 0 ? t("mergeQueue.countdown", { mins }) : t("mergeQueue.soon")}
+      </span>
+    );
+  }
+
+  return (
+    <div className={cn("group flex flex-col gap-0.5 border-b border-dashed px-2 py-1.5", active && "bg-muted")}>
+      <div className="flex items-center gap-1.5">
+        {running ? (
+          <span className="relative flex size-2 shrink-0" title={t("mergeQueue.pending")}>
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-600 opacity-75" />
+            <span className="relative inline-flex size-2 rounded-full bg-amber-600" />
+          </span>
+        ) : (
+          <span
+            className={cn("size-2 shrink-0 rounded-full", stuck ? "bg-destructive" : "bg-amber-600")}
+            title={t("mergeQueue.pending")}
+          />
+        )}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 line-clamp-1 break-words text-start text-xs"
+          dir="rtl"
+        >
+          {railThreadTitle(thread, t("untitled"))}
+        </button>
+      </div>
+      <button type="button" onClick={onOpen} className="ps-3.5 text-start text-[10px] text-muted-foreground" dir="rtl">
+        {status}
+      </button>
+    </div>
+  );
 }
 
 /**
