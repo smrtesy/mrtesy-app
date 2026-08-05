@@ -295,27 +295,33 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
   );
   const { data: capRows, error: capErr } = await db
     .from("claude_usage_limits")
-    .select("claude_account, cap_cost_usd")
+    .select("claude_account, cap_cost_usd, note")
     .in("claude_account", [account, "*"])
     .eq("window_kind", "weekly");
   if (capErr) console.error("[claude/account-usage] weekly cap read failed:", capErr.message);
-  const weekCap = Number(
-    capRows?.find((c) => c.claude_account === account)?.cap_cost_usd ??
-      capRows?.find((c) => c.claude_account === "*")?.cap_cost_usd ??
-      0,
-  );
+  const capRow =
+    capRows?.find((c) => c.claude_account === account) ??
+    capRows?.find((c) => c.claude_account === "*") ??
+    null;
+  const weekCap = Number(capRow?.cap_cost_usd ?? 0);
 
-  // A weekly PERCENT is only honest once a real weekly limit-hit has calibrated the
-  // cap — the seeded '*' weekly cap ($200) is an explicit placeholder, so a percent
-  // against it would read as a real reading when it is a guess. Until a weekly hit
-  // exists we return pct:null (the meter shows "not calibrated yet") but still show
-  // the 7-day cost. Matches docs test 4: weekly is display-only until it's calibrated.
+  // A weekly PERCENT is only honest once the cap is calibrated: EITHER a real
+  // weekly limit-hit set it, OR it was hand-anchored to a real reading from
+  // Claude's own usage tool (the operator writes that cap with a note prefixed
+  // "manual calib"). The bare seeded '*' placeholder ($200) has neither, so its
+  // percent stays hidden (pct:null → the meter shows "not calibrated yet") while
+  // still displaying the 7-day cost. NOTE the window mismatch: we sum a ROLLING
+  // 7 days, whereas Claude's weekly limit resets on a fixed weekday — so this
+  // percent tracks Claude closely mid-week but will read higher than Claude's
+  // right after its reset (our window still carries the prior days). It is an
+  // estimate, per the disclaimer, not a mirror of Claude's counter.
   const { count: weeklyHits, error: whErr } = await db
     .from("claude_usage_hits")
     .select("id", { count: "exact", head: true })
     .eq("kind", "weekly");
   if (whErr) console.error("[claude/account-usage] weekly-hits read failed:", whErr.message);
-  const weeklyCalibrated = (weeklyHits ?? 0) > 0 && weekCap > 0;
+  const manualWeekly = /^manual calib/i.test(String(capRow?.note ?? ""));
+  const weeklyCalibrated = weekCap > 0 && ((weeklyHits ?? 0) > 0 || manualWeekly);
 
   return res.json({
     account,
