@@ -401,7 +401,13 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
   // Build once on the merged result — the integration gate (each fix already
   // passed the full pre-push protocol on its own branch). Server build: this is
   // what decides whether Railway boots after the deploy.
-  const install = await exec("npm", ["install", "--no-audit", "--no-fund"], {
+  // `--include=dev` is REQUIRED: the coordinator runs with NODE_ENV=production
+  // (Railway sets it), under which npm omits devDependencies — but the build below
+  // is `tsc`, and both `typescript` and every `@types/*` package are devDeps. A
+  // plain `npm install` here leaves them out, so `npm run build` fails with
+  // "Could not find a declaration file for module 'express'" and a perfectly good
+  // merged batch is parked `failed`. `--include=dev` overrides the production omit.
+  const install = await exec("npm", ["install", "--no-audit", "--no-fund", "--include=dev"], {
     cwd: path.join(DEPLOY_DIR, "server"),
     timeoutMs: BUILD_TIMEOUT_MS,
     env,
