@@ -34,6 +34,12 @@ import { db } from "../../db";
 import { notify } from "../../lib/platform/notify";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
 import { markThreadShipped } from "./ship-status";
+import { executeRun } from "./runner";
+
+/** How many times the coordinator hands a merge conflict back to its own session for
+ *  autonomous resolution before giving up and asking the human. A conflict usually
+ *  clears on the first rebase-and-reship; the cap stops an unresolvable one looping. */
+const MAX_CONFLICT_RETRIES = 2;
 
 /** Master switch. The coordinator AND the push-gate are both gated on this, so
  *  with it unset the entire feature is inert (nothing queues, nothing deploys). */
@@ -51,6 +57,11 @@ export const MAX_WAIT_MS = 30 * 60_000;
 /** A 'building' row whose run stopped heartbeating this long ago is an abandoned
  *  fix — dropped so it can't hold the batch forever. */
 const STALE_BUILDING_MS = 5 * 60_000;
+/** A 'conflict' row whose self-resolve turn hasn't re-shipped (flipping it back to
+ *  'ready') within this long is escalated to the human — the safety net for a resolve
+ *  turn that gave up, failed its build, or stalled, so a conflict is never silently
+ *  stranded. Generous: a real rebase-resolve-build-reship completes well under it. */
+const STALE_CONFLICT_MS = 30 * 60_000;
 /** The batch's push redeploys Railway, which SIGTERMs every live console run
  *  mid-turn — the real reason console runs "fall" (diagnosed 2026-08-06: it's
  *  deploy restarts, NOT OOM). So hold the batch until no run is actively working:
@@ -100,6 +111,7 @@ interface QueueRow {
   state: string;
   created_at: string;
   updated_at: string;
+  conflict_attempts: number;
 }
 
 /** Run a command, capturing exit code + stdout + stderr (github.ts's own runner
@@ -163,6 +175,81 @@ async function tellOwner(
     body,
     link: `/claude?thread=${row.thread_id}`,
   }).catch((e) => console.error("[deploy-coord] notify failed:", e instanceof Error ? e.message : e));
+}
+
+/**
+ * Hand a merge conflict back to the thread that produced it, as a new autonomous turn.
+ * The session (a Claude agent with full shell) rebases its own branch on the current
+ * main, resolves the conflict, rebuilds and re-ships — so the fix appears as a real
+ * turn IN the conversation (not a silent server-side park) and needs no human. Runs on
+ * the subscription, zero paid tokens. Returns true when the turn was enqueued.
+ *
+ * Mirrors the essential half of the /messages route: next turn_index, a follow-up
+ * prompt (the thread's session already holds the standing instructions), and
+ * executeRun when nothing else is live. Best-effort — a failure just leaves the row
+ * for the human-notification fallback.
+ */
+async function enqueueResolveTurn(row: QueueRow, message: string): Promise<boolean> {
+  const { data: thread, error: tErr } = await db
+    .from("claude_threads")
+    .select("id, org_id, created_by, session_id, model, effort, repo, git_branch, claude_account, playbook_id")
+    .eq("id", row.thread_id)
+    .maybeSingle();
+  if (tErr || !thread) {
+    console.error("[deploy-coord] resolve-turn: thread load failed:", tErr?.message);
+    return false;
+  }
+
+  const { data: last } = await db
+    .from("claude_runs")
+    .select("turn_index")
+    .eq("thread_id", thread.id)
+    .order("turn_index", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const turnIndex = (last?.turn_index ?? 0) + 1;
+
+  // Is a turn already executing/queued for this thread? Then queue BEHIND it as
+  // 'waiting' (the dispatcher promotes it) rather than starting a second engine
+  // process in the one workspace.
+  const { data: liveRuns } = await db
+    .from("claude_runs")
+    .select("id")
+    .eq("thread_id", thread.id)
+    .in("status", ["running", "queued", "waiting"])
+    .limit(1);
+  const hasLive = (liveRuns?.length ?? 0) > 0;
+
+  const { data: run, error: iErr } = await db
+    .from("claude_runs")
+    .insert({
+      org_id: thread.org_id,
+      created_by: thread.created_by,
+      thread_id: thread.id,
+      turn_index: turnIndex,
+      title: "פתרון קונפליקט מיזוג",
+      prompt: message,
+      user_prompt: message,
+      playbook_id: null, // a follow-up turn — the resumed session already holds the setup
+      model: thread.model,
+      effort: thread.effort,
+      repo: thread.repo,
+      git_branch: thread.git_branch,
+      claude_account: thread.claude_account,
+      status: hasLive ? "waiting" : "queued",
+    })
+    .select("id")
+    .single();
+  if (iErr || !run) {
+    console.error("[deploy-coord] resolve-turn: insert failed:", iErr?.message);
+    return false;
+  }
+  if (!hasLive) {
+    void executeRun(run.id).catch((e) =>
+      console.error("[deploy-coord] resolve-turn executeRun threw:", e instanceof Error ? e.message : e),
+    );
+  }
+  return true;
 }
 
 async function setState(id: string, state: string, error?: string | null): Promise<void> {
@@ -326,6 +413,40 @@ async function dropStaleBuilding(): Promise<void> {
 }
 
 /**
+ * Safety net for self-heal: a 'conflict' row whose autonomous resolve turn never came
+ * back (it gave up, its build failed so ship.sh never re-marked it, or it stalled) sits
+ * 'conflict' forever — the coordinator only rescans building/ready, so nothing would
+ * ever surface it. Age it out to the human: red dot + notification, once (state→failed,
+ * which the scan also skips, so it can't re-fire). A late resolve re-ship still recovers
+ * it (mark-ready flips failed→ready). Its updated_at is bumped on every real attempt, so
+ * this only fires when the resolve genuinely didn't return within STALE_CONFLICT_MS.
+ */
+async function escalateStaleConflicts(): Promise<void> {
+  const { data: rows, error } = await db.from("claude_deploy_queue").select("*").eq("state", "conflict");
+  if (error) {
+    console.error("[deploy-coord] stale-conflict scan failed:", error.message);
+    return;
+  }
+  const staleBefore = Date.now() - STALE_CONFLICT_MS;
+  for (const row of (rows ?? []) as QueueRow[]) {
+    if (Date.parse(row.updated_at ?? "") >= staleBefore) continue; // still inside the resolve window
+    await setState(row.id, "failed", `${row.branch ?? "?"}: self-resolve did not return`);
+    await markThreadShipped(row.thread_id, {
+      state: "failed",
+      branch: row.branch,
+      detail: "קונפליקט מיזוג — הפתרון האוטומטי לא הושלם",
+    });
+    await tellOwner(
+      row,
+      "action_required",
+      "קונפליקט מיזוג — צריך את עזרתך",
+      `הענף \`${row.branch}\` נשאר בקונפליקט — הפתרון האוטומטי לא חזר. פתור ידנית ושַלֵּח שוב.`,
+    );
+    console.log(`[deploy-coord] stale conflict on ${row.branch} escalated to human`);
+  }
+}
+
+/**
  * Is any console run actively working right now? A run counts as active only if its
  * status is running/queued AND its heartbeat is fresher than RUN_HEARTBEAT_FRESH_MS
  * — a stale-heartbeat run is dead or sleeping (e.g. parked on a usage limit) and does
@@ -352,7 +473,9 @@ async function activeRunsExist(): Promise<boolean> {
 
 /**
  * The batch deploy: merge every ready branch into main, build once, push once.
- * Rows are already 'deploying'. Never auto-resolves a conflict — it surfaces it.
+ * Rows are already 'deploying'. A genuine conflict is handed back to its own session
+ * for autonomous resolution (enqueueResolveTurn), capped by conflict_attempts, then
+ * escalated to the human — the coordinator itself never edits conflicted code.
  */
 async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean): Promise<void> {
   const env = gitEnvForRun(token);
@@ -405,6 +528,15 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
       { cwd: DEPLOY_DIR, timeoutMs: GIT_TIMEOUT_MS, env },
     );
     if (m.code !== 0) {
+      // Capture which files conflict BEFORE aborting (the abort clears the index) —
+      // so the resolve turn (and the operator) get the actual file list, not "batch".
+      const conflictFiles = (
+        await exec("git", ["diff", "--name-only", "--diff-filter=U"], {
+          cwd: DEPLOY_DIR,
+          timeoutMs: 30_000,
+          env,
+        })
+      ).stdout.trim();
       await exec("git", ["merge", "--abort"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
 
       // Transient vs. genuine conflict. If origin/main moved since we snapshotted it,
@@ -439,13 +571,56 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
         }
       }
 
-      await setState(row.id, "conflict", "merge conflict with the batch");
-      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "קונפליקט מיזוג" });
+      const filesLabel = conflictFiles || "(לא זוהו קבצים ספציפיים)";
+      // SELF-HEALING: hand the conflict back to the session that wrote the branch as an
+      // autonomous turn — it rebases on current main, resolves, rebuilds and re-ships.
+      // The row stays 'conflict' (the coordinator skips it) until that re-ship flips it
+      // back to 'ready' via mark-ready. Capped by conflict_attempts so an unresolvable
+      // conflict falls back to the human instead of looping forever.
+      if (row.conflict_attempts < MAX_CONFLICT_RETRIES) {
+        const enqueued = await enqueueResolveTurn(
+          row,
+          `⚠️ הפריסה של הענף \`${row.branch}\` נכשלה במיזוג ל-main — **קונפליקט מיזוג** בקבצים:\n` +
+            `${filesLabel}\n\n` +
+            `ענף אחר שנפרס לפניך נגע באותן שורות. פתור בעצמך, בלי לשאול אותי:\n` +
+            `1. ודא שאתה על הענף \`${row.branch}\` (אם לא: \`git fetch origin ${row.branch} && git checkout ${row.branch}\`).\n` +
+            `2. \`git fetch origin main\`, ומזג \`origin/main\` לתוך הענף — פתור את הקונפליקטים בקבצים שלמעלה — שמור על שני הצדדים כשצריך, אל תדרוס עיוור.\n` +
+            `3. הרץ את פרוטוקול לפני-הדחיפה (build) ותקן כל שגיאה.\n` +
+            `4. שַלֵּח שוב עם \`scripts/ship.sh ${row.branch}\`.\n\n` +
+            `(שאר הצרור כבר נפרס ל-main; רק הענף שלך נשאר.)`,
+        );
+        if (enqueued) {
+          // State + counter in ONE checked write. If it fails, the counter wouldn't
+          // advance (risking an unbounded loop), so fall through to the human path.
+          const { error: incErr } = await db
+            .from("claude_deploy_queue")
+            .update({
+              state: "conflict",
+              error: `merge conflict in: ${filesLabel} — self-resolving (attempt ${row.conflict_attempts + 1})`,
+              conflict_attempts: row.conflict_attempts + 1,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", row.id);
+          if (!incErr) {
+            // No red dot / no notification: the enqueued turn makes the thread live, so
+            // the rail shows it working — that IS the "here's what's happening" reference.
+            // A resolve turn that never re-ships is caught by escalateStaleConflicts().
+            console.log(`[deploy-coord] conflict on ${row.branch} handed back to its session (attempt ${row.conflict_attempts + 1})`);
+            continue;
+          }
+          console.error("[deploy-coord] conflict_attempts increment failed:", incErr.message);
+        }
+        // enqueue (or the counter write) failed → fall through to the human notification.
+      }
+
+      // Cap reached (or couldn't enqueue): stop auto-resolving, ask the human.
+      await setState(row.id, "conflict", `merge conflict in: ${filesLabel}`);
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: `קונפליקט מיזוג: ${filesLabel}` });
       await tellOwner(
         row,
         "action_required",
         "קונפליקט מיזוג — צריך את עזרתך",
-        `הענף \`${row.branch}\` מתנגש עם הצרור. שאר הצרור נפרס; פתור את הקונפליקט ודחוף שוב.`,
+        `הענף \`${row.branch}\` מתנגש עם הצרור בקבצים: ${filesLabel}. ניסיונות הפתרון האוטומטיים מוצו — פתור ידנית ושַלֵּח שוב.`,
       );
       continue;
     }
@@ -550,6 +725,7 @@ async function coordinatorTick(): Promise<void> {
     }
 
     await dropStaleBuilding();
+    await escalateStaleConflicts();
 
     const { data: rows, error } = await db
       .from("claude_deploy_queue")
