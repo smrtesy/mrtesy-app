@@ -204,6 +204,9 @@ interface Thread {
   /** Waiting on the usage-limit window to reset (yellow hourglass). ISO reset moment
    *  when known, "" when the window is unknown, null when not waiting. */
   usage_wait_until?: string | null;
+  /** Parked because a backend deploy is in flight — the turn holds until the server
+   *  restarts and comes back healthy, then resumes (yellow hourglass). */
+  deploy_wait?: boolean | null;
   /** A pending destructive-migration approval — the "needs you" blue hourglass. (A
    *  merge conflict, the other needs-you case, is read from `deploy.state`.) */
   needs_you?: boolean;
@@ -2032,6 +2035,9 @@ function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>):
   if (thread.usage_wait_until != null) {
     const at = thread.usage_wait_until ? ` · ${railTimeNY(thread.usage_wait_until)}` : "";
     return { shape: "hourglass", cls: "text-amber-500", label: `${t("dot.waitUsage")}${at}` };
+  }
+  if (thread.deploy_wait) {
+    return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitDeploy") };
   }
   if (deployState === "ready" || deployState === "deploying") {
     return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitMerge") };

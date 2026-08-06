@@ -441,6 +441,37 @@ async function activeRunsExist(): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
+/** A 'deploying' row older than this is a stuck/abandoned batch — it must NOT keep
+ *  holding new runs forever. Normally a 'deploying' row lives only minutes: the
+ *  coordinator sets it, builds, pushes, and the restart's reconcile clears it within
+ *  ~40s of the fresh boot. This bound is the backstop for a batch that never lands. */
+const DEPLOY_STALE_MS = 15 * 60_000;
+
+/**
+ * Is a batch deploy in flight right now? True iff a fresh 'deploying' row exists —
+ * i.e. the coordinator has claimed a batch and is merging/building/pushing, so the
+ * Railway backend is about to restart. The runner uses this to PARK a newly-arriving
+ * run instead of spawning a child that the imminent restart would just SIGTERM
+ * mid-turn (the run then resumes on the healthy process — see recover.ts's
+ * deploy-wait branch). Fails OPEN (returns false): a DB error must not stall the
+ * whole console by parking every new run — a missed hold risks at most one
+ * restart-kill, which recovery already handles.
+ */
+export async function deployInFlight(): Promise<boolean> {
+  const freshAfter = new Date(Date.now() - DEPLOY_STALE_MS).toISOString();
+  const { data, error } = await db
+    .from("claude_deploy_queue")
+    .select("id")
+    .eq("state", "deploying")
+    .gte("updated_at", freshAfter)
+    .limit(1);
+  if (error) {
+    console.error("[deploy-coord] deployInFlight check failed (not holding):", error.message);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
+}
+
 /**
  * The batch deploy: merge every ready branch into main, build once, push once.
  * Rows are already 'deploying'. A genuine conflict is handed back to its own session

@@ -57,7 +57,9 @@ import {
   RUN_TIMEOUT_MS,
   USAGE_LIMIT_SENTINEL,
   USAGE_UNTIL_RE,
+  DEPLOY_WAIT_SENTINEL,
 } from "./runner";
+import { deployInFlight } from "./deploy-coordinator";
 import { dispatchNextWaiting } from "./threads";
 
 /** A run untouched this long with no in-process child is treated as orphaned. Well
@@ -206,6 +208,52 @@ async function recoverOrphanedRuns(): Promise<void> {
   for (const run of candidates ?? []) {
     // Owned by this process (including the pre-spawn clone window) — not orphaned.
     if (isRunLive(run.id)) continue;
+
+    // A run parked because a batch deploy was in flight when it arrived (runner.ts
+    // parks it 'queued' with DEPLOY_WAIT_SENTINEL, so it never spawns into a process
+    // that's about to be SIGTERM-killed by the redeploy). Wait — WITHOUT burning a
+    // resume attempt — until the deploy has landed, then resume it on the healthy
+    // process. deployInFlight() self-bounds (a 'deploying' row stale >15m stops
+    // counting), so a deploy that never lands can't strand the run forever.
+    if ((run.error ?? "") === DEPLOY_WAIT_SENTINEL) {
+      if (await deployInFlight()) continue; // still deploying — keep waiting
+      // Deploy landed: atomically clear the sentinel (only one scan wins) and resume.
+      const { data: claimed, error: cErr } = await db
+        .from("claude_runs")
+        .update({ error: null, updated_at: new Date().toISOString() })
+        .eq("id", run.id)
+        .eq("status", "queued")
+        .eq("error", DEPLOY_WAIT_SENTINEL)
+        .select("id")
+        .maybeSingle();
+      if (cErr || !claimed) continue; // another scan took it, or it changed under us
+      // Clear any events defensively (a park usually has none) so a resume's seq 1..N
+      // can't collide on UNIQUE(run_id, seq) — same as the usage path. On failure,
+      // restore the sentinel so the row stays a deploy-wait park, never an orphan
+      // (which would burn a resume attempt).
+      const { error: dErr } = await db.from("claude_run_events").delete().eq("run_id", run.id);
+      if (dErr) {
+        console.error("[claude/recover] could not clear deploy-parked events:", dErr.message);
+        const { error: rsErr } = await db
+          .from("claude_runs")
+          .update({ error: DEPLOY_WAIT_SENTINEL, updated_at: new Date().toISOString() })
+          .eq("id", run.id)
+          .eq("status", "queued");
+        if (rsErr) console.error("[claude/recover] deploy sentinel restore failed:", rsErr.message);
+        continue;
+      }
+      // NB: no markReplayed here — a deploy-park is set BEFORE the child spawns, so the
+      // run never ran and there is nothing to replay-guard. (In the rare case it was
+      // parked AFTER a prior partial attempt, the orphan recovery that led here already
+      // added the note — adding it again would just stack it.)
+      console.warn(`[claude/recover] resuming deploy-parked run ${run.id}`);
+      void executeRun(run.id)
+        .then(() => (run.thread_id ? dispatchNextWaiting(run.thread_id, run.org_id) : undefined))
+        .catch((e) =>
+          console.error("[claude/recover] deploy resume threw:", e instanceof Error ? e.message : e),
+        );
+      continue;
+    }
 
     // A run parked on the subscription usage limit (runner.ts parks it 'queued'
     // with the sentinel on `error`). Its own slow-cadence retry loop, SEPARATE
