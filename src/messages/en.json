@@ -4860,6 +4860,11 @@
       "done": "Grouping updated",
       "none": "No topic"
     },
+    "search": {
+      "open": "Search chats",
+      "placeholder": "Search by title…",
+      "noResults": "No results"
+    },
     "mergeQueue": {
       "pending": "Pending merge",
       "building": "Building…",

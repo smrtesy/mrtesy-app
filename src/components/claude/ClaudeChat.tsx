@@ -62,7 +62,7 @@ import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { Scissors, FolderTree, ExternalLink, ListTree } from "lucide-react";
+import { Scissors, FolderTree, ExternalLink, ListTree, Search } from "lucide-react";
 
 /**
  * Models, with the id visible — not just a friendly name.
@@ -348,6 +348,15 @@ export function ClaudeChat() {
   const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
   const [grouped, setGrouped] = useState(false);
   const [regrouping, setRegrouping] = useState(false);
+  /** Rail search — a collapsed magnifier by default (compact-UI convention);
+   *  clicking it reveals an input row that filters the rail by thread title,
+   *  client-side over the already-loaded list. Escape / the X closes and resets. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
   /** The Claude accounts the console can run on — feeds the header switcher. Loaded
    *  once; empty until then, which hides the switcher rather than showing a guess. */
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -1285,6 +1294,18 @@ export function ClaudeChat() {
               <MessageSquarePlus className="size-4" />
               {t("newChat")}
             </Button>
+            {/* Collapsed search — a quiet magnifier next to the group toggle; click
+                to reveal the filter input below (compact-UI convention). */}
+            <Button
+              size="sm"
+              variant={searchOpen ? "secondary" : "ghost"}
+              className="h-8 w-8 p-0"
+              onClick={() => setSearchOpen((v) => !v)}
+              aria-label={t("search.open")}
+              title={t("search.open")}
+            >
+              <Search className="size-4" />
+            </Button>
             {/* Group-by-topic toggle. Off by default so the rail is a plain list;
                 the folder icon opts in, matching the compact-UI convention. */}
             <Button
@@ -1323,6 +1344,21 @@ export function ClaudeChat() {
               <X className="size-4" />
             </Button>
           </div>
+          {searchOpen && (
+            <div className="relative border-b p-2">
+              <Search className="pointer-events-none absolute top-1/2 start-4 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") closeSearch();
+                }}
+                placeholder={t("search.placeholder")}
+                className="h-8 ps-8 text-xs"
+              />
+            </div>
+          )}
           <div ref={railScrollRef} className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
               <p className="p-2 text-xs text-muted-foreground">…</p>
@@ -1330,17 +1366,34 @@ export function ClaudeChat() {
               <p className="p-2 text-xs text-muted-foreground">{t("noThreads")}</p>
             ) : (
               (() => {
+                // Rail search: filter the loaded list by title / fallback preview /
+                // task serial. When a query is active the rail flattens (grouping is
+                // ignored) so matches across topics all show together.
+                const q = query.trim().toLowerCase();
+                const visible = q
+                  ? threads.filter((x) =>
+                      [x.title, x.preview, x.task_serial]
+                        .some((s) => s?.toLowerCase().includes(q)),
+                    )
+                  : threads;
+                if (visible.length === 0) {
+                  return (
+                    <p className="p-2 text-xs text-muted-foreground">
+                      {q ? t("search.noResults") : t("noThreads")}
+                    </p>
+                  );
+                }
                 // Threads with a fix waiting in the deploy queue lift out into the
                 // pinned "ממתין למיזוג" category above; the rest render as usual
                 // (flat or topic-grouped) so a queued thread never shows twice.
-                const queued = threads.filter((x) => x.deploy);
-                const rest = threads.filter((x) => !x.deploy);
+                const queued = visible.filter((x) => x.deploy);
+                const rest = visible.filter((x) => !x.deploy);
                 return (
                   <>
                     {queued.length > 0 && (
                       <DeployQueueGroup threads={queued} activeId={activeId} onOpen={pickThread} t={t} />
                     )}
-                    {grouped ? (
+                    {grouped && !q ? (
                       renderGroupedRail(rest, topics, activeId, t, pickThread, remove, (id, h) =>
                         void setHandled(id, h),
                       )
