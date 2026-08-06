@@ -83,10 +83,10 @@ router.post("/api/bot/jobs/scheduled", async (_req: Request, res: Response) => {
 
     const { data: bot } = await db
       .from("smrtbot_bots")
-      .select("test_wa_phone_number_id, test_wa_access_token, live_wa_phone_number_id, live_wa_access_token, wa_phone_number_id, wa_access_token")
+      .select("test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, wa_phone_number_id, wa_access_token")
       .eq("id", cfg.bot_id)
       .maybeSingle();
-    const creds = bot ? resolveCreds(bot as BotCreds, cfg.env) : null;
+    const creds = bot ? await resolveCreds(bot as BotCreds, cfg.env) : null;
     if (!creds) continue;
 
     const inactiveBefore = new Date(Date.now() - cfg.inactivity_minutes * 60_000).toISOString();
@@ -136,7 +136,7 @@ router.post("/api/bot/jobs/scheduled", async (_req: Request, res: Response) => {
 });
 
 const BOT_SELECT =
-  "id, org_id, slug, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token";
+  "id, org_id, slug, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id";
 
 // ── game daily reminders (hourly): match children whose reminder_time == now ─
 router.post("/api/bot/jobs/reminders", async (_req: Request, res: Response) => {
@@ -244,7 +244,7 @@ router.post("/api/bot/jobs/broadcasts", async (_req: Request, res: Response) => 
       const { data: bot } = await db
         .from("smrtbot_bots")
         .select(
-          "id, transport, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token",
+          "id, transport, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id",
         )
         .eq("id", b.bot_id)
         .maybeSingle();
@@ -264,7 +264,7 @@ router.post("/api/bot/jobs/broadcasts", async (_req: Request, res: Response) => 
         if (b.target_type === "group") {
           throw new Error("meta transport cannot broadcast to a group");
         }
-        const creds = resolveCreds(bot as BotCreds, "live");
+        const creds = await resolveCreds(bot as BotCreds, "live");
         if (!creds) throw new Error("bot has no live WhatsApp credentials");
         const out = b.media_url
           ? await sendImage(creds, b.target_jid, b.media_url, b.body_text || undefined)
@@ -365,7 +365,7 @@ router.post("/api/bot/jobs/daily-summary", async (_req: Request, res: Response) 
 
       if (totals.size > 0) {
         const isBaileys = bot.transport === "baileys";
-        const creds = isBaileys ? null : resolveCreds(bot as BotCreds, "live") ?? resolveCreds(bot as BotCreds, "test");
+        const creds = isBaileys ? null : (await resolveCreds(bot as BotCreds, "live")) ?? (await resolveCreds(bot as BotCreds, "test"));
         for (const [phone, mins] of totals) {
           if (sent >= DAILY_SUMMARY_MAX) break;
           const body = `📊 *סיכום יום*\nלמדת היום סה״כ ${fmtDuration(mins)}. כל הכבוד! 💪`;
@@ -413,7 +413,7 @@ router.post("/api/bot/jobs/health-check", async (_req: Request, res: Response) =
   const failed: string[] = [];
   for (const bot of (bots as (BotCreds & { id: string; org_id: string; slug: string; transport?: string | null })[]) ?? []) {
     if (bot.transport === "baileys") continue;
-    const creds = resolveCreds(bot, "live");
+    const creds = await resolveCreds(bot, "live");
     if (!creds) continue; // no live number configured — nothing to probe
     checked++;
 
