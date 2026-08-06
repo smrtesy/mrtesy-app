@@ -32,6 +32,7 @@ import {
   BG_MODEL_FAST,
   USAGE_LIMIT_SENTINEL,
   USAGE_UNTIL_RE,
+  DEPLOY_WAIT_SENTINEL,
 } from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
@@ -253,6 +254,9 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
   // to reset — that is "waiting", not "running", so it must NOT show the live pulse.
   // Value = the reset moment (ISO) when the sentinel carried one, else "".
   const usageWaitByThread = new Map<string, string>();
+  // Threads whose only non-terminal run is PARKED waiting for an in-flight deploy to
+  // land (the server is about to restart) — also "waiting", not "running".
+  const deployWaitByThread = new Set<string>();
   // Threads whose newest completed turn ends on an unanswered interactive block.
   const awaitingReplyByThread = new Set<string>();
   const lastStatus = new Map<string, string>();
@@ -273,12 +277,18 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
           const m = USAGE_UNTIL_RE.exec(err);
           usageWaitByThread.set(r.thread_id, m?.[1] ?? "");
         }
+      } else if (err === DEPLOY_WAIT_SENTINEL) {
+        // Parked until the in-flight deploy lands — waiting, not live.
+        deployWaitByThread.add(r.thread_id);
       } else {
         liveSet.add(r.thread_id);
       }
     }
     // A thread that has BOTH a real running run and a parked one is live, not waiting.
-    for (const id of liveSet) usageWaitByThread.delete(id);
+    for (const id of liveSet) {
+      usageWaitByThread.delete(id);
+      deployWaitByThread.delete(id);
+    }
 
     const { data: statusRows, error: sErr } = await db
       .from("claude_runs")
@@ -383,6 +393,7 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     // wait). ISO reset moment when known, "" when the window is unknown, null when
     // not waiting. Distinct from `live` (which is a real running turn).
     usage_wait_until: usageWaitByThread.has(r.id) ? usageWaitByThread.get(r.id) || "" : null,
+    deploy_wait: deployWaitByThread.has(r.id) || null,
     // A pending destructive-migration approval → the blue hourglass (needs you).
     needs_you: needsYouByThread.has(r.id),
     // Newest completed turn ended on an unanswered interactive question → also the

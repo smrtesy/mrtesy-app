@@ -29,6 +29,7 @@ import path from "node:path";
 import { db, getAppSecret } from "../../db";
 import { notify } from "../../lib/platform/notify";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
+import { deployInFlight } from "./deploy-coordinator";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
 import { buildThreadTranscript } from "./transcript";
@@ -538,6 +539,14 @@ export const USAGE_LIMIT_SENTINEL = "usage-limit-wait:";
  *  falls back to the 15-minute cadence. */
 export const USAGE_UNTIL_RE = /^usage-limit-wait:until=([0-9TZ:.+-]+);/;
 
+/** Same trick for a run that ARRIVES while a batch deploy is in flight: the Railway
+ *  backend is about to restart, so spawning a child now just gets it SIGTERM-killed
+ *  mid-turn (a run that "fell" because it started in the deploy window). Instead the
+ *  run is parked 'queued' with this exact sentinel on `error`, and recover.ts's
+ *  deploy-wait branch resumes it once the deploy has landed and the server is healthy
+ *  — it never consumes resume_attempts, exactly like the usage-limit park. */
+export const DEPLOY_WAIT_SENTINEL = "deploy-wait";
+
 /** Opening fence of an interactive block (smrt-ask / smrt-plan) — the server twin of
  *  the client's BLOCK_RE (`src/components/claude/interactive/blocks.ts`), OPENING only
  *  so it still matches text that was truncated before the close. Computed ONCE at run
@@ -961,6 +970,24 @@ async function executeRunBody(runId: string): Promise<void> {
   if (run.status !== "queued") {
     // Idempotent: a retry or a duplicate trigger must not run the same row twice.
     console.warn(`[claude/runner] run ${runId} is '${run.status}', not queued — skipping`);
+    return;
+  }
+
+  // Deploy-in-flight hold: if the coordinator is mid-batch (a fresh 'deploying' row),
+  // the Railway backend is about to restart — spawning the child now would just get it
+  // SIGTERM-killed mid-turn (the run that "falls" because it started in the deploy
+  // window). Park it 'queued' with the sentinel; recover.ts's deploy-wait branch
+  // resumes it once the deploy has landed and the server is healthy again. Left as
+  // 'queued' (not a new status) so every existing state machine keeps working, exactly
+  // like the usage-limit park.
+  if (await deployInFlight()) {
+    const { error: pErr } = await db
+      .from("claude_runs")
+      .update({ error: DEPLOY_WAIT_SENTINEL, updated_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("status", "queued");
+    if (pErr) console.error("[claude/runner] deploy-wait park failed:", pErr.message);
+    else console.log(`[claude/runner] run ${runId} parked — deploy in flight, will resume after restart`);
     return;
   }
 

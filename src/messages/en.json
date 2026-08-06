@@ -4778,6 +4778,7 @@
       "failed": "Last turn failed",
       "idle": "Hasn't run yet",
       "waitUsage": "Waiting for the usage window",
+      "waitDeploy": "Server updating — the message will start when it's back",
       "waitMerge": "Waiting to merge into main",
       "needsApproval": "Needs you: migration approval",
       "needsConflict": "Needs you: resolve a merge conflict",
