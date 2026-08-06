@@ -13,7 +13,7 @@
  * button and are closed until asked for. Nothing configures itself in your face.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
@@ -1811,25 +1811,25 @@ export function ClaudeChat() {
               <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
             )
           ) : (
-            // Keyed by the thread so switching conversations remounts cleanly,
-            // while WITHIN a thread the turns stay keyed by turn_index (below) —
-            // the optimistic bubble and its server row share that key, so send no
-            // longer remounts the whole list (the flicker, bug 7).
-            <div key={activeId ?? "new"} className="mx-auto flex max-w-3xl flex-col gap-3">
-              {renderTurns(
-                turns,
-                children,
-                t,
-                (id) => setActiveId(id),
-                (id) => void cancelWaiting(id),
-                // Returns the send promise so an interactive block can revert its
-                // "sent" latch if the turn fails to queue (send rethrows on error).
-                (message) => send(message, []),
-                // The live status line's "stop" — cancels the executing turn (and,
-                // for an orphaned row, clears it so the screen stops polling).
-                () => void stop(),
-              )}
-            </div>
+            // Keyed by the thread so switching conversations remounts cleanly (and
+            // resets the progressive-render window to the tail), while WITHIN a
+            // thread the turns stay keyed by turn_index (below) — the optimistic
+            // bubble and its server row share that key, so send no longer remounts
+            // the whole list (the flicker, bug 7).
+            <TurnList
+              key={activeId ?? "new"}
+              turns={turns}
+              childThreads={children}
+              t={t}
+              openThread={(id) => setActiveId(id)}
+              onCancelWaiting={(id) => void cancelWaiting(id)}
+              // Returns the send promise so an interactive block can revert its
+              // "sent" latch if the turn fails to queue (send rethrows on error).
+              onAction={(message) => send(message, [])}
+              // The live status line's "stop" — cancels the executing turn (and,
+              // for an orphaned row, clears it so the screen stops polling).
+              onStop={() => void stop()}
+            />
           )}
           <div ref={bottomRef} />
         </div>
@@ -2307,6 +2307,84 @@ function DeployRow({
   );
 }
 
+/** A single malformed or oversized event must not blank the whole conversation.
+ *  Each turn bubble renders inside this boundary: a render-time throw is swallowed
+ *  to a quiet one-line fallback (getDerivedStateFromError) instead of taking the
+ *  whole list down with it. A class because React error boundaries can't be hooks;
+ *  the label is passed in since a class can't call useTranslations. */
+class TurnErrorBoundary extends Component<
+  { label: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="flex justify-start">
+          <div className="rounded-2xl border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
+            {this.props.label}
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/** Progressive render: a heavy thread (hundreds of bubbles, each a full Markdown
+ *  parse) blocked the UI for seconds on open — reading as a blank screen. Only the
+ *  newest TURN_WINDOW turns mount by default; a "show earlier" row reveals older
+ *  ones in steps. Newest turns always render (the list is sliced from the end), so
+ *  a live/last turn and its interactive blocks are never hidden. Keyed by thread in
+ *  the parent, so the window resets to the tail on every thread switch. */
+const TURN_WINDOW = 15;
+const TURN_WINDOW_STEP = 25;
+
+function TurnList(props: {
+  turns: Turn[];
+  childThreads: ChildThread[];
+  t: ReturnType<typeof useTranslations>;
+  openThread: (id: string) => void;
+  onCancelWaiting: (id: string) => void;
+  onAction: (message: string) => Promise<void> | void;
+  onStop: () => void;
+}) {
+  const { turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop } = props;
+  const [visible, setVisible] = useState(TURN_WINDOW);
+  // Build the full node list first so the moved-turn folding, lastLiveIndex and
+  // context-restored gating stay computed over the WHOLE thread; only the tail is
+  // mounted.
+  const nodes = renderTurns(turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop);
+  // Grow the window by however many nodes appeared, so a new turn arriving on a
+  // live thread never folds an older turn the user already revealed back behind
+  // "show earlier" — the hidden count stays put while the newest turn shows.
+  const prevCount = useRef(nodes.length);
+  useEffect(() => {
+    const grew = nodes.length - prevCount.current;
+    prevCount.current = nodes.length;
+    if (grew > 0) setVisible((v) => v + grew);
+  }, [nodes.length]);
+  const hidden = Math.max(0, nodes.length - visible);
+  const shown = hidden > 0 ? nodes.slice(hidden) : nodes;
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col gap-3">
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setVisible((v) => v + TURN_WINDOW_STEP)}
+          className="mx-auto rounded-full border border-dashed px-3 py-1 text-[11px] text-muted-foreground transition hover:bg-muted"
+        >
+          {t("showEarlier", { count: hidden })}
+        </button>
+      )}
+      {shown}
+    </div>
+  );
+}
+
 /**
  * Render the conversation, folding any run of consecutive moved turns into a single
  * "N turns moved to <child>" row. The moved turns are still present in the data —
@@ -2345,15 +2423,19 @@ function renderTurns(
     const turn = turns[i];
     if (!turn.moved_to_thread_id) {
       out.push(
-        <TurnView
-          key={turn.turn_index}
-          turn={turn}
-          hadPriorDoneTurn={seenPriorDone}
-          onCancelWaiting={onCancelWaiting}
-          isLast={i === lastLiveIndex}
-          onAction={onAction}
-          onStop={onStop}
-        />,
+        // Each bubble is isolated: one malformed/oversized event that throws
+        // during render collapses to a quiet one-line fallback instead of
+        // blanking the whole conversation (the white-screen failure mode).
+        <TurnErrorBoundary key={turn.turn_index} label={t("turnRenderError")}>
+          <TurnView
+            turn={turn}
+            hadPriorDoneTurn={seenPriorDone}
+            onCancelWaiting={onCancelWaiting}
+            isLast={i === lastLiveIndex}
+            onAction={onAction}
+            onStop={onStop}
+          />
+        </TurnErrorBoundary>,
       );
       if (turn.status === "done") seenPriorDone = true;
       i += 1;
