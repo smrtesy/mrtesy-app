@@ -36,7 +36,7 @@
  */
 
 import { db } from "../../../db";
-import { runOneShot, pickHealthyAccount } from "../../claude/runner";
+import { runAnalysisOneShot } from "../../claude/runner";
 import { notify } from "../../../lib/platform/notify";
 import { validateRuleAgainstGoldenSet, type GoldenCheck } from "./golden";
 import { createDiagnosisRun } from "./diagnose";
@@ -281,14 +281,14 @@ async function runTriage(correctionId: string): Promise<void> {
     const orgId = correction.organization_id as string;
 
     const evidence = await gatherEvidence(correction as Record<string, unknown>);
-    const raw = await runOneShot(buildPrompt(note, evidence), {
+    // Automated classification check — runs as a background analysis one-shot with
+    // live account failover: prefers the dedicated `automation` account, and when it
+    // is over its weekly limit falls over to any other configured account that still
+    // has quota. Pinning this to one account meant a single account's weekly-limit
+    // outage failed every triage for days ("המיון האוטומטי לא הצליח לרוץ").
+    const raw = await runAnalysisOneShot(buildPrompt(note, evidence), {
       timeoutMs: 120_000,
-      // Automated classification check — route to a healthy background account
-      // (the dedicated `automation` account when it has quota, otherwise any other
-      // configured account not currently over its weekly limit). Pinning this to
-      // one account meant a single account's weekly-limit outage failed every
-      // triage for days.
-      account: await pickHealthyAccount(),
+      label: "corrections-triage",
     });
     const verdict = raw ? parseVerdict(raw) : null;
 

@@ -25,7 +25,7 @@
  */
 
 import { db } from "../../../db";
-import { runOneShot, pickHealthyAccount } from "../../claude/runner";
+import { runAnalysisOneShot } from "../../claude/runner";
 
 /** One labelled row the rule is measured against. */
 interface Conflict {
@@ -135,12 +135,12 @@ export async function validateRuleAgainstGoldenSet(
       "רק הודעות שהכלל היה משנה את סיווגן לרעה נכנסות ל-conflicts. אם אין — החזר conflicts ריק.",
     ].join("\n");
 
-    const raw = await runOneShot(prompt, {
+    // Automated classification check — background analysis one-shot with live
+    // account failover (prefers `automation`, falls over to any configured account
+    // still under its weekly limit).
+    const raw = await runAnalysisOneShot(prompt, {
       timeoutMs: 120_000,
-      // Automated classification check — route to a healthy background account
-      // (prefers `automation`, falls back to any configured account not over its
-      // weekly limit).
-      account: await pickHealthyAccount(),
+      label: "corrections-golden",
     });
     if (!raw) return unknown(`נבדק מול ${sample.length} מקרים — הבדיקה לא הצליחה לרוץ`);
 

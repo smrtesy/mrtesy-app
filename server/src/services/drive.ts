@@ -62,6 +62,95 @@ export async function listNewFiles(
   return res.data.files ?? [];
 }
 
+// Drive `q` is a string literal; a single quote in user input closes the
+// literal and lets the rest be reinterpreted. Escape it (backslash-quote is
+// Drive's own escaping) before interpolating any user-supplied term.
+function escapeDriveQuery(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+export interface DriveFileHit {
+  id: string;
+  name: string;
+  webViewLink: string;
+  mimeType: string;
+}
+
+/**
+ * Full-text search across the user's Drive for a free-text term. Server-side
+ * replacement for the browser call that used to read the plaintext
+ * access_token from user_credentials — the token now never leaves the server.
+ */
+export async function searchFiles(
+  userId: string,
+  keywords: string,
+  pageSize = 10,
+): Promise<DriveFileHit[]> {
+  const term = keywords.trim();
+  if (!term) return [];
+  const drive = await getDriveClient(userId);
+  const res = await drive.files.list({
+    q: `fullText contains '${escapeDriveQuery(term)}' and trashed = false`,
+    fields: "files(id, name, webViewLink, mimeType)",
+    pageSize,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  return (res.data.files ?? []) as DriveFileHit[];
+}
+
+export interface DriveFolderHit {
+  id: string;
+  name: string;
+}
+
+/**
+ * Search the user's Drive for folders whose name contains `query`. Used by the
+ * onboarding folder picker.
+ */
+export async function searchFolders(
+  userId: string,
+  query: string,
+  pageSize = 10,
+): Promise<DriveFolderHit[]> {
+  const term = query.trim();
+  if (term.length < 2) return [];
+  const drive = await getDriveClient(userId);
+  const res = await drive.files.list({
+    q: `mimeType = 'application/vnd.google-apps.folder' and name contains '${escapeDriveQuery(term)}' and trashed = false`,
+    fields: "files(id, name)",
+    pageSize,
+    orderBy: "name",
+    corpora: "allDrives",
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
+  });
+  return (res.data.files ?? []) as DriveFolderHit[];
+}
+
+/**
+ * Resolve a single folder id to its name (used when the user pastes a Drive
+ * folder URL). Returns null when the folder doesn't exist or isn't accessible.
+ */
+export async function resolveFolder(
+  userId: string,
+  folderId: string,
+): Promise<DriveFolderHit | null> {
+  const drive = await getDriveClient(userId);
+  try {
+    const res = await drive.files.get({
+      fileId: folderId,
+      fields: "id, name",
+      supportsAllDrives: true,
+    });
+    const f = res.data;
+    if (!f?.id || !f?.name) return null;
+    return { id: f.id, name: f.name };
+  } catch {
+    return null;
+  }
+}
+
 const PDF_EXTRACT_PROMPT =
   "מסמך זה הועלה ל-Google Drive. חלץ את תוכנו:\n" +
   "1. זהה את סוג המסמך (חשבונית, חוזה, מכתב, טופס, דו\"ח וכו').\n" +

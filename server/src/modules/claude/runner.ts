@@ -284,52 +284,94 @@ export async function describeAccounts(): Promise<AccountInfo[]> {
 }
 
 /**
- * Pick an account for AUTOMATED background work (corrections triage / diagnosis /
- * fix-and-discuss threads) that is NOT currently over a usage limit.
- *
- * These workloads used to be pinned to one account (`automation`). When that single
- * account exhausted its weekly subscription limit, EVERY correction silently failed
- * ("המיון האוטומטי לא הצליח לרוץ") for days — even though other configured accounts
- * (e.g. ai3/ai4) still had quota. This routes the work to a healthy account instead.
- *
- * "Blocked" = a `claude_usage_windows` row marked `status='rejected'` whose
- * `resets_at` is still in the future — Anthropic's OWN ground truth, persisted from
- * the CLI's `rate_limit_event` (recordUsageWindow). Once that reset instant passes,
- * the account is eligible again with no write needed — self-healing.
- *
- * Preference order: the `preferred` account (default `automation`) when healthy —
- * keeping automated work off the user's interactive (`primary`) window, as the
- * automation account was designed to — then any other configured, non-blocked
- * account, preferring a non-primary one so the console's own window stays free.
- * Falls back to `preferred` when nothing is clearly healthy (no usage data yet →
- * identical to the previous behavior). Never throws — account selection must not
- * fail the background job.
+ * The set of accounts currently BLOCKED by a live usage window — Anthropic's own
+ * ground truth in claude_usage_windows: a row whose reset instant is still in the
+ * future and whose status is 'rejected' means that window is exhausted right now.
+ * One query, read once per pick. Fail OPEN on any read error (empty set): a
+ * monitoring blip must never divert background work off its intended account.
  */
-export async function pickHealthyAccount(
-  preferred: string = AUTOMATION_ACCOUNT,
-): Promise<string> {
+async function exhaustedAccounts(): Promise<Set<string>> {
+  const out = new Set<string>();
   try {
-    const configured = (await describeAccounts())
-      .filter((a) => a.configured)
-      .map((a) => a.id);
-    if (!configured.length) return preferred;
-
-    const { data: windows } = await db
+    const { data, error } = await db
       .from("claude_usage_windows")
-      .select("claude_account, resets_at")
-      .eq("status", "rejected")
-      .gt("resets_at", new Date().toISOString());
-    const blocked = new Set((windows ?? []).map((w) => w.claude_account as string));
-
-    if (configured.includes(preferred) && !blocked.has(preferred)) return preferred;
-
-    const healthy = configured.filter((id) => !blocked.has(id));
-    if (!healthy.length) return preferred; // everything blocked — no better option
-    // Prefer a non-primary healthy account so the console's account stays free.
-    return healthy.find((id) => id !== PRIMARY_ACCOUNT) ?? healthy[0];
-  } catch {
-    return preferred;
+      .select("claude_account, resets_at, status");
+    if (error || !data) return out;
+    const now = Date.now();
+    for (const w of data as { claude_account: string; resets_at: string | null; status: string | null }[]) {
+      if (w.status === "rejected" && w.resets_at && new Date(w.resets_at).getTime() > now) {
+        out.add(w.claude_account);
+      }
+    }
+  } catch (e) {
+    console.error("[claude/runner] exhausted-accounts read threw:", e instanceof Error ? e.message : e);
   }
+  return out;
+}
+
+/**
+ * The ORDERED list of accounts a BACKGROUND analysis one-shot (split / group /
+ * decompose) should try, best-first.
+ *
+ * Intent, unchanged: keep background work OFF the user's interactive window by
+ * defaulting to the dedicated `automation` account. The bug this fixes: when the
+ * automation account has hit its OWN subscription limit, every user-triggered
+ * analysis failed with an automation-account limit error surfaced inside a chat
+ * that itself runs fine on another account (e.g. ai3). So the preference is
+ * automation → the thread's own account → primary → any other configured
+ * account; and any account whose usage window says it is exhausted RIGHT NOW is
+ * pushed to the back (tried only as a last resort) so we don't waste a call on a
+ * known-dead account. primary is always usable (loadAccountToken falls back to
+ * it); every other id must have its own token configured to actually route there.
+ * Always non-empty.
+ */
+export async function pickAnalysisAccounts(threadAccount?: string | null): Promise<string[]> {
+  const [infos, blocked] = await Promise.all([describeAccounts(), exhaustedAccounts()]);
+  const configured = new Set(infos.filter((a) => a.configured).map((a) => a.id));
+  const preference = [
+    AUTOMATION_ACCOUNT,
+    (threadAccount ?? "").trim().toLowerCase() || null,
+    PRIMARY_ACCOUNT,
+    ...configured,
+  ].filter((id): id is string => !!id);
+  const usable: string[] = [];
+  const seen = new Set<string>();
+  for (const id of preference) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (id === PRIMARY_ACCOUNT || configured.has(id)) usable.push(id);
+  }
+  // Unblocked first, then window-exhausted ones as a last resort.
+  const ordered = [...usable.filter((id) => !blocked.has(id)), ...usable.filter((id) => blocked.has(id))];
+  return ordered.length ? ordered : [AUTOMATION_ACCOUNT];
+}
+
+/**
+ * Run a background analysis one-shot with live usage-limit FAILOVER across the
+ * accounts pickAnalysisAccounts returns. We try them in order and retry on the
+ * next account ONLY when a run failed specifically on a subscription usage limit —
+ * any other failure (a bad/empty model reply, a timeout, a spawn error) returns
+ * null WITHOUT burning a second account.
+ *
+ * This closes the gap the pre-check alone can't: automation exhaustion that never
+ * recorded a claude_usage_windows row. One-shots use `--output-format text` and
+ * never observe a `rate_limit_event`, so the window table can be blind to an
+ * automation account that only ever exhausts via one-shots — but the live 429 on
+ * the first attempt here is what then diverts to the next account.
+ */
+export async function runAnalysisOneShot(
+  prompt: string,
+  opts: { model?: string; timeoutMs?: number; label?: string; maxChars?: number },
+  threadAccount?: string | null,
+): Promise<string | null> {
+  const accounts = await pickAnalysisAccounts(threadAccount);
+  for (const account of accounts) {
+    const { text, usageLimited } = await runOneShotDetailed(prompt, { ...opts, account });
+    if (text !== null) return text;
+    if (!usageLimited) return null; // non-limit failure — don't double-spend on it
+    // usage-limited on this account → fall through to the next candidate, if any.
+  }
+  return null;
 }
 
 /**
@@ -1032,7 +1074,7 @@ async function executeRunBody(runId: string): Promise<void> {
   // silent background run into a phone ping.
   const effectiveAccount =
     (run.claude_account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT
-      ? await pickHealthyAccount()
+      ? (await pickAnalysisAccounts(run.claude_account))[0] ?? run.claude_account
       : run.claude_account;
   // Trimmed because this value is pasted by a human through an admin form, where a
   // stray newline or space rides along easily and would be sent verbatim. The key
@@ -1921,6 +1963,26 @@ export async function runOneShot(
     timeoutMs?: number;
     account?: string;
     label?: string;
+    maxChars?: number;
+  } = {},
+): Promise<string | null> {
+  return (await runOneShotDetailed(prompt, opts)).text;
+}
+
+/**
+ * The full result of a one-shot: its text (null on any failure) plus whether that
+ * failure was specifically a subscription USAGE LIMIT. `runAnalysisOneShot` reads
+ * `usageLimited` to decide whether to fail over to another account; `runOneShot`
+ * is the thin wrapper that keeps the historical text-or-null contract for the many
+ * callers that don't care why it failed.
+ */
+export async function runOneShotDetailed(
+  prompt: string,
+  opts: {
+    model?: string;
+    timeoutMs?: number;
+    account?: string;
+    label?: string;
     /**
      * Max chars of stdout to KEEP. Defaults to 8 KB — right for a title or a
      * short analysis, but callers that expect a long body (e.g. a whole
@@ -1928,9 +1990,9 @@ export async function runOneShot(
      */
     maxChars?: number;
   } = {},
-): Promise<string | null> {
+): Promise<{ text: string | null; usageLimited: boolean }> {
   const { token } = await loadAccountToken(opts.account);
-  if (!token) return null;
+  if (!token) return { text: null, usageLimited: false };
 
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };
   delete env.ANTHROPIC_API_KEY;
@@ -2011,7 +2073,7 @@ export async function runOneShot(
     child.on("error", (e) => {
       clearTimeout(timer);
       logProvenance(false, { code: null, stderr: `spawn error: ${e instanceof Error ? e.message : String(e)}` });
-      resolve(null);
+      resolve({ text: null, usageLimited: false });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -2019,7 +2081,11 @@ export async function runOneShot(
       // A non-zero exit with output on stdout is rare; prefer stderr, fall back to
       // the stdout tail so an error message printed to stdout isn't lost either.
       logProvenance(result !== null, { code, stderr: err || out });
-      resolve(result);
+      // Was this failure a subscription usage limit? Read the SAME detector the
+      // full-run path uses, over both streams — that is the signal runAnalysisOneShot
+      // fails over on. A success (result !== null) is never usage-limited.
+      const usageLimited = result === null && detectUsageLimit(`${err}\n${out}`);
+      resolve({ text: result, usageLimited });
     });
   });
 }
