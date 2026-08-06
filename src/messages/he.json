@@ -4863,6 +4863,12 @@
       "done": "האיגוד עודכן",
       "none": "ללא נושא"
     },
+    "search": {
+      "open": "חיפוש בצ'אטים",
+      "placeholder": "חיפוש בכותרת ובתוכן…",
+      "searching": "מחפש…",
+      "noResults": "אין תוצאות"
+    },
     "mergeQueue": {
       "pending": "ממתין למיזוג",
       "building": "בונה…",

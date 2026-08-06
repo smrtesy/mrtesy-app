@@ -4864,6 +4864,12 @@
       "done": "Grouping updated",
       "none": "No topic"
     },
+    "search": {
+      "open": "Search chats",
+      "placeholder": "Search title & content…",
+      "searching": "Searching…",
+      "noResults": "No results"
+    },
     "mergeQueue": {
       "pending": "Pending merge",
       "building": "Building…",
