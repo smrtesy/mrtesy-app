@@ -5,7 +5,6 @@ import { useTranslations } from "next-intl";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Loader2, ExternalLink, FolderSearch, Sparkles } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -26,7 +25,6 @@ interface DriveFile {
 
 export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: DriveSearchProps) {
   const t = useTranslations("tasks.actions");
-  const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [summarizing, setSummarizing] = useState<string | null>(null);
@@ -38,19 +36,6 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
     setFiles([]);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      // Get Drive credentials
-      const { data: cred } = await supabase
-        .from("user_credentials")
-        .select("access_token")
-        .eq("user_id", user.id)
-        .eq("service", "google_drive")
-        .single();
-
-      if (!cred) throw new Error("Drive not connected");
-
       // Extract keywords using simple approach (first 5 significant words)
       const keywords = taskDescription
         .replace(/[^\w\sא-ת]/g, "")
@@ -59,15 +44,11 @@ export function DriveSearch({ taskId, taskDescription, open, onClose, onDone }: 
         .slice(0, 5)
         .join(" ");
 
-      // Search Drive
-      const query = encodeURIComponent(`fullText contains '${keywords}'`);
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,webViewLink,mimeType)&pageSize=10`,
-        { headers: { Authorization: `Bearer ${cred.access_token}` } }
+      // Search Drive via the server — the Drive token stays on the backend
+      // (§5.1 security hardening; the browser no longer reads user_credentials).
+      const data = await api<{ files: DriveFile[] }>(
+        `/api/sync/drive/search-files?q=${encodeURIComponent(keywords)}`
       );
-
-      if (!resp.ok) throw new Error(`Drive API: ${resp.status}`);
-      const data = await resp.json();
       setFiles(data.files || []);
       setSearched(true);
 

@@ -16,7 +16,7 @@
  */
 
 import { db } from "../../db";
-import { runOneShot, AUTOMATION_ACCOUNT, BG_MODEL_STRONG } from "./runner";
+import { runAnalysisOneShot, BG_MODEL_STRONG } from "./runner";
 
 /** A single topic the split analysis found inside a wandering thread. */
 export interface SplitTopic {
@@ -137,19 +137,21 @@ export async function runSplitAnalysis(
   // decision 2026-08) rather than a pinned strong model. The human approval gate is
   // what holds the "model proposes, code confirms" line here, not a forced model.
   // thread.model null → runOneShot passes no --model → the engine's default, which is
-  // exactly what the thread's own turns run on. Automation account so it never eats
-  // the interactive window.
+  // exactly what the thread's own turns run on. Runs on the automation account so it
+  // never eats the interactive window — but runAnalysisOneShot fails over to this
+  // thread's own account (then primary / any free one) when automation is exhausted or
+  // hits its limit mid-call, so an exhausted automation account can't dead-end this
+  // user-triggered analysis.
   const { data: splitThread } = await db
     .from("claude_threads")
-    .select("model")
+    .select("model, claude_account")
     .eq("id", threadId)
     .maybeSingle();
-  const reply = await runOneShot(prompt, {
-    timeoutMs: 120_000,
-    account: AUTOMATION_ACCOUNT,
-    model: splitThread?.model ?? undefined,
-    label: "split-analysis",
-  });
+  const reply = await runAnalysisOneShot(
+    prompt,
+    { timeoutMs: 120_000, model: splitThread?.model ?? undefined, label: "split-analysis" },
+    splitThread?.claude_account,
+  );
   const parsed = parseJsonReply(reply) as { topics?: unknown; confidence?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.topics)) {
     await advanceGate();
@@ -357,11 +359,12 @@ export async function runGroupAnalysis(orgId: string, userId: string | null): Pr
   // Group analysis APPLIES directly (assigned_by='auto'), unlike split/decompose which
   // only propose — so a weak model's mistake here is NOT caught by a human gate. And
   // there is no single "session" to inherit a model from (this is an org-wide pass over
-  // many threads). Both reasons keep it pinned to the strong model. Automation account
-  // so it never eats the interactive window.
-  const reply = await runOneShot(prompt, {
+  // many threads). Both reasons keep it pinned to the strong model. Runs on the
+  // automation account so it never eats the interactive window; org-wide, so there is
+  // no single thread account to prefer — runAnalysisOneShot fails over to primary /
+  // any free account when automation is exhausted.
+  const reply = await runAnalysisOneShot(prompt, {
     timeoutMs: 120_000,
-    account: AUTOMATION_ACCOUNT,
     model: BG_MODEL_STRONG,
     label: "group-analysis",
   });
@@ -487,19 +490,20 @@ export async function runDecomposeAnalysis(
   // Decompose only PROPOSES — applyDecompose is a separate, user-approved step — so
   // like split it runs on the model the thread is open on (the user's choice) rather
   // than a pinned strong model; the approval gate is the real guard. thread.model null
-  // → engine default (what the thread's own turns use). Automation account so it never
-  // eats the interactive window.
+  // → engine default (what the thread's own turns use). Runs on the automation account
+  // so it never eats the interactive window — but runAnalysisOneShot fails over to
+  // this thread's own account (then primary / any free one) when automation is
+  // exhausted, so an exhausted automation account can't dead-end this analysis.
   const { data: decomposeThread } = await db
     .from("claude_threads")
-    .select("model")
+    .select("model, claude_account")
     .eq("id", threadId)
     .maybeSingle();
-  const reply = await runOneShot(prompt, {
-    timeoutMs: 120_000,
-    account: AUTOMATION_ACCOUNT,
-    model: decomposeThread?.model ?? undefined,
-    label: "decompose-analysis",
-  });
+  const reply = await runAnalysisOneShot(
+    prompt,
+    { timeoutMs: 120_000, model: decomposeThread?.model ?? undefined, label: "decompose-analysis" },
+    decomposeThread?.claude_account,
+  );
   const parsed = parseJsonReply(reply) as { parts?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.parts)) return null;
 

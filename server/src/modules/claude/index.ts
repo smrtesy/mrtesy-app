@@ -44,9 +44,9 @@ export { startClaudeRunRecovery } from "./recover";
 // gate) is exported separately so server/src/index.ts can mount it OUTSIDE the
 // super-admin chain — a CLI child has no JWT, only the shared internal secret.
 export { claudeActionM2MRouter } from "./actions-routes";
-// The coalescing deploy queue's machine surface (register-building / mark-ready),
+// The coalescing deploy queue's machine surface (mark-ready / mark-shipped),
 // x-cron-secret gated — mounted OUTSIDE the super-admin chain like claudeActionM2MRouter,
-// because the caller is a console run's hook / push step with the shared secret, not a JWT.
+// because the caller is a console run's push step with the shared secret, not a JWT.
 export { default as claudeDeployQueueRouter } from "./deploy-queue";
 // The coalescing deploy coordinator — started once from server/src/index.ts after
 // listen. Inert unless DEPLOY_QUEUE_ENABLED=1. docs/claude-console/deploy-queue-plan.md.

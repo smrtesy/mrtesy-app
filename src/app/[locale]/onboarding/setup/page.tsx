@@ -67,7 +67,6 @@ export default function OnboardingSetup() {
   const [selectedFolder, setSelectedFolder] = useState<string>("");
   const [selectedFolderName, setSelectedFolderName] = useState<string>("");
   const [driveConnected, setDriveConnected] = useState(false);
-  const [driveToken, setDriveToken] = useState<string>("");
   // Skip-rules state: addresses or domains that should never be turned into
   // tasks. `direction` controls trigger format:
   //   "from"  → from=<addr>          (incoming only)
@@ -92,21 +91,20 @@ export default function OnboardingSetup() {
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  // Check if Drive is connected and get token
+  // Check if Drive is connected. We only need existence, never the token —
+  // Drive searches now go through the server (§5.1 security hardening), so the
+  // browser never reads user_credentials.access_token.
   useEffect(() => {
     async function checkDrive() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       const { data: creds } = await supabase
         .from("user_credentials")
-        .select("access_token")
+        .select("service")
         .eq("user_id", user.id)
         .eq("service", "google_drive")
-        .single();
-      if (creds) {
-        setDriveConnected(true);
-        setDriveToken(creds.access_token);
-      }
+        .maybeSingle();
+      if (creds) setDriveConnected(true);
     }
     checkDrive();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -122,7 +120,7 @@ export default function OnboardingSetup() {
       // with .single()) so the calendar list never rendered during onboarding.
       const { data: creds } = await supabase
         .from("user_credentials")
-        .select("access_token")
+        .select("service")
         .eq("user_id", user.id)
         .eq("service", "gmail")
         .maybeSingle();
@@ -153,55 +151,45 @@ export default function OnboardingSetup() {
 
   // Drive folder search (debounced)
   const searchDriveFolders = useCallback(async (query: string) => {
-    if (!driveToken || query.length < 2) {
+    if (!driveConnected || query.length < 2) {
       setSearchResults([]);
       setShowResults(false);
       return;
     }
 
-    // Check if input is a Google Drive folder URL
+    // Check if input is a Google Drive folder URL. Resolution runs on the
+    // server — the Drive token never reaches the browser (§5.1 hardening).
     const urlMatch = query.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/);
     if (urlMatch) {
       setSearchLoading(true);
       try {
         const folderId = urlMatch[1];
-        const resp = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${folderId}?fields=id,name&supportsAllDrives=true`,
-          { headers: { Authorization: `Bearer ${driveToken}` } }
+        const { folder } = await api<{ folder: DriveFolder }>(
+          `/api/sync/drive/resolve-folder?id=${encodeURIComponent(folderId)}`
         );
-        if (resp.ok) {
-          const folder = await resp.json();
-          setSelectedFolder(folder.id);
-          setSelectedFolderName(folder.name);
-          setFolderSearch(folder.name);
-          setShowResults(false);
-          setSearchResults([]);
-        } else {
-          toast.error(tSetup("folderNotFound"));
-        }
-      } catch { /* ignore */ }
+        setSelectedFolder(folder.id);
+        setSelectedFolderName(folder.name);
+        setFolderSearch(folder.name);
+        setShowResults(false);
+        setSearchResults([]);
+      } catch {
+        toast.error(tSetup("folderNotFound"));
+      }
       setSearchLoading(false);
       return;
     }
 
-    // Regular text search
+    // Regular text search — server-side, token stays on the backend.
     setSearchLoading(true);
     try {
-      const q = encodeURIComponent(
-        `mimeType='application/vnd.google-apps.folder' and name contains '${query.replace(/'/g, "\\'")}' and trashed=false`
+      const { folders } = await api<{ folders: DriveFolder[] }>(
+        `/api/sync/drive/search-folders?q=${encodeURIComponent(query)}`
       );
-      const resp = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=10&orderBy=name&corpora=allDrives&includeItemsFromAllDrives=true&supportsAllDrives=true`,
-        { headers: { Authorization: `Bearer ${driveToken}` } }
-      );
-      if (resp.ok) {
-        const data = await resp.json();
-        setSearchResults(data.files || []);
-        setShowResults(true);
-      }
+      setSearchResults(folders || []);
+      setShowResults(true);
     } catch { /* ignore */ }
     setSearchLoading(false);
-  }, [driveToken, tSetup]);
+  }, [driveConnected, tSetup]);
 
   // Handle search input change with debounce
   function handleSearchChange(value: string) {

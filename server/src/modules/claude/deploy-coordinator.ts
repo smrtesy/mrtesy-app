@@ -2,10 +2,11 @@
  * Deploy coordinator — phase 3 of docs/claude-console/deploy-queue-plan.md.
  *
  * A background loop (like recover.ts, off the request path) that drains
- * claude_deploy_queue: when the batch of server/** fixes is all 'ready' and has
- * settled (or a 30-min cap elapses), it merges every ready branch into `main`,
- * builds once, and pushes ONCE — so N parallel server fixes cause ONE redeploy
- * instead of N that kill each other.
+ * claude_deploy_queue: when the batch of server/** fixes is all 'ready', has
+ * settled, and no console run is mid-turn (or the MAX_WAIT_MS hard cap elapses), it
+ * merges every ready branch into `main`, builds once, and pushes ONCE — so N
+ * parallel server fixes cause ONE redeploy instead of N that kill each other, and
+ * that one redeploy lands in a quiet window instead of killing a live run.
  *
  * DELIBERATELY DETERMINISTIC, not an LLM "deploy-run": merging + building +
  * pushing is mechanical, so a server-side git routine is cheaper, faster and more
@@ -50,13 +51,14 @@ function enabled(): boolean {
 /** Deploy when the batch has been quiet this long (no server fix entered/updated
  *  the queue) — the user's wave has stopped. */
 const SETTLE_MS = 3 * 60_000;
-/** …or when the earliest queued fix has waited this long, no matter what. Exported
- *  so the threads list can show each queued thread its "will merge by" deadline
- *  (created_at + MAX_WAIT_MS) without duplicating the magic number. */
-export const MAX_WAIT_MS = 30 * 60_000;
-/** A 'building' row whose run stopped heartbeating this long ago is an abandoned
- *  fix — dropped so it can't hold the batch forever. */
-const STALE_BUILDING_MS = 5 * 60_000;
+/** The SINGLE hard cap: never hold the batch longer than this from the earliest
+ *  queued fix, no matter what is still holding it (settle not yet reached, or a
+ *  console run still active). Past it the batch deploys regardless (recover.ts
+ *  replays whatever the restart interrupts) — so a never-quiet console can't strand
+ *  a server fix forever. Exported so the threads list can show each queued thread
+ *  its "will merge by" deadline (created_at + MAX_WAIT_MS) without duplicating the
+ *  magic number. */
+export const MAX_WAIT_MS = 45 * 60_000;
 /** A 'conflict' row whose self-resolve turn hasn't re-shipped (flipping it back to
  *  'ready') within this long is escalated to the human — the safety net for a resolve
  *  turn that gave up, failed its build, or stalled, so a conflict is never silently
@@ -70,11 +72,6 @@ const STALE_CONFLICT_MS = 30 * 60_000;
  *  on a usage limit) and must NOT hold the deploy. Quiet windows are frequent —
  *  ~69% of 5-min samples had zero active runs — so a gap is found in minutes. */
 const RUN_HEARTBEAT_FRESH_MS = 2 * 60_000;
-/** …but never hold for a quiet window longer than this from the earliest queued
- *  fix. A perpetually-busy console must not strand a server fix forever — past this
- *  the batch deploys even into active runs (recover.ts replays what the restart
- *  interrupts). */
-const RUN_QUIET_CAP_MS = 45 * 60_000;
 /** How often the coordinator evaluates the queue. */
 const SCAN_INTERVAL_MS = 30_000;
 /** Give the server a moment to settle before the first evaluation. */
@@ -385,33 +382,6 @@ async function reconcileDeploying(rows: QueueRow[], env: NodeJS.ProcessEnv): Pro
   }
 }
 
-/** Drop 'building' rows whose run is no longer alive (abandoned fix). */
-async function dropStaleBuilding(): Promise<void> {
-  const { data: rows } = await db
-    .from("claude_deploy_queue")
-    .select("*")
-    .eq("state", "building");
-  const staleBefore = Date.now() - STALE_BUILDING_MS;
-  for (const row of (rows ?? []) as QueueRow[]) {
-    let alive = false;
-    if (row.run_id) {
-      const { data: run } = await db
-        .from("claude_runs")
-        .select("status, updated_at")
-        .eq("id", row.run_id)
-        .maybeSingle();
-      if (run && ["running", "queued"].includes(run.status)) {
-        const beat = Date.parse(run.updated_at ?? "") || 0;
-        alive = beat > staleBefore;
-      }
-    }
-    // No run reference at all → can't prove it's alive; treat an old row as stale.
-    if (!alive && Date.parse(row.updated_at ?? "") < staleBefore) {
-      await removeRow(row.id);
-    }
-  }
-}
-
 /**
  * Safety net for self-heal: a 'conflict' row whose autonomous resolve turn never came
  * back (it gave up, its build failed so ship.sh never re-marked it, or it stalled) sits
@@ -463,7 +433,7 @@ async function activeRunsExist(): Promise<boolean> {
     .limit(1);
   if (error) {
     // Fail SAFE: if we can't tell whether runs are live, assume they are and wait.
-    // Never redeploy blind into what might be a busy window — the RUN_QUIET_CAP_MS
+    // Never redeploy blind into what might be a busy window — the MAX_WAIT_MS hard
     // cap still guarantees the batch eventually ships even if this keeps erroring.
     console.error("[deploy-coord] active-run check failed (holding batch):", error.message);
     return true;
@@ -724,42 +694,34 @@ async function coordinatorTick(): Promise<void> {
       await reconcileDeploying(deployingRows as QueueRow[], env);
     }
 
-    await dropStaleBuilding();
     await escalateStaleConflicts();
 
     const { data: rows, error } = await db
       .from("claude_deploy_queue")
       .select("*")
-      .in("state", ["building", "ready"])
+      .eq("state", "ready")
       .order("created_at", { ascending: true });
     if (error) {
       console.error("[deploy-coord] scan failed:", error.message);
       return;
     }
-    const all = (rows ?? []) as QueueRow[];
-    if (all.length === 0) return;
+    const ready = (rows ?? []) as QueueRow[];
+    if (ready.length === 0) return; // nothing shippable yet
 
-    const earliest = Math.min(...all.map((r) => Date.parse(r.created_at) || Date.now()));
+    // The single hard cap: once the earliest queued fix has waited MAX_WAIT_MS, the
+    // batch deploys no matter what is still holding it (settle or an active run).
+    const earliest = Math.min(...ready.map((r) => Date.parse(r.created_at) || Date.now()));
     const pastCap = Date.now() - earliest > MAX_WAIT_MS;
 
-    const building = all.filter((r) => r.state === "building");
-    const ready = all.filter((r) => r.state === "ready");
-
-    if (ready.length === 0) return; // nothing shippable yet
-    // A fix still building holds the batch — unless we've hit the absolute cap.
-    if (building.length > 0 && !pastCap) return;
-
     // Settle: no server change entered/updated the queue recently — unless past cap.
-    const lastActivity = Math.max(...all.map((r) => Date.parse(r.updated_at) || 0));
+    const lastActivity = Math.max(...ready.map((r) => Date.parse(r.updated_at) || 0));
     if (Date.now() - lastActivity < SETTLE_MS && !pastCap) return;
 
     // Quiet-window gate: the push below redeploys Railway and SIGTERMs every live
     // console run mid-turn — the actual cause of runs "falling". Hold the batch
-    // until no run is actively working, so the restart lands in a gap. Force past it
-    // once the earliest queued fix has waited RUN_QUIET_CAP_MS, so a never-quiet
-    // console can't strand a server fix indefinitely.
-    const pastQuietCap = Date.now() - earliest > RUN_QUIET_CAP_MS;
-    if (!pastQuietCap && (await activeRunsExist())) {
+    // until no run is actively working, so the restart lands in a gap. The same
+    // MAX_WAIT_MS cap forces past it, so a never-quiet console can't strand a fix.
+    if (!pastCap && (await activeRunsExist())) {
       console.log("[deploy-coord] active console run(s) — holding batch for a quiet window");
       return;
     }
@@ -793,7 +755,7 @@ async function coordinatorTick(): Promise<void> {
 export function startDeployCoordinator(): void {
   console.log(
     `[deploy-coord] ${enabled() ? "armed" : "inert (DEPLOY_QUEUE_ENABLED unset)"} — ` +
-      `settle ${SETTLE_MS / 60000}m, cap ${MAX_WAIT_MS / 60000}m, quiet-window cap ${RUN_QUIET_CAP_MS / 60000}m`,
+      `settle ${SETTLE_MS / 60000}m, hard cap ${MAX_WAIT_MS / 60000}m`,
   );
   const boot = setTimeout(() => void coordinatorTick(), BOOT_DELAY_MS);
   if (typeof boot.unref === "function") boot.unref();
