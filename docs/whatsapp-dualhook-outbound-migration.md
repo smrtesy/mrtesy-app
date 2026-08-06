@@ -56,13 +56,29 @@ Exports: `whatsappApiBase()`, `whatsappBearer(metaToken)`, `whatsappViaProxy()`,
 
 ## Call sites migrated
 
+Only the **smrtTask personal number** (the Coexistence connection DualHook
+provides) goes through the proxy. Every one of these call sites sends from that
+one number:
+
 | Runtime | File | Calls |
 |---|---|---|
-| Railway | `server/src/modules/smrtbot/wa.ts` | list templates, send message |
 | Railway | `server/src/modules/smrttask/routes/whatsapp-view.ts` | send text/image, media upload (×2 each path) |
 | Railway | `server/src/modules/smrttask/routes/transcription-experiment.ts` | media download |
 | Vercel | `src/app/api/webhooks/whatsapp/autoreply.ts` | send auto-reply |
 | Vercel | `src/app/api/webhooks/whatsapp/route.ts` | media download |
+
+### NOT migrated — smrtBot is direct-to-Meta (do not route it through DualHook)
+
+`server/src/modules/smrtbot/wa.ts` sends from the **smrtBot** phone numbers
+(rl, sholem, …), which live on a **separate Meta app**, not the Coexistence
+connection. DualHook's `dh_live_` key does not own those numbers, so routing
+smrtBot through the proxy makes DualHook reject every send with HTTP 403
+*"Credential is not valid for this phone number."* smrtBot therefore hard-codes
+`graph.facebook.com` + the bot's own token and **ignores `WHATSAPP_OUTBOUND_KEY`
+on purpose**. "Require App Secret" is not enabled on the smrtBot app, so no
+`appsecret_proof` is needed. This was the original behavior; an earlier version
+of this migration wrongly listed `wa.ts` as a proxy call site, which broke all
+bot sends the moment the key was set (2026-08-05→06). Do not re-add it.
 
 ### Two non-obvious details
 
