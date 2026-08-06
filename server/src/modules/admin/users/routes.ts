@@ -65,7 +65,7 @@ router.get("/admin/users", async (_req: Request, res: Response) => {
     loadAllAuthUsers(),
     db.from("org_members").select("user_id"),
     db.from("super_admins").select("user_id"),
-    db.from("user_settings").select("user_id, onboarding_completed, preferred_language"),
+    db.from("user_settings").select("user_id, onboarding_completed, preferred_language, release_channel"),
   ]);
 
   const orgCounts = new Map<string, number>();
@@ -84,6 +84,8 @@ router.get("/admin/users", async (_req: Request, res: Response) => {
     is_super_admin: superIds.has(u.id),
     onboarding_completed: settings.get(u.id)?.onboarding_completed ?? false,
     preferred_language: settings.get(u.id)?.preferred_language ?? null,
+    // Feature-channels per-user override. null settings row → 'stable' default.
+    release_channel: settings.get(u.id)?.release_channel ?? "stable",
   }));
 
   // newest first
@@ -170,6 +172,42 @@ router.get("/admin/users/:id/memberships", async (req: Request, res: Response) =
   }
 
   res.json({ memberships, effective_apps: Array.from(effectiveSlugs) });
+});
+
+/**
+ * PATCH /admin/users/:id/channel  body: { value: 'stable' | 'beta' }
+ * Set the per-user feature-channels override (user_settings.release_channel).
+ * Super-admin only (this whole router is gated). Insert-if-missing: a user may
+ * not have a user_settings row yet, so update the row if present else insert one.
+ */
+router.patch("/admin/users/:id/channel", async (req: Request, res: Response) => {
+  const value = req.body?.value;
+  if (value !== "stable" && value !== "beta") {
+    return res.status(400).json({ error: "value must be 'stable' or 'beta'" });
+  }
+
+  const userId = req.params.id;
+
+  const { data: existing } = await db
+    .from("user_settings")
+    .select("id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await db
+      .from("user_settings")
+      .update({ release_channel: value })
+      .eq("user_id", userId);
+    if (error) return res.status(400).json({ error: error.message });
+  } else {
+    const { error } = await db
+      .from("user_settings")
+      .insert({ user_id: userId, release_channel: value });
+    if (error) return res.status(400).json({ error: error.message });
+  }
+
+  res.json({ ok: true, release_channel: value });
 });
 
 /** POST /admin/users/:id/super-admin  body: { note?: string } */
