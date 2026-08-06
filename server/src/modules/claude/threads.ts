@@ -63,7 +63,7 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, ship_state, ship_detail, ship_branch";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, serial, serial_display, ship_state, ship_detail, ship_branch";
 
 /** Is `account` one the runner can route to right now? The valid ids are the
  *  runner's registry (listAccountIds — primary + the configured extras), so this
@@ -563,6 +563,33 @@ async function signedUrlFor(storagePath: string): Promise<string | null> {
  * poll ran ~9 queries and returned every turn + every event every 900ms, growing
  * linearly with the thread. This route is two small indexed queries, constant.
  */
+/** Resolve a short thread code — "K7", "k7", or the bare "7" — to the thread.
+ *  This is the lookup another Claude session uses when the user hands it a rail
+ *  code ("go look at K7"): it maps the code to the thread's UUID + metadata so the
+ *  session can then read /claude/threads/:uuid. Org-scoped, so a code only ever
+ *  resolves a thread the caller's own org owns (serials are global, but a
+ *  cross-org code returns 404 — never another org's thread). Declared BEFORE the
+ *  /:id routes so "by-code" is never swallowed as a thread id. */
+router.get("/claude/threads/by-code/:code", async (req: Request, res: Response) => {
+  const m = String(req.params.code || "").trim().match(/^[Kk]?(\d{1,15})$/);
+  const serial = m ? Number(m[1]) : NaN;
+  if (!Number.isSafeInteger(serial) || serial < 1) {
+    return res.status(404).json({ error: "thread not found" });
+  }
+  const { data: thread, error } = await db
+    .from("claude_threads")
+    .select(THREAD_COLS)
+    .eq("serial", serial)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (error) {
+    console.error("[claude/threads] by-code failed:", error.message);
+    return res.status(500).json({ error: "could not resolve code" });
+  }
+  if (!thread) return res.status(404).json({ error: "thread not found" });
+  res.json({ thread });
+});
+
 router.get("/claude/threads/:id/live", async (req: Request, res: Response) => {
   if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
   const runId = typeof req.query.run === "string" && UUID_RE.test(req.query.run) ? req.query.run : null;

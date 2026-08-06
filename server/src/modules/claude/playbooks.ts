@@ -670,6 +670,19 @@ export async function composePrompt(
   envLines.push(
     "- תיקיית העבודה שלך נשמרת לאורך כל השיחה — לכן קובץ ששכפלת או ערכת בתור אחד קיים בתור הבא.",
   );
+  if (gateReachable) {
+    // The thread's short human code (K7) — injected as CLAUDE_THREAD_CODE by the
+    // runner under the same condition (internal secret + backend url). Teaches the
+    // session to state its own id and to resolve a code another session hands it.
+    envLines.push(
+      "- **מזהה הסשן הזה (ה-code הקצר):** המזהה הקצר של הצ'אט הזה נמצא במשתנה-הסביבה " +
+        "`$CLAUDE_THREAD_CODE` (למשל `K7`) — זה מה שמוסרים בין סשנים כדי להצביע על צ'אט מסוים. " +
+        'כשמבקשים ממך "מה ה-ID שלך" הרץ `echo $CLAUDE_THREAD_CODE` וענה את הערך. כדי לזהות צ\'אט אחר ' +
+        "שנמסר לך ב-code כזה (למשל `K7`), פנה ל-" +
+        "`GET $SMRTESY_API_URL/api/claude/threads/by-code/<code>` (עם ה-Authorization וה-X-Org-Id הרגילים) — " +
+        "הוא מחזיר את ה-thread ואת ה-UUID שלו כדי שתוכל להמשיך לקרוא אותו.",
+    );
+  }
 
   // App API access — whether the run will actually carry a token is decided at
   // spawn time (runner.ts mints one per turn, best-effort), so the instruction is

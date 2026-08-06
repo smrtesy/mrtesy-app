@@ -1009,14 +1009,18 @@ async function executeRunBody(runId: string): Promise<void> {
   // workspace_thread_id carries that directory key durably (it survives the parent's
   // deletion — see the migration), so it is the authority on where turns run.
   let workspaceThreadId: string | null = run.thread_id;
+  // The thread's short human code ("K7") — injected as CLAUDE_THREAD_CODE below so a
+  // session can state its own id when the user asks ("what's your id?").
+  let threadCode: string | null = null;
   if (run.thread_id) {
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
-      .select("session_id, fork_from_session, seed_context, workspace_thread_id")
+      .select("session_id, fork_from_session, seed_context, workspace_thread_id, serial_display")
       .eq("id", run.thread_id)
       .maybeSingle();
     if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
     resumeSession = thread?.session_id ?? null;
+    threadCode = thread?.serial_display ?? null;
     if (thread?.workspace_thread_id) workspaceThreadId = thread.workspace_thread_id;
     // Only when the thread has no session of its own yet — a split child's first
     // turn. Once it has resumed once, it owns a session and these are irrelevant.
@@ -1134,6 +1138,9 @@ async function executeRunBody(runId: string): Promise<void> {
     env.CLAUDE_RUN_ID = run.id;
     env.CLAUDE_ORG_ID = run.org_id;
     if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
+    // The short human code (e.g. "K7") the user hands between sessions to point at
+    // this thread — so the session can answer "what's your id?" without a lookup.
+    if (threadCode) env.CLAUDE_THREAD_CODE = threadCode;
   }
 
   // Supabase migration credentials. Without the access token a run can WRITE a
