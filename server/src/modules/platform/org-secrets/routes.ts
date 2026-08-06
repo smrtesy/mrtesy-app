@@ -38,11 +38,14 @@ async function writeOrgSecret(
   orgId: string, key: string, value: string, isSecret: boolean,
   notes: string | null, createdBy: string,
 ): Promise<string | null> {
+  // created_by records who last set this key (on rotate it reflects the latest
+  // writer — org secrets are owner-managed, so this is a light who-touched-it
+  // audit, not a strict "original creator").
   if (!isSecret) {
     const { error } = await db
       .from("org_secrets")
       .upsert(
-        { org_id: orgId, key, is_secret: false, value_text: value, value_secret_id: null, notes, updated_at: new Date().toISOString() },
+        { org_id: orgId, key, is_secret: false, value_text: value, value_secret_id: null, notes, created_by: createdBy, updated_at: new Date().toISOString() },
         { onConflict: "org_id,key" },
       );
     return error ? error.message : null;
@@ -77,7 +80,7 @@ async function writeOrgSecret(
   const { error: upsertErr } = await db
     .from("org_secrets")
     .upsert(
-      { org_id: orgId, key, is_secret: true, value_secret_id: secretId, value_text: null, notes, updated_at: new Date().toISOString() },
+      { org_id: orgId, key, is_secret: true, value_secret_id: secretId, value_text: null, notes, created_by: createdBy, updated_at: new Date().toISOString() },
       { onConflict: "org_id,key" },
     );
   return upsertErr ? upsertErr.message : null;
