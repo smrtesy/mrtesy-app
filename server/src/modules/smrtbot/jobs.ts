@@ -18,7 +18,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import { db } from "../../db";
-import { resolveCreds, sendText, sendImage, type BotEnv, type BotCreds } from "./wa";
+import { resolveCreds, sendText, sendImage, checkNumberHealth, type BotEnv, type BotCreds } from "./wa";
 import { reportError, errInfo } from "./report-error";
 import { sendScheduledReminders, executeRaffle, type GameBot } from "./game";
 import { sendBaileysText, sendBaileysImage, toJid } from "./baileys";
@@ -393,6 +393,56 @@ router.post("/api/bot/jobs/daily-summary", async (_req: Request, res: Response) 
     }
   }
   res.json({ ok: true, sent, bots: ran });
+});
+
+// ── health check: probe every LIVE Meta bot's credentials against Meta, so a
+//    revoked/expired token (or any auth failure that would break sends) is caught
+//    by ONE daily notification instead of by children hitting a dead bot.
+//    Read-only GET, no message sent, zero cost. Baileys bots have no Meta token
+//    to probe and are skipped. Only 4xx (a real credential rejection) alerts;
+//    a transient network/Meta-5xx is left for the next daily run. ─────────────
+router.post("/api/bot/jobs/health-check", async (_req: Request, res: Response) => {
+  const { data: bots, error } = await db
+    .from("smrtbot_bots")
+    .select(`${BOT_SELECT}, transport`)
+    .eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+
+  let checked = 0;
+  let healthy = 0;
+  const failed: string[] = [];
+  for (const bot of (bots as (BotCreds & { id: string; org_id: string; slug: string; transport?: string | null })[]) ?? []) {
+    if (bot.transport === "baileys") continue;
+    const creds = resolveCreds(bot, "live");
+    if (!creds) continue; // no live number configured — nothing to probe
+    checked++;
+
+    const health = await checkNumberHealth(creds);
+    if (health.ok) {
+      healthy++;
+      continue;
+    }
+    // Transient (network blip = status 0, or Meta 5xx) — don't page; the next
+    // daily run re-checks. Only a 4xx credential rejection is worth an alert.
+    if (health.status === 0 || health.status >= 500) continue;
+
+    failed.push(bot.slug);
+    await reportError(bot.org_id, {
+      area: "cron",
+      title: `בוט ${bot.slug} — אימות מול Meta נכשל בבדיקת הבריאות היומית`,
+      message: `שליחת הודעות מהבוט לא תעבוד עד שהטוקן/ההרשאות יתוקנו בהגדרות הבוט (HTTP ${health.status}).`,
+      botId: bot.id,
+      env: "live",
+      details: {
+        slug: bot.slug,
+        phone_number_id: creds.phoneNumberId,
+        http_status: health.status,
+        meta_error: health.detail.slice(0, 400),
+      },
+      link: `/bots/${bot.id}`,
+    });
+  }
+  res.json({ ok: true, checked, healthy, failed });
 });
 
 export default router;
