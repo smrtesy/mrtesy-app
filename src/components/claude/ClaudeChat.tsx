@@ -24,6 +24,7 @@ import {
   CircleUser,
   Clock,
   Crosshair,
+  Hourglass,
   Loader2,
   MessageSquarePlus,
   PanelLeftClose,
@@ -194,6 +195,12 @@ interface Thread {
     detail: string | null;
     branch: string | null;
   } | null;
+  /** Waiting on the usage-limit window to reset (yellow hourglass). ISO reset moment
+   *  when known, "" when the window is unknown, null when not waiting. */
+  usage_wait_until?: string | null;
+  /** A pending destructive-migration approval — the "needs you" blue hourglass. (A
+   *  merge conflict, the other needs-you case, is read from `deploy.state`.) */
+  needs_you?: boolean;
 }
 
 /** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
@@ -1973,45 +1980,79 @@ function railThreadTitle(thread: Thread, untitled: string): string {
   return title || untitled;
 }
 
-/** The rail-row dot. Pulsing amber (brown) while a turn runs. Otherwise it reports
- *  the thread's SHIP outcome — the real answer to "did this session ship to prod":
- *  green = live on main, red = pushed but the build failed, yellow = on a branch or
- *  a main build still running, grey = nothing pushed. Ship state wins over the run's
- *  own outcome (a session that just answered a question and pushed nothing is grey,
- *  not green), falling back to the run status only when the thread never pushed. */
+/** HH:MM in New York — the timezone the user reads everything in. */
+function railTimeNY(iso: string): string {
+  return new Date(iso).toLocaleTimeString("he-IL", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+  });
+}
+
+type Indicator =
+  | { shape: "pulse"; cls: string; label: string }
+  | { shape: "hourglass"; cls: string; label: string }
+  | { shape: "dot"; cls: string; label: string };
+
+/**
+ * The ONE source of truth for a rail row's status glyph. Two shapes carry the heavy
+ * distinction so the colour set stays tight:
+ *   ● dot       — a SETTLED outcome: green live · red failed · grey nothing-to-ship
+ *   ⏳ hourglass — WAITING: amber = resolves itself (build / merge / usage window),
+ *                  blue = needs YOU (approval pending / merge conflict to resolve)
+ *   ● pulse     — a turn RUNNING right now
+ * Priority: needs-you › running › passive-wait › settled. Used by both the normal
+ * row and the merge-queue group so they can never drift.
+ */
+function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>): Indicator {
+  const deployState = thread.deploy?.state;
+  const conflict = deployState === "conflict";
+
+  // 1. Needs YOU — you must act before anything moves; surfaced above all else.
+  if (thread.needs_you || conflict) {
+    return { shape: "hourglass", cls: "text-blue-600", label: conflict ? t("dot.needsConflict") : t("dot.needsApproval") };
+  }
+  // 2. Running now.
+  if (thread.live) return { shape: "pulse", cls: "bg-amber-600", label: t("dot.live") };
+  // 3. Passive wait — resolves on its own.
+  if (thread.usage_wait_until != null) {
+    const at = thread.usage_wait_until ? ` · ${railTimeNY(thread.usage_wait_until)}` : "";
+    return { shape: "hourglass", cls: "text-amber-500", label: `${t("dot.waitUsage")}${at}` };
+  }
+  if (deployState === "building" || deployState === "ready" || deployState === "deploying") {
+    return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitMerge") };
+  }
+  const ship = thread.ship?.state;
+  if (ship === "main_building") return { shape: "hourglass", cls: "text-amber-500", label: t("dot.shipBuilding") };
+  if (ship === "pushed_branch") return { shape: "hourglass", cls: "text-amber-500", label: t("dot.shipBranch") };
+  // 4. Settled outcome (dot).
+  if (ship === "main_live") return { shape: "dot", cls: "bg-status-ok", label: t("dot.shipLive") };
+  if (ship === "failed" || deployState === "failed")
+    return { shape: "dot", cls: "bg-destructive", label: t("dot.shipFailed") };
+  if (thread.last_status === "failed") return { shape: "dot", cls: "bg-destructive", label: t("dot.failed") };
+  return { shape: "dot", cls: "bg-muted-foreground/30", label: t("dot.idle") };
+}
+
+/** Renders the indicator from threadIndicator() — the glyph at the head of a rail row. */
 function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTranslations> }) {
-  if (thread.live) {
+  const ind = threadIndicator(thread, t);
+  const title = thread.ship?.detail ? `${ind.label} · ${thread.ship.detail}` : ind.label;
+  if (ind.shape === "pulse") {
     return (
-      <span className="relative flex size-2 shrink-0" title={t("dot.live")} aria-label={t("dot.live")}>
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-800 opacity-75" />
-        <span className="relative inline-flex size-2 rounded-full bg-amber-800" />
+      <span className="relative flex size-2 shrink-0" title={title} aria-label={ind.label}>
+        <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", ind.cls)} />
+        <span className={cn("relative inline-flex size-2 rounded-full", ind.cls)} />
       </span>
     );
   }
-  const ship = thread.ship?.state;
-  if (ship) {
-    const cls =
-      ship === "main_live"
-        ? "bg-status-ok"
-        : ship === "failed"
-          ? "bg-destructive"
-          : "bg-amber-500"; // pushed_branch / main_building — in flight, not confirmed live
-    const label =
-      ship === "main_live"
-        ? t("dot.shipLive")
-        : ship === "failed"
-          ? t("dot.shipFailed")
-          : ship === "main_building"
-            ? t("dot.shipBuilding")
-            : t("dot.shipBranch");
-    const title = thread.ship?.detail ? `${label} · ${thread.ship.detail}` : label;
-    return <span className={cn("size-2 shrink-0 rounded-full", cls)} title={title} aria-label={label} />;
+  if (ind.shape === "hourglass") {
+    return (
+      <span className="flex shrink-0" title={title} aria-label={ind.label}>
+        <Hourglass className={cn("size-3", ind.cls)} />
+      </span>
+    );
   }
-  // No push at all → grey by default; a failed turn still flags red (worth seeing).
-  const s = thread.last_status;
-  const cls = s === "failed" ? "bg-destructive" : "bg-muted-foreground/30";
-  const label = s === "failed" ? t("dot.failed") : t("dot.idle");
-  return <span className={cn("size-2 shrink-0 rounded-full", cls)} title={label} aria-label={label} />;
+  return <span className={cn("size-2 shrink-0 rounded-full", ind.cls)} title={title} aria-label={ind.label} />;
 }
 
 /** One row in the thread rail — status dot, title (RTL, ≤2 lines), a faint "handled"
@@ -2208,7 +2249,6 @@ function DeployRow({
   const d = thread.deploy;
   if (!d) return null;
   const stuck = d.state === "failed" || d.state === "conflict";
-  const running = d.state === "building" || d.state === "deploying";
 
   let status: ReactNode;
   if (stuck) {
@@ -2241,17 +2281,9 @@ function DeployRow({
   return (
     <div className={cn("group flex flex-col gap-0.5 border-b border-dashed px-2 py-1.5", active && "bg-muted")}>
       <div className="flex items-center gap-1.5">
-        {running ? (
-          <span className="relative flex size-2 shrink-0" title={t("mergeQueue.pending")}>
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-600 opacity-75" />
-            <span className="relative inline-flex size-2 rounded-full bg-amber-600" />
-          </span>
-        ) : (
-          <span
-            className={cn("size-2 shrink-0 rounded-full", stuck ? "bg-destructive" : "bg-amber-600")}
-            title={t("mergeQueue.pending")}
-          />
-        )}
+        {/* Same glyph vocabulary as every other row (threadIndicator): a queued fix is
+            an amber hourglass, a conflict a blue one (needs you), a failure a red dot. */}
+        <ThreadDot thread={thread} t={t} />
         <button
           type="button"
           onClick={onOpen}
