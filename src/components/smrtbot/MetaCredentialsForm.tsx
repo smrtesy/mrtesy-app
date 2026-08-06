@@ -10,9 +10,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 
+// The access tokens are NOT in this list: they are write-only (stored in Vault,
+// security plan §5.1 / step 3), handled like the App Secret below — we only learn
+// whether each is set (via its *_secret_id pointer), never the value.
 const FIELDS = [
-  "live_wa_phone_number_id", "live_wa_access_token", "live_verify_token", "live_phone_display",
-  "test_wa_phone_number_id", "test_wa_access_token", "test_verify_token", "test_phone_display",
+  "live_wa_phone_number_id", "live_verify_token", "live_phone_display",
+  "test_wa_phone_number_id", "test_verify_token", "test_phone_display",
 ] as const;
 type Field = (typeof FIELDS)[number];
 
@@ -23,20 +26,16 @@ const META_SYSTEM_USERS = "https://business.facebook.com/settings/system-users";
 const META_WEBHOOKS_DOCS = "https://developers.facebook.com/docs/graph-api/webhooks/getting-started";
 const LINKS: Partial<Record<Field, string>> = {
   live_wa_phone_number_id: META_APPS,
-  live_wa_access_token: META_SYSTEM_USERS,
   live_verify_token: META_WEBHOOKS_DOCS,
   test_wa_phone_number_id: META_APPS,
-  test_wa_access_token: META_SYSTEM_USERS,
   test_verify_token: META_WEBHOOKS_DOCS,
 };
 // Hints reuse one key per logical field (live/test share the same guidance).
 const HINT_KEY: Partial<Record<Field, string>> = {
   live_wa_phone_number_id: "hint_phone_number_id",
-  live_wa_access_token: "hint_access_token",
   live_verify_token: "hint_verify_token",
   live_phone_display: "hint_phone_display",
   test_wa_phone_number_id: "hint_phone_number_id",
-  test_wa_access_token: "hint_access_token",
   test_verify_token: "hint_verify_token",
   test_phone_display: "hint_phone_display",
 };
@@ -56,6 +55,12 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
   const [hasSecret, setHasSecret] = useState<{ live: boolean; test: boolean }>({ live: false, test: false });
   const [secretInput, setSecretInput] = useState<{ live: string; test: string }>({ live: "", test: "" });
   const [savingSecret, setSavingSecret] = useState<"live" | "test" | null>(null);
+  // Access tokens: write-only too (Vault, security plan §5.1 / step 3). Same
+  // set/replace UX as the App Secret — presence is learned from the *_secret_id
+  // pointer, the value is never fetched.
+  const [hasToken, setHasToken] = useState<{ live: boolean; test: boolean }>({ live: false, test: false });
+  const [tokenInput, setTokenInput] = useState<{ live: string; test: string }>({ live: "", test: "" });
+  const [savingToken, setSavingToken] = useState<"live" | "test" | null>(null);
 
   const load = useCallback(async () => {
     const { bot } = await api<{ bot: Record<string, string | null> }>(`/api/bot/bots/${botId}`);
@@ -66,6 +71,8 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
     setOrgSlug((bot.org_slug as string | null) ?? "");
     setHasSecret({ live: !!bot.live_app_secret_id, test: !!bot.test_app_secret_id });
     setSecretInput({ live: "", test: "" });
+    setHasToken({ live: !!bot.live_wa_access_token_secret_id, test: !!bot.test_wa_access_token_secret_id });
+    setTokenInput({ live: "", test: "" });
     setLoaded(true);
   }, [botId]);
 
@@ -85,6 +92,23 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
       toast.error(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setSavingSecret(null);
+    }
+  }
+
+  async function saveToken(env: "live" | "test") {
+    const value = tokenInput[env].trim();
+    if (!value) return;
+    setSavingToken(env);
+    try {
+      // The mirror trigger encrypts the plaintext into Vault on write; we PATCH
+      // only the one token field so no other value is touched.
+      await api(`/api/bot/bots/${botId}`, { method: "PATCH", body: { [`${env}_wa_access_token`]: value } });
+      toast.success(t("updated"));
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSavingToken(null);
     }
   }
 
@@ -165,6 +189,44 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
     </div>
   );
 
+  // Access token — write-only (Vault). Presence via *_secret_id; value never shown.
+  // Saved on its own PATCH so an empty field can never overwrite the stored token.
+  const tokenField = (env: "live" | "test") => (
+    <div className="space-y-1">
+      <label className="text-sm font-medium">
+        {t(`f_${env}_wa_access_token`)}{" "}
+        <span className={hasToken[env] ? "text-green-600" : "text-muted-foreground"}>
+          {hasToken[env] ? `· ${t("appSecretSet")}` : `· ${t("appSecretUnset")}`}
+        </span>
+      </label>
+      <div className="flex items-center gap-2">
+        <Input
+          dir="ltr"
+          type="password"
+          className="flex-1"
+          placeholder={hasToken[env] ? "•••••••• (" + t("appSecretReplace") + ")" : ""}
+          value={tokenInput[env]}
+          onChange={(e) => setTokenInput((p) => ({ ...p, [env]: e.target.value }))}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={savingToken === env || !tokenInput[env].trim()}
+          onClick={() => saveToken(env)}
+        >
+          {savingToken === env ? "…" : t("save")}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t("hint_access_token")}{" "}
+        <a href={META_SYSTEM_USERS} target="_blank" rel="noreferrer" className="text-primary underline">
+          {t("directLink")}
+        </a>
+      </p>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {/* Callback URL — the value the user pastes into Meta's webhook config */}
@@ -239,7 +301,7 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
         <CardContent className="space-y-3 pt-6">
           <h2 className="font-semibold">{t("tabLive")}</h2>
           {field("live_wa_phone_number_id")}
-          {field("live_wa_access_token")}
+          {tokenField("live")}
           {field("live_verify_token")}
           {field("live_phone_display")}
         </CardContent>
@@ -248,7 +310,7 @@ export function MetaCredentialsForm({ botId }: { botId: string }) {
         <CardContent className="space-y-3 pt-6">
           <h2 className="font-semibold">{t("tabTest")}</h2>
           {field("test_wa_phone_number_id")}
-          {field("test_wa_access_token")}
+          {tokenField("test")}
           {field("test_verify_token")}
           {field("test_phone_display")}
         </CardContent>
