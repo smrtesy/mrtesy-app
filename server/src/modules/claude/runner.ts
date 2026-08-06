@@ -1070,10 +1070,23 @@ async function executeRunBody(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] finish update failed:", error.message);
   };
 
+  // The account whose TOKEN and usage this run actually consumes. Normally the run's
+  // own account — but the shared background `automation` account is allowed to BORROW
+  // a different configured account that still has quota when it is over its weekly
+  // limit, so a single account's multi-day outage doesn't fail every automated
+  // correction (triage-classified diagnosis / autofix / discuss). Every OTHER account
+  // (the user's interactive threads) keeps its own token and its park-and-wait
+  // behavior untouched. The run row stays tagged `run.claude_account` ("automation"),
+  // which is what the completion-push skip below keys on — so borrowing never turns a
+  // silent background run into a phone ping.
+  const effectiveAccount =
+    (run.claude_account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT
+      ? (await pickAnalysisAccounts(run.claude_account))[0] ?? run.claude_account
+      : run.claude_account;
   // Trimmed because this value is pasted by a human through an admin form, where a
   // stray newline or space rides along easily and would be sent verbatim. The key
   // depends on the run's account: automated runs route to the second subscription.
-  const { token, key: tokenKey } = await loadAccountToken(run.claude_account);
+  const { token, key: tokenKey } = await loadAccountToken(effectiveAccount);
   if (!token) {
     // Fail loudly rather than let Claude Code fall through to a billed credential.
     await finish({
@@ -1666,7 +1679,7 @@ async function executeRunBody(runId: string): Promise<void> {
           const info = obj.rate_limit_info as Record<string, unknown> | undefined;
           const kind = info?.rateLimitType;
           if (info && (kind === "five_hour" || kind === "seven_day")) {
-            void recordUsageWindow(run.claude_account ?? PRIMARY_ACCOUNT, kind, info);
+            void recordUsageWindow(effectiveAccount ?? PRIMARY_ACCOUNT, kind, info);
           }
         }
         const mapped = mapLine(parsed, nextSeq);
@@ -1868,10 +1881,10 @@ async function executeRunBody(runId: string): Promise<void> {
       // record_claude_usage_hit reconstructs the account's window and snapshots its
       // consumption from claude_runs; idempotent per (account, kind, window). The
       // CLI names which limit was hit ("weekly limit" vs "session limit").
-      if (run.claude_account) {
+      if (effectiveAccount) {
         const usageKind = /weekly\s+limit/i.test(failureText) ? "weekly" : "session";
         const { error: hitErr } = await db.rpc("record_claude_usage_hit", {
-          p_account: run.claude_account,
+          p_account: effectiveAccount,
           p_kind: usageKind,
           p_reset_at: resetAt ? resetAt.toISOString() : null,
         });
