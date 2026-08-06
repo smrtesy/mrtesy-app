@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-03.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-06.
 
 ## The three engines
 
@@ -138,7 +138,12 @@ shared code in `_shared/`.
 ## Database — the tables you'll touch most
 
 Orgs/entitlements: `organizations`, `app_memberships`, `user_settings`,
-`user_credentials`, `app_secrets`. Per-user app access: `user_app_access`
+`user_credentials`, `app_secrets` (platform-wide) + `org_secrets` (per-org
+secrets an org brings itself — Vault-backed, owner-managed at
+`/settings/secrets`, server `modules/platform/org-secrets/`; distinct from the
+platform-wide `app_secrets`). `org_members.is_developer` = the security-plan
+developer axis (full visibility, excluded from user-mgmt/keys/impersonation).
+Per-user app access: `user_app_access`
 (which apps a member is granted) vs `app_user_access` (the smrtTask full/lite
 level — two similarly-named tables, don't confuse). Permission layer:
 `org_restrictions` (which catalog resources an org restricts),

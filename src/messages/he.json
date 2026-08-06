@@ -272,12 +272,31 @@
   "settingsTabs": {
     "apps": "אפליקציות",
     "org": "ארגון",
+    "secrets": "סודות הארגון",
     "permissions": "הרשאות",
     "platform": "פלטפורמה",
     "noAppsEnabled": "אין אפליקציות מאופשרות בארגון הזה",
     "openPlatformAdmin": "פתח פאנל ניהול-על",
     "platformDescription": "ניהול ברמת המערכת — משתמשים, ארגונים, אפליקציות, לוגים ושימוש.",
     "voiceGuide": "מדריך הקול (smrtVoice)"
+  },
+  "orgSecrets": {
+    "title": "סודות הארגון",
+    "intro": "מפתחות ששייכים לארגון שלך (טוקן וואטסאפ-עסקי, מפתח OpenAI, SMTP וכו'). הערך מוצפן ולא מוצג בחזרה. גלוי לבעלים בלבד; לא למתכנת ולא לארגון אחר.",
+    "add": "הוסף",
+    "cancel": "ביטול",
+    "save": "שמור",
+    "saved": "הסוד נשמר",
+    "deleted": "הסוד נמחק",
+    "delete": "מחק",
+    "deleteConfirm": "למחוק את הסוד {key}?",
+    "empty": "עדיין אין סודות לארגון הזה.",
+    "keyPlaceholder": "שם המפתח (למשל WHATSAPP_TOKEN)",
+    "valuePlaceholder": "הערך",
+    "notesPlaceholder": "הערה (רשות)",
+    "isSecretLabel": "ערך סודי (מוצפן ב-Vault)",
+    "configBadge": "הגדרה",
+    "notSet": "לא מוגדר"
   },
   "permissions": {
     "costly": "בתשלום",

@@ -5,14 +5,15 @@ import { useParams, usePathname, useRouter, useSearchParams } from "next/navigat
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import { Building2, Shield, Layers, Lock } from "lucide-react";
+import { Building2, Shield, Layers, Lock, KeyRound } from "lucide-react";
 import { OrgSettingsClient } from "@/components/platform/org/OrgSettingsClient";
 import { AppsTabPanel } from "@/components/platform/settings/AppsTabPanel";
 import { PlatformTabPanel } from "@/components/platform/settings/PlatformTabPanel";
 import { PermissionsTabPanel } from "@/components/platform/settings/PermissionsTabPanel";
+import { OrgSecretsClient } from "@/components/platform/settings/OrgSecretsClient";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 
-type TabKey = "apps" | "org" | "permissions" | "platform";
+type TabKey = "apps" | "org" | "secrets" | "permissions" | "platform";
 
 interface Props {
   enabledApps: string[];
@@ -56,10 +57,14 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
   }, [supabase]);
 
   const canManageOrg = active?.role === "owner" || active?.role === "admin";
+  // Org secrets (§5.4) are OWNER-only — an admin manages members but not the
+  // org's own credentials. Server enforces this too (requireRole("owner")).
+  const isOwner = active?.role === "owner";
 
   // Initial tab: explicit URL > query param > app context (if on /settings/apps/*) > apps default
   const urlTab: TabKey | null =
     pathname.includes("/settings/org") ? "org" :
+    pathname.includes("/settings/secrets") ? "secrets" :
     pathname.includes("/settings/permissions") ? "permissions" :
     pathname.includes("/settings/platform") ? "platform" :
     pathname.includes("/settings/apps") ? "apps" :
@@ -75,6 +80,7 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
     // Update URL without full nav so deep-links work and refresh keeps the tab
     if (tab === "apps") router.replace(`/${locale}/settings`);
     else if (tab === "org") router.replace(`/${locale}/settings/org`);
+    else if (tab === "secrets") router.replace(`/${locale}/settings/secrets`);
     else if (tab === "permissions") router.replace(`/${locale}/settings/permissions`);
     else if (tab === "platform") router.replace(`/${locale}/settings/platform`);
   }
@@ -82,6 +88,7 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
   const tabs: Array<{ key: TabKey; label: string; icon: React.ElementType; show: boolean }> = [
     { key: "apps",        label: t("apps"),        icon: Layers,    show: true },
     { key: "org",         label: t("org"),         icon: Building2, show: !!canManageOrg },
+    { key: "secrets",     label: t("secrets"),     icon: KeyRound,  show: !!isOwner },
     { key: "permissions", label: t("permissions"), icon: Lock,      show: !!canManageOrg || isAdmin },
     { key: "platform",    label: t("platform"),    icon: Shield,    show: isAdmin },
   ];
@@ -117,6 +124,7 @@ export function SettingsTabs({ enabledApps, appSlug }: Props) {
           <AppsTabPanel enabledApps={enabledApps} appSlug={appSlug} />
         )}
         {activeTab === "org" && canManageOrg && <OrgSettingsClient />}
+        {activeTab === "secrets" && isOwner && <OrgSecretsClient />}
         {activeTab === "permissions" && (canManageOrg || isAdmin) && <PermissionsTabPanel />}
         {activeTab === "platform" && isAdmin && <PlatformTabPanel />}
       </div>
