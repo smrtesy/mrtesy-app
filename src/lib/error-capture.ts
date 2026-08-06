@@ -232,11 +232,32 @@ export function reportApiError(input: {
   });
 }
 
+/** Benign, non-actionable noise that some libraries surface as an unhandled
+ *  rejection / window error but which represents normal operation — filtered out
+ *  so it never becomes a visible toast or a log_entries row.
+ *
+ *  Supabase auth (@supabase/auth-js) coordinates token refresh across tabs with
+ *  the Web Locks API. When a second request "steals" a held lock, auth-js lets the
+ *  first request's `navigator.locks.request` promise REJECT with one of these
+ *  messages ("Lock broken by another request with the 'steal' option" /
+ *  'Lock "lock:sb-…-auth-token" was released because another request stole it').
+ *  This is by design — the steal mechanism fixes token-refresh deadlocks — and the
+ *  request that stole the lock proceeds normally. Nothing failed; it's console
+ *  noise that the global catcher would otherwise raise as an error toast. */
+const BENIGN_MESSAGE_PATTERNS: RegExp[] = [
+  /\bLock\b.*(stole it|'steal' option|released because another request)/i,
+];
+
+function isBenignNoise(message: string): boolean {
+  return BENIGN_MESSAGE_PATTERNS.some((re) => re.test(message));
+}
+
 /** Shared handling for an uncaught JS error / rejection: raise a toast (so it is
  *  visible AND archived by the recorder), stash the stack, and record it in the
  *  backend. */
 function reportUncaught(kind: "js" | "promise", message: string, stack?: string) {
   if (typeof window === "undefined") return;
+  if (isBenignNoise(message)) return; // e.g. Supabase auth-lock steal — normal, not a failure
   const clean = (message || "Unknown error").trim().slice(0, 300);
   const detail: ClientErrorDetail = { kind, stack: stack?.slice(0, 4000) };
   stashDetail(clean, detail);
