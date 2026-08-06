@@ -4755,7 +4755,11 @@
       "live": "Running now",
       "done": "Last turn finished",
       "failed": "Last turn failed",
-      "idle": "Hasn't run yet"
+      "idle": "Hasn't run yet",
+      "shipLive": "Merged to main and live in production ✓",
+      "shipFailed": "Pushed to main but the build failed",
+      "shipBuilding": "Pushed to main — build running",
+      "shipBranch": "Pushed to a branch (not main)"
     },
     "handled": {
       "mark": "Mark as handled",

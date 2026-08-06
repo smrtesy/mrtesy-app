@@ -184,6 +184,16 @@ interface Thread {
     error: string | null;
     deadline: string;
   } | null;
+  /** Persistent SHIP outcome → the rail's deploy dot. Set by ship-status.ts and kept
+   *  across turns (unlike `deploy`, which the coordinator deletes once merged):
+   *  pushed_branch=yellow (branch, not main), main_building=yellow (pushed to main,
+   *  build running), main_live=green (live in production), failed=red (build failed).
+   *  Null when the thread never pushed. */
+  ship?: {
+    state: "pushed_branch" | "main_building" | "main_live" | "failed";
+    detail: string | null;
+    branch: string | null;
+  } | null;
 }
 
 /** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
@@ -1867,8 +1877,12 @@ function railThreadTitle(thread: Thread, untitled: string): string {
   return title || untitled;
 }
 
-/** The live/last-status dot at the head of a rail row. Pulsing amber (brown) while a
- *  turn runs; otherwise a resting colour for the newest run's outcome. */
+/** The rail-row dot. Pulsing amber (brown) while a turn runs. Otherwise it reports
+ *  the thread's SHIP outcome — the real answer to "did this session ship to prod":
+ *  green = live on main, red = pushed but the build failed, yellow = on a branch or
+ *  a main build still running, grey = nothing pushed. Ship state wins over the run's
+ *  own outcome (a session that just answered a question and pushed nothing is grey,
+ *  not green), falling back to the run status only when the thread never pushed. */
 function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTranslations> }) {
   if (thread.live) {
     return (
@@ -1878,9 +1892,29 @@ function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTran
       </span>
     );
   }
+  const ship = thread.ship?.state;
+  if (ship) {
+    const cls =
+      ship === "main_live"
+        ? "bg-status-ok"
+        : ship === "failed"
+          ? "bg-destructive"
+          : "bg-amber-500"; // pushed_branch / main_building — in flight, not confirmed live
+    const label =
+      ship === "main_live"
+        ? t("dot.shipLive")
+        : ship === "failed"
+          ? t("dot.shipFailed")
+          : ship === "main_building"
+            ? t("dot.shipBuilding")
+            : t("dot.shipBranch");
+    const title = thread.ship?.detail ? `${label} · ${thread.ship.detail}` : label;
+    return <span className={cn("size-2 shrink-0 rounded-full", cls)} title={title} aria-label={label} />;
+  }
+  // No push at all → grey by default; a failed turn still flags red (worth seeing).
   const s = thread.last_status;
-  const cls = s === "done" ? "bg-status-ok" : s === "failed" ? "bg-destructive" : "bg-muted-foreground/30";
-  const label = s === "done" ? t("dot.done") : s === "failed" ? t("dot.failed") : t("dot.idle");
+  const cls = s === "failed" ? "bg-destructive" : "bg-muted-foreground/30";
+  const label = s === "failed" ? t("dot.failed") : t("dot.idle");
   return <span className={cn("size-2 shrink-0 rounded-full", cls)} title={label} aria-label={label} />;
 }
 

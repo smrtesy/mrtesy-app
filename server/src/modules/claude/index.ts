@@ -51,3 +51,6 @@ export { default as claudeDeployQueueRouter } from "./deploy-queue";
 // The coalescing deploy coordinator — started once from server/src/index.ts after
 // listen. Inert unless DEPLOY_QUEUE_ENABLED=1. docs/claude-console/deploy-queue-plan.md.
 export { startDeployCoordinator } from "./deploy-coordinator";
+// Ship-status watcher — polls each thread's main-deploy build state and drives the
+// rail's deploy dot (green live / red failed). Runs always; zero paid tokens.
+export { startShipWatcher } from "./ship-status";

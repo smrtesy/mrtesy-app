@@ -55,7 +55,7 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, ship_state, ship_detail, ship_branch";
 
 /** Is `account` one the runner can route to right now? The valid ids are the
  *  runner's registry (listAccountIds — primary + the configured extras), so this
@@ -323,6 +323,11 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     preview: (r.title ?? "").trim() ? null : firstPrompt.get(r.id) || null,
     // Deploy-queue state (pending-merge category + countdown), null when not queued.
     deploy: deployByThread.get(r.id) ?? null,
+    // Persistent SHIP outcome → the rail's deploy dot (ship-status.ts). Null when the
+    // thread never pushed anything. Kept as one object so the client reads one shape.
+    ship: r.ship_state
+      ? { state: r.ship_state as string, detail: (r.ship_detail as string | null) ?? null, branch: (r.ship_branch as string | null) ?? null }
+      : null,
   }));
   return res.json({ threads });
 });

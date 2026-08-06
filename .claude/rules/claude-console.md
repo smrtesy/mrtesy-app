@@ -145,6 +145,17 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   service/environment auto-resolved or pinned via `RAILWAY_SERVICE_ID`/
   `RAILWAY_ENVIRONMENT_ID`). Each provider degrades to `configured:false` with a hint
   when its token is unset; the badge is invisible until then.
+- **Ship-status dot** (`ship-status.ts`, `startShipWatcher`, `claude_threads.ship_*`):
+  the rail's per-thread deploy dot — the fix for sessions that promised "אעדכן כשזה
+  יעלה" and never did (the turn-based runner stops at turn end, so nothing watched the
+  deploy). A background watcher (always on, queue-flag-independent, zero paid tokens)
+  polls the production build state (via `deploy-status.ts`) of every thread that pushed
+  to main and drives its dot: green `main_live` (build confirmed live), red `failed`
+  (build failed), yellow `main_building`/`pushed_branch` (in flight), grey (never
+  pushed). Write side = `markThreadShipped`: ship.sh's direct path POSTs
+  `/claude-deploy/mark-shipped` (frontend→Vercel), the coordinator marks its batch
+  after pushing (backend→Railway). Green wins over the run's own done/failed, so a
+  session that only answered a question is grey, not green.
 - **App access, two layers** (`app-access.ts`): every turn mints a short-lived
   Supabase session for the launching user — injected (1) as `SMRTESY_API_TOKEN`
   for direct API calls, and (2) as `@supabase/ssr` cookies for a REAL headless

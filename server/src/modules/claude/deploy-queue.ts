@@ -27,6 +27,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
+import { markThreadShipped, type ShipSurface } from "./ship-status";
 
 const router = Router();
 
@@ -163,7 +164,40 @@ router.post("/claude-deploy/mark-ready", async (req: Request, res: Response) => 
     console.error("[claude-deploy] mark-ready failed:", error.message);
     return res.status(500).json({ error: "write failed" });
   }
+  // Resting yellow dot on the thread: pushed a branch, waiting for the coordinator
+  // to batch-merge it to main. The coordinator overwrites this to 'main_building'
+  // once it actually merges + pushes. `notOverLive` so a retried mark-ready can't drag
+  // an already-merged thread's green/building dot back to yellow. Best-effort.
+  await markThreadShipped(threadId, { state: "pushed_branch", branch }, { notOverLive: true });
   return res.json({ ok: true, state: "ready" });
+});
+
+/**
+ * POST /claude-deploy/mark-shipped { thread_id, sha, surface?, branch? }
+ *   Called by ship.sh's DIRECT path — the frontend/docs push that goes straight to
+ *   main (no server change, so it bypasses the queue). Arms the ship-status watcher
+ *   with 'main_building' + the pushed SHA, so the rail dot goes green only once the
+ *   production build for that SHA is confirmed live. x-cron-secret gated like the
+ *   others. Best-effort: a failure here costs only the dot, never the deploy.
+ */
+router.post("/claude-deploy/mark-shipped", async (req: Request, res: Response) => {
+  if (!authed(req)) return res.status(403).json({ error: "Forbidden" });
+
+  const threadId = uuid(req.body?.thread_id);
+  if (!threadId) return res.status(400).json({ error: "thread_id (uuid) required" });
+  const sha = text(req.body?.sha, 64);
+  if (!sha) return res.status(400).json({ error: "sha required" });
+  const orgId = await orgOfThread(threadId);
+  if (!orgId) return res.status(404).json({ error: "thread not found" });
+
+  const surface: ShipSurface = req.body?.surface === "railway" ? "railway" : "vercel";
+  await markThreadShipped(threadId, {
+    state: "main_building",
+    sha,
+    surface,
+    branch: text(req.body?.branch, 300),
+  });
+  return res.json({ ok: true, state: "main_building" });
 });
 
 export default router;
