@@ -1842,7 +1842,18 @@ export const BG_MODEL_STRONG = "claude-opus-5";
  */
 export async function runOneShot(
   prompt: string,
-  opts: { model?: string; timeoutMs?: number; account?: string; label?: string } = {},
+  opts: {
+    model?: string;
+    timeoutMs?: number;
+    account?: string;
+    label?: string;
+    /**
+     * Max chars of stdout to KEEP. Defaults to 8 KB — right for a title or a
+     * short analysis, but callers that expect a long body (e.g. a whole
+     * translated document) must raise it, or the output is silently truncated.
+     */
+    maxChars?: number;
+  } = {},
 ): Promise<string | null> {
   const { token } = await loadAccountToken(opts.account);
   if (!token) return null;
@@ -1909,10 +1920,11 @@ export async function runOneShot(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
+    const maxChars = opts.maxChars ?? 8000;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (c: string) => {
       out += c;
-      if (out.length > 8000) out = out.slice(0, 8000);
+      if (out.length > maxChars) out = out.slice(0, maxChars);
     });
     // Capture stderr (previously piped but never read) so a failure records WHY.
     let err = "";
