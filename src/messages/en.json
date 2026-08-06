@@ -272,12 +272,31 @@
   "settingsTabs": {
     "apps": "Apps",
     "org": "Organization",
+    "secrets": "Org secrets",
     "permissions": "Permissions",
     "platform": "Platform",
     "noAppsEnabled": "No apps enabled for this organization",
     "openPlatformAdmin": "Open platform admin",
     "platformDescription": "System-level management — users, orgs, apps, logs and usage.",
     "voiceGuide": "Voice guide (smrtVoice)"
+  },
+  "orgSecrets": {
+    "title": "Org secrets",
+    "intro": "Keys that belong to your organization (its own WhatsApp business token, OpenAI key, SMTP, …). The value is encrypted and never shown back. Visible to the owner only — not to a developer, not to another org.",
+    "add": "Add",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saved": "Secret saved",
+    "deleted": "Secret deleted",
+    "delete": "Delete",
+    "deleteConfirm": "Delete the secret {key}?",
+    "empty": "No secrets for this organization yet.",
+    "keyPlaceholder": "Key name (e.g. WHATSAPP_TOKEN)",
+    "valuePlaceholder": "Value",
+    "notesPlaceholder": "Note (optional)",
+    "isSecretLabel": "Secret value (encrypted in Vault)",
+    "configBadge": "Config",
+    "notSet": "Not set"
   },
   "permissions": {
     "costly": "Paid",
