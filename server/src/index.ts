@@ -43,6 +43,7 @@ import claudeRouter, {
   claudeDeployQueueRouter,
   startClaudeRunRecovery,
   startDeployCoordinator,
+  startShipWatcher,
 } from "./modules/claude";
 
 const app = express();
@@ -327,6 +328,12 @@ app.listen(PORT, HOST, () => {
   // A no-op unless DEPLOY_QUEUE_ENABLED=1 — safe to ship while phase 2 (the push
   // gate that feeds the queue) is still flag-gated off.
   startDeployCoordinator();
+
+  // Ship-status watcher — polls the production build state of every thread that
+  // pushed to main and flips its rail dot green (live) / red (build failed). Runs
+  // ALWAYS (not queue-flag gated): a frontend push straight to main is exactly the
+  // deploy that used to end with an unfulfilled "אעדכן כשזה יעלה". Zero paid tokens.
+  startShipWatcher();
 });
 
 // Surface unhandled errors so Railway logs show them instead of a silent crash

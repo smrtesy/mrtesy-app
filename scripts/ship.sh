@@ -84,6 +84,10 @@ fi
 
 # Direct path — today's --no-ff workflow (CLAUDE.md "Push target — main by default").
 echo "[ship] no server/** change (or queue disabled) → merging '$BRANCH' into main directly"
+# Which surface the ship-status watcher should confirm — decided NOW, while HEAD is
+# still the feature branch: after the merge below, `git diff origin/main...HEAD` is
+# empty (main contains the branch), so server_changed would always read false.
+if server_changed; then SHIP_SURFACE=railway; else SHIP_SURFACE=vercel; fi
 git checkout main
 git merge origin/main --ff-only
 git merge --no-ff "$BRANCH" -m "Merge $BRANCH into main"
@@ -91,6 +95,27 @@ if ! git push origin main; then
   echo "ship.sh: push to main was rejected — fetch origin main and redo the --no-ff merge onto it" >&2
   exit 1
 fi
+MAIN_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 git checkout "$BRANCH"
 git push origin "$BRANCH"
 echo "[ship] merged '$BRANCH' into main and pushed. Verify Production advanced (/api/deploy-info)."
+
+# Arm the ship-status watcher so the thread's rail dot goes green only once the
+# production build for THIS push is confirmed live (red if it fails). Best-effort:
+# only inside a console run (the env is injected there), and a failure never fails
+# the ship. A server change on this path (queue disabled) redeploys Railway, so it
+# is watched on Railway; a frontend/docs push is watched on Vercel.
+if [ -n "${CLAUDE_THREAD_ID:-}" ] && [ -n "${SMRTESY_BACKEND_URL:-}" ] && [ -n "${SMRTBOT_INTERNAL_SECRET:-}" ] && [ -n "$MAIN_SHA" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    ship_body="$(jq -cn --arg t "$CLAUDE_THREAD_ID" --arg s "$MAIN_SHA" --arg su "$SHIP_SURFACE" --arg b "$BRANCH" \
+      '{thread_id:$t, sha:$s, surface:$su, branch:$b}')"
+  else
+    ship_body="{\"thread_id\":\"$CLAUDE_THREAD_ID\",\"sha\":\"$MAIN_SHA\",\"surface\":\"$SHIP_SURFACE\",\"branch\":\"$BRANCH\"}"
+  fi
+  curl -sS -X POST "$SMRTESY_BACKEND_URL/api/claude-deploy/mark-shipped" \
+    -H "content-type: application/json" \
+    -H "x-cron-secret: $SMRTBOT_INTERNAL_SECRET" \
+    -d "$ship_body" >/dev/null 2>&1 \
+    && echo "[ship] ship-status armed ($SHIP_SURFACE, ${MAIN_SHA:0:7}) — the rail dot will confirm when it goes live" \
+    || echo "[ship] ship-status mark-shipped failed (non-fatal)"
+fi

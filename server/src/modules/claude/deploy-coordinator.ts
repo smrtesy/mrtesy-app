@@ -33,6 +33,7 @@ import path from "node:path";
 import { db } from "../../db";
 import { notify } from "../../lib/platform/notify";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
+import { markThreadShipped } from "./ship-status";
 
 /** Master switch. The coordinator AND the push-gate are both gated on this, so
  *  with it unset the entire feature is inert (nothing queues, nothing deploys). */
@@ -164,6 +165,14 @@ async function removeRow(id: string): Promise<void> {
   if (error) console.error("[deploy-coord] delete failed:", error.message);
 }
 
+/** Read the current main tip in DEPLOY_DIR (post-merge/post-push HEAD) so the ship
+ *  watcher has a SHA to confirm the Railway build against. Best-effort — a failure
+ *  just means the dot settles by timeout instead of by SHA match. */
+async function currentMainSha(env: NodeJS.ProcessEnv): Promise<string | null> {
+  const r = await exec("git", ["rev-parse", "HEAD"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
+  return r.code === 0 ? r.stdout.trim() || null : null;
+}
+
 /** Is `branch` already contained in origin/main? (i.e. its deploy already landed) */
 async function branchInMain(branch: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   const r = await exec(
@@ -261,7 +270,14 @@ async function reconcileDeploying(rows: QueueRow[], env: NodeJS.ProcessEnv): Pro
       env,
     }).catch(() => undefined);
     if (await branchInMain(row.branch, env)) {
-      await tellOwner(row, "success", "התיקון נפרס ✅", `הענף \`${row.branch}\` מוזג ל-main ונפרס.`);
+      // Already landed on main (this or a prior process pushed it) — arm the ship
+      // watcher so the rail dot goes green when the Railway build confirms live.
+      await markThreadShipped(row.thread_id, {
+        state: "main_building",
+        sha: await currentMainSha(env),
+        surface: "railway",
+        branch: row.branch,
+      });
       await removeRow(row.id);
     } else {
       await setState(row.id, "ready"); // push never happened — retry in the next batch
@@ -323,6 +339,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
   for (const row of rows) {
     if (!row.branch) {
       await setState(row.id, "failed", "no branch recorded");
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "אין ענף רשום" });
       settled.add(row.id);
       continue;
     }
@@ -339,6 +356,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
     });
     if (f.code !== 0) {
       await setState(row.id, "failed", redact(f.stderr, token).slice(0, 300));
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "כשל בהבאת הענף" });
       await tellOwner(row, "action_required", "פריסה נכשלה", `לא הצלחתי להביא את הענף \`${row.branch}\`.`);
       settled.add(row.id);
       continue;
@@ -384,6 +402,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
       }
 
       await setState(row.id, "conflict", "merge conflict with the batch");
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "קונפליקט מיזוג" });
       await tellOwner(
         row,
         "action_required",
@@ -433,6 +452,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
     const tail = redact(`${build.stdout}\n${build.stderr}`, token).slice(-800);
     for (const row of merged) {
       await setState(row.id, "failed", tail);
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "בניית-הצרור נכשלה" });
       await tellOwner(row, "action_required", "בניית-הצרור נכשלה — לא נפרס", `הבנייה על הצרור הממוזג נכשלה, לא דחפתי ל-main.\n\n${tail}`);
     }
     await exec("git", ["reset", "--hard", "origin/main"], { cwd: DEPLOY_DIR, timeoutMs: GIT_TIMEOUT_MS, env });
@@ -453,8 +473,16 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
     console.error("[deploy-coord] push failed:", redact(push.stderr, token).slice(0, 400));
     return;
   }
+  // The main tip we just pushed — the SHA the ship watcher confirms the Railway
+  // build against, flipping each thread's rail dot to green when it goes live.
+  const mainSha = await currentMainSha(env);
   for (const row of merged) {
-    await tellOwner(row, "success", "התיקון נפרס ✅", `הענף \`${row.branch}\` נכלל בפריסת-הצרור ל-main.`);
+    await markThreadShipped(row.thread_id, {
+      state: "main_building",
+      sha: mainSha,
+      surface: "railway",
+      branch: row.branch,
+    });
     await removeRow(row.id);
   }
   console.log(`[deploy-coord] deployed batch of ${merged.length} branch(es)`);
