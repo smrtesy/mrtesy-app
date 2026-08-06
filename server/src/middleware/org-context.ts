@@ -2,7 +2,7 @@
  * requireOrg — resolves the active organization from the `X-Org-Id` header,
  * verifies the authenticated user is a member of it, and attaches:
  *   • req.org    = { id, slug, name }
- *   • req.member = { org_id, user_id, role }
+ *   • req.member = { org_id, user_id, role, is_developer }
  *
  * Must run AFTER requireAuth. Returns 400 if header missing, 403 if not a member.
  *
@@ -19,7 +19,7 @@ import { TtlCache } from "../lib/ttl-cache";
 
 type OrgContext = {
   org: { id: string; slug: string; name: string };
-  member: { org_id: string; user_id: string; role: "owner" | "admin" | "member" };
+  member: { org_id: string; user_id: string; role: "owner" | "admin" | "member"; is_developer: boolean };
 };
 
 const orgContextCache = new TtlCache<OrgContext>(60 * 1000);
@@ -48,7 +48,7 @@ export async function requireOrg(req: Request, res: Response, next: NextFunction
     { data: org, error: oErr },
   ] = await Promise.all([
     db.from("org_members")
-      .select("org_id, user_id, role")
+      .select("org_id, user_id, role, is_developer")
       .eq("org_id", orgId)
       .eq("user_id", req.user.id)
       .maybeSingle(),
@@ -73,6 +73,7 @@ export async function requireOrg(req: Request, res: Response, next: NextFunction
     org_id: member.org_id as string,
     user_id: member.user_id as string,
     role: member.role as "owner" | "admin" | "member",
+    is_developer: member.is_developer === true,
   };
 
   orgContextCache.set(`${orgId}:${req.user.id}`, { org: req.org, member: req.member });

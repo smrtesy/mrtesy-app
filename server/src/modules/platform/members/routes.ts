@@ -14,7 +14,10 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
-import { requireAuth, requireOrg, requireRole, type Role } from "../../../middleware";
+import {
+  requireAuth, requireOrg, requireRole, denyDeveloper,
+  canManageRank, canAssignRank, type Role,
+} from "../../../middleware";
 import { sendInviteEmail } from "../../../lib/email";
 import { invalidatePermissions } from "../../../lib/permissions/resolve";
 
@@ -47,6 +50,16 @@ async function resolveOrgApps(orgId: string, slugs: unknown): Promise<{ id: stri
   return appList
     .filter((a) => enabled.has(a.id as string))
     .map((a) => ({ id: a.id as string, slug: a.slug as string }));
+}
+
+/** Load a target member's current role in this org, or null if not a member.
+ *  Used by the §5.3 hierarchy checks: a manager may only act on someone at
+ *  their own rank or below. */
+async function getMemberRole(orgId: string, userId: string): Promise<Role | null> {
+  const { data } = await db
+    .from("org_members").select("role")
+    .eq("org_id", orgId).eq("user_id", userId).maybeSingle();
+  return (data?.role as Role | undefined) ?? null;
 }
 
 /** Normalize a client-supplied access level; anything but "lite" is "full". */
@@ -91,7 +104,7 @@ async function applyAccessLevel(
 router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Response) => {
   const { data, error } = await db
     .from("org_members")
-    .select("user_id, role, joined_at, invited_by, display_name")
+    .select("user_id, role, joined_at, invited_by, display_name, is_developer")
     .eq("org_id", req.org!.id)
     .order("joined_at", { ascending: true });
 
@@ -140,6 +153,7 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
       name: userMap.get(m.user_id)?.name ?? null,
       display_name: (m.display_name as string | null) ?? null,
       is_placeholder: placeholder,
+      is_developer: m.is_developer === true,
       app_slugs: slugsByUser.get(m.user_id as string) ?? [],
       access_level: liteUsers.has(m.user_id as string) ? "lite" : "full",
     };
@@ -152,21 +166,31 @@ router.get("/org/members", requireAuth, requireOrg, async (req: Request, res: Re
  *  for the UI to decide manager-only affordances (e.g. assigning tasks). */
 router.get("/org/me", requireAuth, requireOrg, async (req: Request, res: Response) => {
   const role = req.member!.role;
+  const isDeveloper = req.member!.is_developer;
   res.json({
     user_id: req.user!.id,
     role,
-    is_manager: role === "owner" || role === "admin",
+    is_developer: isDeveloper,
+    // A developer is excluded from user management (§5.3) even if they also
+    // hold owner/admin, so the UI must not offer manager affordances to them.
+    is_manager: (role === "owner" || role === "admin") && !isDeveloper,
   });
 });
 
 /** PATCH /org/members/:userId/display-name — org owner/admin sets a member's
  *  per-org display name (blank clears it → falls back to first name / email). */
 router.patch("/org/members/:userId/display-name",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const raw = (req.body ?? {}).display_name;
     if (raw !== null && typeof raw !== "string") {
       return res.status(400).json({ error: "display_name must be a string or null" });
+    }
+    // §5.3: a manager may only rename someone at their own rank or below.
+    const targetRole = await getMemberRole(req.org!.id, req.params.userId);
+    if (!targetRole) return res.status(404).json({ error: "member not found" });
+    if (!canManageRank(req.member!.role, targetRole)) {
+      return res.status(403).json({ error: "cannot manage a member ranked above you" });
     }
     const display_name = typeof raw === "string" && raw.trim() ? raw.trim() : null;
     const { data, error } = await db
@@ -188,7 +212,7 @@ router.patch("/org/members/:userId/display-name",
  * address to sign in with — same user id, so all their assignments are waiting.
  */
 router.post("/org/members/placeholder",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { name, role = "member", app_slugs } = req.body ?? {};
     const access_level: AccessLevel = role === "member" ? normalizeAccessLevel(req.body?.access_level) : "full";
@@ -196,8 +220,9 @@ router.post("/org/members/placeholder",
       return res.status(400).json({ error: "name is required" });
     }
     if (!ROLES.includes(role)) return res.status(400).json({ error: `role must be one of: ${ROLES.join(", ")}` });
-    if (role === "owner" && req.member!.role !== "owner") {
-      return res.status(403).json({ error: "only owners can grant the owner role" });
+    // §5.3: you can create a member up to your own rank, no higher.
+    if (!canAssignRank(req.member!.role, role as Role)) {
+      return res.status(403).json({ error: `cannot grant a role above your own (${req.member!.role})` });
     }
     const apps = await resolveOrgApps(req.org!.id, app_slugs);
 
@@ -239,7 +264,7 @@ router.post("/org/members/placeholder",
  * it and find everything already assigned to them.
  */
 router.patch("/org/members/:userId/email",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const raw = (req.body ?? {}).email;
     if (!raw || typeof raw !== "string" || !raw.includes("@")) {
@@ -248,8 +273,12 @@ router.patch("/org/members/:userId/email",
     const email = raw.toLowerCase().trim();
     // Target must be a member of THIS org.
     const { data: m } = await db
-      .from("org_members").select("user_id").eq("org_id", req.org!.id).eq("user_id", req.params.userId).maybeSingle();
+      .from("org_members").select("user_id, role").eq("org_id", req.org!.id).eq("user_id", req.params.userId).maybeSingle();
     if (!m) return res.status(404).json({ error: "member not found" });
+    // §5.3: only manage someone at your own rank or below.
+    if (!canManageRank(req.member!.role, m.role as Role)) {
+      return res.status(403).json({ error: "cannot manage a member ranked above you" });
+    }
     const { data: userPage } = await db.auth.admin.listUsers({ perPage: 1000 });
     const target = (userPage?.users ?? []).find((u) => u.id === req.params.userId);
     // SECURITY: only a no-email placeholder may be given an email here. A real
@@ -281,7 +310,7 @@ router.patch("/org/members/:userId/email",
  * clobbering the manager's login; the UI instructs exactly that.
  */
 router.post("/org/members/:userId/preview-link",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { userId } = req.params;
     const locale = req.body?.locale === "en" ? "en" : "he";
@@ -336,7 +365,7 @@ router.post("/org/members/:userId/preview-link",
  * the org and applies those app grants.
  */
 router.post("/org/members",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { email, role = "member", locale: rawLocale = "he", app_slugs } = req.body ?? {};
     // Only he/en are valid locale segments; never trust client input in the email link path.
@@ -350,9 +379,10 @@ router.post("/org/members",
     if (!ROLES.includes(role)) {
       return res.status(400).json({ error: `role must be one of: ${ROLES.join(", ")}` });
     }
-    // Only owners can add new owners
-    if (role === "owner" && req.member!.role !== "owner") {
-      return res.status(403).json({ error: "only owners can grant the owner role" });
+    // §5.3: you can invite/add a member up to your own rank, no higher
+    // (an admin can add members/admins; only an owner can add an owner).
+    if (!canAssignRank(req.member!.role, role as Role)) {
+      return res.status(403).json({ error: `cannot grant a role above your own (${req.member!.role})` });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -457,14 +487,29 @@ router.post("/org/members",
   },
 );
 
-/** PATCH /org/members/:userId/role — owner only */
+/**
+ * PATCH /org/members/:userId/role — change a member's rank.
+ * §5.3 hierarchy: owner/admin may act, but only on a member at their own rank
+ * or below (canManageRank), and may only assign a rank up to their own
+ * (canAssignRank). So an admin can move members ↔ admin, but can neither touch
+ * an owner nor mint one; only an owner can. Developers are excluded entirely.
+ */
 router.patch("/org/members/:userId/role",
-  requireAuth, requireOrg, requireRole("owner"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { userId } = req.params;
     const { role } = req.body ?? {};
     if (!ROLES.includes(role)) {
       return res.status(400).json({ error: `role must be one of: ${ROLES.join(", ")}` });
+    }
+    // §5.3 rank guards: can't retitle someone above you, can't promote above you.
+    const currentRole = await getMemberRole(req.org!.id, userId);
+    if (!currentRole) return res.status(404).json({ error: "member not found" });
+    if (!canManageRank(req.member!.role, currentRole)) {
+      return res.status(403).json({ error: "cannot change the role of a member ranked above you" });
+    }
+    if (!canAssignRank(req.member!.role, role as Role)) {
+      return res.status(403).json({ error: `cannot grant a role above your own (${req.member!.role})` });
     }
     // Prevent demoting the last owner
     if (role !== "owner") {
@@ -493,6 +538,39 @@ router.patch("/org/members/:userId/role",
   },
 );
 
+/**
+ * PATCH /org/members/:userId/developer — set/clear the developer axis (§5.2).
+ * Owner-only: the flag grants full feature visibility, so it's a high-privilege
+ * grant. denyDeveloper means a developer can never grant or revoke the flag
+ * (not even on themselves). Independent of rank — an owner can flag any member.
+ */
+router.patch("/org/members/:userId/developer",
+  requireAuth, requireOrg, requireRole("owner"), denyDeveloper,
+  async (req: Request, res: Response) => {
+    const { userId } = req.params;
+    const raw = (req.body ?? {}).is_developer;
+    if (typeof raw !== "boolean") {
+      return res.status(400).json({ error: "is_developer must be a boolean" });
+    }
+    // Self-lockout guard: once someone is a developer, denyDeveloper blocks them
+    // from this very endpoint, so an owner who flagged themselves could never
+    // clear it via the API. Forbid setting the flag on your own row.
+    if (userId === req.user!.id) {
+      return res.status(400).json({ error: "cannot set the developer flag on yourself" });
+    }
+    const { data, error } = await db
+      .from("org_members")
+      .update({ is_developer: raw })
+      .eq("org_id", req.org!.id)
+      .eq("user_id", userId)
+      .select("user_id, is_developer")
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "member not found" });
+    res.json({ member: data });
+  },
+);
+
 /** DELETE /org/members/:userId — owner/admin can remove others; any member can self-leave */
 router.delete("/org/members/:userId",
   requireAuth, requireOrg,
@@ -503,6 +581,10 @@ router.delete("/org/members/:userId",
 
     if (!isSelf && !isAdmin) {
       return res.status(403).json({ error: "only owners/admins can remove other members" });
+    }
+    // §5.3: developers may leave themselves but never remove another member.
+    if (!isSelf && req.member!.is_developer) {
+      return res.status(403).json({ error: "developers are excluded from this action" });
     }
 
     // Prevent removing the last owner
@@ -516,15 +598,16 @@ router.delete("/org/members/:userId",
       return res.status(409).json({ error: "cannot remove the last owner — transfer ownership first" });
     }
 
-    // Admins can't remove owners (only owners can)
+    // §5.3: you can only remove a member at your own rank or below — an admin
+    // can't remove an owner, and the equal-rank case is allowed per spec.
     const { data: target } = await db
       .from("org_members")
       .select("role")
       .eq("org_id", req.org!.id)
       .eq("user_id", userId)
       .maybeSingle();
-    if (target?.role === "owner" && req.member!.role !== "owner" && !isSelf) {
-      return res.status(403).json({ error: "only owners can remove an owner" });
+    if (!isSelf && target && !canManageRank(req.member!.role, target.role as Role)) {
+      return res.status(403).json({ error: "cannot remove a member ranked above you" });
     }
 
     const { error } = await db
@@ -563,7 +646,7 @@ router.delete("/org/members/:userId",
  * unrestricted — but the UI only exposes this for role='member'.)
  */
 router.patch("/org/members/:userId/apps",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { userId } = req.params;
     const { app_slugs } = req.body ?? {};
@@ -573,9 +656,13 @@ router.patch("/org/members/:userId/apps",
 
     // Target must be a member of this org.
     const { data: target } = await db
-      .from("org_members").select("user_id")
+      .from("org_members").select("user_id, role")
       .eq("org_id", req.org!.id).eq("user_id", userId).maybeSingle();
     if (!target) return res.status(404).json({ error: "member not found" });
+    // §5.3: only manage app access for someone at your own rank or below.
+    if (!canManageRank(req.member!.role, target.role as Role)) {
+      return res.status(403).json({ error: "cannot manage a member ranked above you" });
+    }
 
     const apps = await resolveOrgApps(req.org!.id, app_slugs);
 
@@ -636,7 +723,7 @@ router.get("/org/invites",
 
 /** DELETE /org/invites/:id — revoke a pending invite */
 router.delete("/org/invites/:id",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { error, count } = await db
       .from("org_invites")
@@ -653,7 +740,7 @@ router.delete("/org/invites/:id",
 
 /** POST /org/invites/:id/resend — extend expiry by 7 days and re-send the email */
 router.post("/org/invites/:id/resend",
-  requireAuth, requireOrg, requireRole("owner", "admin"),
+  requireAuth, requireOrg, requireRole("owner", "admin"), denyDeveloper,
   async (req: Request, res: Response) => {
     const locale = (req.body?.locale === "en" ? "en" : "he") as "he" | "en";
     const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
