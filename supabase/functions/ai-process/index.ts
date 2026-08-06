@@ -4662,11 +4662,20 @@ Deno.serve(async (req) => {
         const ctx = ((c as any).context ?? {}) as Record<string, unknown>;
         const cls = String(ctx?.prompt_class ?? "").toLowerCase();
         if (cls !== "prompt") continue;
-        // Legacy rows carry prompt_class from the one-off manual triage and have
-        // no triage block; those were approved by hand, so treat a MISSING triage
-        // as approved and only an explicit approved=false as pending.
+        // A correction is injected ONLY once the user has EXPLICITLY approved the
+        // triaged rule (triage.approved === true). A MISSING triage block no longer
+        // counts as approved — it fails CLOSED. Treating "no block" as approved was
+        // the hole behind the "AI confuses who/what" regression: the one-off manual
+        // triage of the first 68 (2026-07) left five prompt-class rows with NO
+        // triage block, so all five were fed into EVERY classification as
+        // highest-authority user rules — and three are developer-complaints, not
+        // rules ("איך הגעת למסקנה המוטעת... תבדוק את הנתונים", "למה יצרת הצעה כזאת?"),
+        // exactly the "actively mislead the model" failure 250d85fe warned about
+        // (verified in prod 2026-08-06: user 9cb6086a, 5 rows, 0 explicit-approved).
+        // A genuine legacy rule is re-admitted by approving it through the triage
+        // flow (corrections/triage.ts writes the triage block + approved=true).
         const triage = (ctx?.triage ?? null) as Record<string, unknown> | null;
-        if (triage && triage.approved !== true) continue;
+        if (!triage || triage.approved !== true) continue;
         const key = ruleKey(note);
         if (!key || seenRules.has(key)) continue;
         seenRules.add(key);
@@ -4689,8 +4698,10 @@ Deno.serve(async (req) => {
           // original complaint text instead. The notification told the user
           // "this exact rule is awaiting approval" and then a different string
           // was used, which is the kind of gap that makes the whole approval
-          // step untrustworthy. Falls back to the note for the legacy rows that
-          // were hand-classified and have no triage block.
+          // step untrustworthy. The `|| note` fallback now only matters for an
+          // approved row whose triage carries no suggested_rule_he — a legacy row
+          // with no triage block never reaches here anymore (the guard above skips
+          // it), so the raw complaint text can no longer leak in through this path.
           const approvedRule = String(
             ((ctx?.triage ?? {}) as Record<string, unknown>)?.suggested_rule_he ?? "",
           ).trim();
