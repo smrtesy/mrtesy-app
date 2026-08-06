@@ -282,7 +282,7 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
 
     const { data: statusRows, error: sErr } = await db
       .from("claude_runs")
-      .select("thread_id, status, turn_index, ends_with_block")
+      .select("thread_id, status, turn_index, ends_with_block, ends_with_question")
       .in("thread_id", ids)
       .order("thread_id", { ascending: true })
       .order("turn_index", { ascending: false })
@@ -292,11 +292,15 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     for (const r of statusRows ?? []) {
       if (!r.thread_id || lastStatus.has(r.thread_id)) continue;
       lastStatus.set(r.thread_id, r.status);
-      // Newest turn is a COMPLETED interactive question still awaiting the user → the
-      // blue "needs you" hourglass. `ends_with_block` is precomputed by the runner (a
-      // newer turn would make the block read-only, so only the newest turn counts —
-      // exactly the client's "interactive only on the last turn").
-      if (r.status === "done" && r.ends_with_block) awaitingReplyByThread.add(r.thread_id);
+      // Newest turn is a COMPLETED question still awaiting the user → the blue "needs
+      // you" hourglass. Two precomputed booleans (a newer turn would make either
+      // read-only, so only the newest turn counts — exactly the client's "interactive
+      // only on the last turn"): `ends_with_block` = an interactive block; the far more
+      // common `ends_with_question` = a plain-text question mark (GENERATED column,
+      // migration 20260806222312). Reading a boolean keeps this off a per-poll scan of
+      // result_summary.
+      if (r.status === "done" && (r.ends_with_block || r.ends_with_question))
+        awaitingReplyByThread.add(r.thread_id);
     }
   }
 
@@ -385,8 +389,9 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     usage_wait_until: usageWaitByThread.has(r.id) ? usageWaitByThread.get(r.id) || "" : null,
     // A pending destructive-migration approval → the blue hourglass (needs you).
     needs_you: needsYouByThread.has(r.id),
-    // Newest completed turn ended on an unanswered interactive question → also the
-    // blue "needs you" hourglass, with its own label.
+    // Newest completed turn ended on an unanswered question — either an interactive
+    // block (ends_with_block) or a plain-text question (ends_with_question) → the blue
+    // "needs you" hourglass, with its own label.
     awaiting_reply: awaitingReplyByThread.has(r.id),
   }));
   return res.json({ threads });
