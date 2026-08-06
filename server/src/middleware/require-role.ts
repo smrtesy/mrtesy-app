@@ -54,6 +54,23 @@ export function canAssignRank(actorRole: Role, newRole: Role): boolean {
 }
 
 /**
+ * Can an actor at `actorRole` mint an impersonation-preview session AS someone
+ * currently at `targetRole` (§7 step 8)? Stricter than canManageRank because a
+ * preview mints a REAL session as the target:
+ *   - owner  → anyone in the org (rankOf actor ≥ rankOf target — owner is top).
+ *   - admin  → only members strictly BELOW them; never another admin (which
+ *     would let an admin see a peer's org-management view) nor an owner.
+ *   - member → no one.
+ * The super-admin-as-target block stays a SEPARATE check at the call site: it
+ * guards against escalation to platform-wide admin, which rank can't express.
+ */
+export function canImpersonate(actorRole: Role, targetRole: Role): boolean {
+  if (actorRole === "owner") return rankOf(actorRole) >= rankOf(targetRole);
+  if (actorRole === "admin") return rankOf(targetRole) < rankOf(actorRole);
+  return false;
+}
+
+/**
  * denyDeveloper — hard-block the developer axis from sensitive capabilities.
  *
  * Plan §5.2/§5.3/§9.7: is_developer grants full feature VISIBILITY (to build)

@@ -215,6 +215,85 @@ router.delete("/admin/users/:id/super-admin", async (req: Request, res: Response
   res.json({ ok: true });
 });
 
+/**
+ * POST /admin/impersonate/:userId — super-admin cross-org impersonation preview
+ * (§7 step 8). Unlike the org owner/admin preview-link (which is scoped to the
+ * caller's own org), a super-admin can preview ANY user platform-wide, so this
+ * lives under the requireSuperAdmin-gated /admin router.
+ *
+ * We reuse the exact same one-time-token machinery as /org/members/:id/preview-link:
+ * insert a member_preview_tokens row and return a /api/preview?token=… URL that,
+ * opened in a clean/incognito window, mints a real session as the target once.
+ * member_preview_tokens.org_id is NOT NULL, so we resolve the target's PRIMARY
+ * (earliest-joined) org for the token's org_id — a user with no org membership
+ * has no app view to preview and is rejected.
+ */
+router.post("/admin/impersonate/:userId", async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  const locale = req.body?.locale === "en" ? "en" : "he";
+
+  // Target must exist.
+  const { data: authUser } = await db.auth.admin.getUserById(userId);
+  if (!authUser?.user) return res.status(404).json({ error: "user not found" });
+
+  // Defense-in-depth, same guard as the org preview-link path: never mint a
+  // session AS another super-admin. Here the actor is already a super-admin, so
+  // this is not an escalation, but previewing as a specific peer super-admin
+  // carries no product value and every impersonation must stay accountable, so
+  // block it. FAIL CLOSED — a query error means we can't prove the target isn't
+  // a super-admin, so refuse rather than mint.
+  const { data: sa, error: saErr } = await db
+    .from("super_admins").select("user_id").eq("user_id", userId).maybeSingle();
+  if (saErr) return res.status(500).json({ error: "could not verify user" });
+  if (sa) return res.status(403).json({ error: "cannot impersonate a super-admin" });
+
+  // Resolve the target's primary org (earliest membership) for the token's
+  // NOT NULL org_id. No membership → nothing to preview. Distinguish a real DB
+  // error (500) from a genuinely membership-less user (409).
+  const { data: membership, error: mErr } = await db
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", userId)
+    .order("joined_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (mErr) return res.status(500).json({ error: "could not resolve org membership" });
+  if (!membership) {
+    return res.status(409).json({ error: "user has no org membership to preview" });
+  }
+  const orgId = membership.org_id as string;
+
+  const expires_at = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutes
+  const { data: tok, error } = await db
+    .from("member_preview_tokens")
+    .insert({
+      org_id: orgId,
+      target_user_id: userId,
+      created_by: req.user!.id,
+      expires_at,
+    })
+    .select("token")
+    .single();
+  if (error || !tok) return res.status(500).json({ error: error?.message ?? "failed to create preview token" });
+
+  // §7 step 8: mandatory audit — one append-only row per minted impersonation.
+  const { error: logErr } = await db.from("impersonation_log").insert({
+    actor_user_id: req.user!.id,
+    target_user_id: userId,
+    org_id: orgId,
+    via: "super_admin",
+    ip: (req.headers["x-forwarded-for"] as string | undefined) ?? req.ip ?? null,
+    token: tok.token,
+  });
+  if (logErr) console.error("[admin/impersonate] impersonation_log write failed:", logErr.message);
+
+  // FRONTEND_URL may be a comma-separated CORS list — the first entry is the
+  // canonical app origin, where the /api/preview route lives.
+  const appUrl = (process.env.FRONTEND_URL ?? "http://localhost:3000").split(",")[0].trim();
+  const url = `${appUrl}/api/preview?token=${tok.token}&locale=${locale}`;
+  res.json({ url, expires_at });
+});
+
 /** GET /admin/super-admins — list everyone with the role */
 router.get("/admin/super-admins", async (_req: Request, res: Response) => {
   const { data, error } = await db
