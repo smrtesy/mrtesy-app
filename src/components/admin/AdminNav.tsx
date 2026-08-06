@@ -18,6 +18,7 @@ import {
   KeyRound,
   Bot,
   Lock,
+  FlaskConical,
 } from "lucide-react";
 
 // Platform-level only. Per-app concerns (services, prompts) now live
@@ -44,6 +45,8 @@ const items = [
   // the same super-admin check as the rest of /admin, matching the Express
   // requireSuperAdmin on its routes.
   { key: "claude",         href: "claude",         labelKey: "claude",        icon: Bot },
+  // Feature channels — beta vs stable maturity per feature (docs/feature-channels-plan.md).
+  { key: "features",       href: "features",       labelKey: "features",      icon: FlaskConical },
 ];
 
 export function AdminNav() {

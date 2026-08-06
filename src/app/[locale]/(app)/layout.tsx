@@ -22,6 +22,7 @@ import { ClaudeDrawer } from "@/components/claude/ClaudeDrawer";
 import { ClaudeDrawerProvider } from "@/contexts/ClaudeDrawerContext";
 import { SystemMessagesRecorder } from "@/components/platform/layout/SystemMessagesRecorder";
 import { ClientErrorCatcher } from "@/components/platform/layout/ClientErrorCatcher";
+import { FeatureReportButton } from "@/components/platform/features/FeatureReportButton";
 
 export default async function AppLayout({
   children,
@@ -71,7 +72,7 @@ export default async function AppLayout({
     ? supabase.from("super_admins").select("user_id").eq("user_id", user.id).maybeSingle()
     : Promise.resolve({ data: null });
   const settingsPromise = user && !devBypass
-    ? supabase.from("user_settings").select("onboarding_completed").eq("user_id", user.id).single()
+    ? supabase.from("user_settings").select("onboarding_completed, release_channel").eq("user_id", user.id).single()
     : Promise.resolve({ data: null });
   const orgFallbackPromise = user && !cookieOrgId
     ? Promise.resolve(
@@ -81,6 +82,18 @@ export default async function AppLayout({
   const appsQueries = user && cookieOrgId
     ? startEnabledAppsQueries(supabase, user.id, cookieOrgId)
     : null;
+  // Feature-channels STATE table (docs/feature-channels-plan.md §4.4). Its rows
+  // depend on neither user nor org, so start it NOW — wrapped in Promise.resolve
+  // to force the lazy PostgrestBuilder to execute — so it runs concurrently with
+  // everything above. The per-channel view is built from it once the channel is
+  // resolved below.
+  const featureChannelsPromise = user && !devBypass
+    ? Promise.resolve(
+        supabase
+          .from("feature_channels")
+          .select("feature_id, stable_enabled, beta_enabled, stable_version, beta_version"),
+      )
+    : Promise.resolve({ data: null });
 
   const [superAdminResult, settingsResult] = await Promise.all([
     superAdminPromise,
@@ -169,6 +182,40 @@ export default async function AppLayout({
     );
   }
 
+  // Feature-channels (docs/feature-channels-plan.md). Resolve the maturity
+  // channel — a user override (user_settings.release_channel) wins over the org
+  // default (organizations.release_channel); absent both, "stable" so a new
+  // customer never sees beta until explicitly assigned. Then project the
+  // feature_channels STATE (read concurrently above) into the per-channel view
+  // the client gates on.
+  const userRelease = (settingsResult.data as { release_channel?: string } | null)?.release_channel;
+  let orgRelease: string | undefined;
+  if (user && resolvedOrgId) {
+    const { data: orgRow } = await supabase
+      .from("organizations")
+      .select("release_channel")
+      .eq("id", resolvedOrgId)
+      .maybeSingle();
+    orgRelease = (orgRow as { release_channel?: string } | null)?.release_channel;
+  }
+  const channel: "stable" | "beta" =
+    (userRelease ?? orgRelease ?? "stable") === "beta" ? "beta" : "stable";
+
+  const featureChannelsResult = await featureChannelsPromise;
+  const features: Record<string, { visible: boolean; version: string }> = {};
+  for (const row of (featureChannelsResult.data ?? []) as Array<{
+    feature_id: string;
+    stable_enabled: boolean;
+    beta_enabled: boolean;
+    stable_version: string;
+    beta_version: string;
+  }>) {
+    features[row.feature_id] = {
+      visible: channel === "beta" ? row.beta_enabled : row.stable_enabled,
+      version: channel === "beta" ? row.beta_version : row.stable_version,
+    };
+  }
+
   return (
     <div className="flex min-h-screen w-full overflow-x-hidden">
       {/* When this page is loaded inside a tabs-workspace pane, flag it before
@@ -193,7 +240,7 @@ export default async function AppLayout({
       {/* Publishes the access facts the sidebar is built from (enabled apps,
           super-admin, smrtTask level) so client screens — including the ones
           rendered as component panes below — filter on exactly the same set. */}
-      <AppAccessProvider value={{ enabledApps, isAdmin, taskAccess, restrictedResources }}>
+      <AppAccessProvider value={{ enabledApps, isAdmin, taskAccess, restrictedResources, channel, features }}>
       <TabsWorkspaceProvider>
       {/* Shared open/close state for the Claude side-drawer — wraps both the
           Sidebar (whose Claude button opens it) and the ClaudeDrawer below. */}
@@ -240,6 +287,11 @@ export default async function AppLayout({
               "debug in Claude" action on an uncaught-error toast — logging is for
               everyone. Renders nothing. */}
           <ClientErrorCatcher isAdmin={!!isAdmin} />
+          {/* Proactive "report a problem" — a discreet floating button visible to
+              EVERY user (beta and stable). Opens a preview-before-send dialog and
+              writes a category='feature_report' row to the same log sink. Source 2
+              of the feature log (docs/feature-channels-plan.md §8). */}
+          <FeatureReportButton />
         </WhatsAppPanelProvider>
       </ClaudeDrawerProvider>
       </TabsWorkspaceProvider>

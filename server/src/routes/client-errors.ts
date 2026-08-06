@@ -12,6 +12,13 @@ import { db } from "../db";
  * the notify_superadmins_on_error trigger and surfaces in the daily health report —
  * so client-side errors become visible platform-wide, not just on the device.
  *
+ * Feature-channels reuses this same sink (docs/feature-channels-plan.md §8) with
+ * two extra categories on the SAME row shape — no separate endpoint:
+ *   • 'feature'        — a PaneErrorBoundary auto-caught a crash inside a feature.
+ *   • 'feature_report' — the user pressed "report a problem" and sent the context.
+ * Both carry feature_id / screen_key in details; a report also carries its
+ * user-shown context under details.report.
+ *
  * Auth: requireAuth only. log_entries is user-scoped (no org_id column), and we want
  * to attribute the error to whoever hit it — no app/org gate to fail on.
  */
@@ -44,6 +51,24 @@ function str(v: unknown, max: number): string | null {
   return s ? s.slice(0, max) : null;
 }
 
+// The category the row lands under. Anything outside this allowlist (or absent)
+// falls back to the original client_error, so a malformed client can't invent
+// arbitrary categories.
+const ALLOWED_CATEGORIES = new Set(["client_error", "feature", "feature_report"]);
+
+/** Cap a nested report/object so a client can't push an unbounded blob into the
+ *  row's details. Serialises, truncates, and reparses (best-effort). */
+function clampObject(v: unknown, max: number): Record<string, unknown> | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  try {
+    const s = JSON.stringify(v);
+    if (s.length <= max) return v as Record<string, unknown>;
+    return { truncated: true, preview: s.slice(0, max) };
+  } catch {
+    return undefined;
+  }
+}
+
 router.post("/", requireAuth, async (req: Request, res: Response) => {
   const userId = req.user!.id;
   // Always ack — the client fires this best-effort and must never see an error
@@ -54,6 +79,8 @@ router.post("/", requireAuth, async (req: Request, res: Response) => {
   const kind = str(b.kind, 16) ?? "unknown";
   const message = str(b.message, 2000) ?? "(no message)";
   const route = str(b.route, 500);
+  const categoryIn = str(b.category, 32);
+  const category = categoryIn && ALLOWED_CATEGORIES.has(categoryIn) ? categoryIn : "client_error";
 
   const details: Record<string, unknown> = {
     kind,
@@ -64,12 +91,18 @@ router.post("/", requireAuth, async (req: Request, res: Response) => {
     response_body: str(b.responseBody, 800) ?? undefined,
     stack: str(b.stack, 4000) ?? undefined,
     user_agent: str(b.userAgent, 400) ?? undefined,
+    // Feature-channels tags (present only on 'feature' / 'feature_report' rows).
+    feature_id: str(b.feature_id, 128) ?? undefined,
+    screen_key: str(b.screen_key, 200) ?? undefined,
+    // The user-shown context of a proactive report (recent errors, failed
+    // requests, app version, channel, browser). Capped so it can't bloat the row.
+    report: clampObject(b.report, 8000),
   };
 
   const { error } = await db.from("log_entries").insert({
     user_id: userId,
     level: "error",
-    category: "client_error",
+    category,
     status: "failed",
     error_message: message,
     source_type: `client:${kind}`,

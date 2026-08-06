@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { listAllUserEmails, createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { getTranslations } from "next-intl/server";
 import { Badge } from "@/components/ui/badge";
+import { UserChannelSelect } from "@/components/admin/UserChannelSelect";
 import Link from "next/link";
 
 export default async function AdminUsersPage({
@@ -34,7 +35,7 @@ export default async function AdminUsersPage({
   const [{ data: users }, { data: memberships }] = await Promise.all([
     admin
       .from("user_settings")
-      .select("user_id, display_name, onboarding_completed, created_at")
+      .select("user_id, display_name, onboarding_completed, created_at, release_channel")
       .order("created_at", { ascending: false }),
     admin
       .from("org_members")
@@ -94,12 +95,14 @@ export default async function AdminUsersPage({
 
       <div className="space-y-2">
         {(users || []).map((user) => (
-          <Link
+          <div
             key={user.user_id}
-            href={`/${locale}/admin/users/${user.user_id}`}
-            className="flex items-center justify-between rounded-lg border p-3 hover:bg-accent"
+            className="flex items-center justify-between gap-2 rounded-lg border p-3 hover:bg-accent"
           >
-            <div className="min-w-0">
+            <Link
+              href={`/${locale}/admin/users/${user.user_id}`}
+              className="min-w-0 flex-1"
+            >
               <p className="font-medium truncate">
                 {emailMap[user.user_id] || user.display_name || "—"}
               </p>
@@ -112,16 +115,22 @@ export default async function AdminUsersPage({
                 <span>·</span>
                 <code className="font-mono text-[10px] opacity-60">{user.user_id.slice(0, 8)}</code>
               </p>
+            </Link>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="flex gap-1 flex-wrap justify-end">
+                {(userApps[user.user_id] ?? []).map((name) => (
+                  <Badge key={name} variant="outline" className="text-xs">{name}</Badge>
+                ))}
+                {!user.onboarding_completed && (
+                  <Badge variant="secondary" className="text-xs">Onboarding</Badge>
+                )}
+              </div>
+              <UserChannelSelect
+                userId={user.user_id}
+                initial={user.release_channel === "beta" ? "beta" : "stable"}
+              />
             </div>
-            <div className="flex gap-1 flex-wrap justify-end">
-              {(userApps[user.user_id] ?? []).map((name) => (
-                <Badge key={name} variant="outline" className="text-xs">{name}</Badge>
-              ))}
-              {!user.onboarding_completed && (
-                <Badge variant="secondary" className="text-xs">Onboarding</Badge>
-              )}
-            </div>
-          </Link>
+          </div>
         ))}
         {(!users || users.length === 0) && (
           <p className="text-center text-muted-foreground py-8">{t("noUsers")}</p>
