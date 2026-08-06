@@ -113,6 +113,13 @@ function buildDiscussMessage(cls: "code" | "ui", ctx: FixContext): string {
         (ctx.diagnosis_problem_he ? `הבעיה: ${ctx.diagnosis_problem_he}\n` : "") +
         (ctx.diagnosis_fix_he ? `הפתרון שהוצע: ${ctx.diagnosis_fix_he}` : "")
       : "",
+    // WHICH task/message this is about — without this block the thread's TITLE
+    // carried the serial but the message body never did, so Claude opened the
+    // discussion not knowing which task it concerned. Mirrors buildFixMessage.
+    "",
+    "## הקשר",
+    `משימה: ${ctx.serial ?? "—"} — ${ctx.task_title ?? "—"}`,
+    ctx.msg_subject ? `הודעת מקור: ${ctx.msg_sender ?? "—"} · ${ctx.msg_subject}` : "",
     "",
     "## מה לעשות",
     "1. הצג בקצרה, בעברית פשוטה, את הבעיה כפי שאתה מבין אותה ואת מה שהיית מציע לתקן (אם יש אבחון למעלה — הישען עליו).",
@@ -185,9 +192,11 @@ export async function createFixThread(
         prompt: composed.prompt,
         user_prompt: message,
         repo: AUTOFIX_REPO,
-        // Automated classification fix — runs on the second subscription account so
-        // it stays off the primary account's usage window (falls back to primary
-        // when that account isn't configured).
+        // Automated classification fix — the background `automation` account, so it
+        // stays off the primary account's usage window. executeRun lets that account
+        // BORROW a healthy account's token when it is over its weekly limit (see
+        // effectiveAccount there), so the run still lands during an automation-account
+        // outage while the row stays tagged "automation".
         claude_account: AUTOMATION_ACCOUNT,
         status: "queued",
       })

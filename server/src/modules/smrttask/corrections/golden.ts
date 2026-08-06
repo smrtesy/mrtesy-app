@@ -25,7 +25,7 @@
  */
 
 import { db } from "../../../db";
-import { runOneShot, AUTOMATION_ACCOUNT } from "../../claude/runner";
+import { runOneShot, pickHealthyAccount } from "../../claude/runner";
 
 /** One labelled row the rule is measured against. */
 interface Conflict {
@@ -137,8 +137,10 @@ export async function validateRuleAgainstGoldenSet(
 
     const raw = await runOneShot(prompt, {
       timeoutMs: 120_000,
-      // Automated classification check — route to the second subscription account.
-      account: AUTOMATION_ACCOUNT,
+      // Automated classification check — route to a healthy background account
+      // (prefers `automation`, falls back to any configured account not over its
+      // weekly limit).
+      account: await pickHealthyAccount(),
     });
     if (!raw) return unknown(`נבדק מול ${sample.length} מקרים — הבדיקה לא הצליחה לרוץ`);
 

@@ -284,6 +284,55 @@ export async function describeAccounts(): Promise<AccountInfo[]> {
 }
 
 /**
+ * Pick an account for AUTOMATED background work (corrections triage / diagnosis /
+ * fix-and-discuss threads) that is NOT currently over a usage limit.
+ *
+ * These workloads used to be pinned to one account (`automation`). When that single
+ * account exhausted its weekly subscription limit, EVERY correction silently failed
+ * ("המיון האוטומטי לא הצליח לרוץ") for days — even though other configured accounts
+ * (e.g. ai3/ai4) still had quota. This routes the work to a healthy account instead.
+ *
+ * "Blocked" = a `claude_usage_windows` row marked `status='rejected'` whose
+ * `resets_at` is still in the future — Anthropic's OWN ground truth, persisted from
+ * the CLI's `rate_limit_event` (recordUsageWindow). Once that reset instant passes,
+ * the account is eligible again with no write needed — self-healing.
+ *
+ * Preference order: the `preferred` account (default `automation`) when healthy —
+ * keeping automated work off the user's interactive (`primary`) window, as the
+ * automation account was designed to — then any other configured, non-blocked
+ * account, preferring a non-primary one so the console's own window stays free.
+ * Falls back to `preferred` when nothing is clearly healthy (no usage data yet →
+ * identical to the previous behavior). Never throws — account selection must not
+ * fail the background job.
+ */
+export async function pickHealthyAccount(
+  preferred: string = AUTOMATION_ACCOUNT,
+): Promise<string> {
+  try {
+    const configured = (await describeAccounts())
+      .filter((a) => a.configured)
+      .map((a) => a.id);
+    if (!configured.length) return preferred;
+
+    const { data: windows } = await db
+      .from("claude_usage_windows")
+      .select("claude_account, resets_at")
+      .eq("status", "rejected")
+      .gt("resets_at", new Date().toISOString());
+    const blocked = new Set((windows ?? []).map((w) => w.claude_account as string));
+
+    if (configured.includes(preferred) && !blocked.has(preferred)) return preferred;
+
+    const healthy = configured.filter((id) => !blocked.has(id));
+    if (!healthy.length) return preferred; // everything blocked — no better option
+    // Prefer a non-primary healthy account so the console's account stays free.
+    return healthy.find((id) => id !== PRIMARY_ACCOUNT) ?? healthy[0];
+  } catch {
+    return preferred;
+  }
+}
+
+/**
  * Resolve the subscription token for a run's account.
  *
  * Returns the token together with the key it came from, so a failure message can
@@ -972,10 +1021,23 @@ async function executeRunBody(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] finish update failed:", error.message);
   };
 
+  // The account whose TOKEN and usage this run actually consumes. Normally the run's
+  // own account — but the shared background `automation` account is allowed to BORROW
+  // a different configured account that still has quota when it is over its weekly
+  // limit, so a single account's multi-day outage doesn't fail every automated
+  // correction (triage-classified diagnosis / autofix / discuss). Every OTHER account
+  // (the user's interactive threads) keeps its own token and its park-and-wait
+  // behavior untouched. The run row stays tagged `run.claude_account` ("automation"),
+  // which is what the completion-push skip below keys on — so borrowing never turns a
+  // silent background run into a phone ping.
+  const effectiveAccount =
+    (run.claude_account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT
+      ? await pickHealthyAccount()
+      : run.claude_account;
   // Trimmed because this value is pasted by a human through an admin form, where a
   // stray newline or space rides along easily and would be sent verbatim. The key
   // depends on the run's account: automated runs route to the second subscription.
-  const { token, key: tokenKey } = await loadAccountToken(run.claude_account);
+  const { token, key: tokenKey } = await loadAccountToken(effectiveAccount);
   if (!token) {
     // Fail loudly rather than let Claude Code fall through to a billed credential.
     await finish({
@@ -1538,7 +1600,7 @@ async function executeRunBody(runId: string): Promise<void> {
           const info = obj.rate_limit_info as Record<string, unknown> | undefined;
           const kind = info?.rateLimitType;
           if (info && (kind === "five_hour" || kind === "seven_day")) {
-            void recordUsageWindow(run.claude_account ?? PRIMARY_ACCOUNT, kind, info);
+            void recordUsageWindow(effectiveAccount ?? PRIMARY_ACCOUNT, kind, info);
           }
         }
         const mapped = mapLine(parsed, nextSeq);
@@ -1720,10 +1782,10 @@ async function executeRunBody(runId: string): Promise<void> {
       // record_claude_usage_hit reconstructs the account's window and snapshots its
       // consumption from claude_runs; idempotent per (account, kind, window). The
       // CLI names which limit was hit ("weekly limit" vs "session limit").
-      if (run.claude_account) {
+      if (effectiveAccount) {
         const usageKind = /weekly\s+limit/i.test(failureText) ? "weekly" : "session";
         const { error: hitErr } = await db.rpc("record_claude_usage_hit", {
-          p_account: run.claude_account,
+          p_account: effectiveAccount,
           p_kind: usageKind,
           p_reset_at: resetAt ? resetAt.toISOString() : null,
         });
