@@ -538,6 +538,14 @@ export const USAGE_LIMIT_SENTINEL = "usage-limit-wait:";
  *  falls back to the 15-minute cadence. */
 export const USAGE_UNTIL_RE = /^usage-limit-wait:until=([0-9TZ:.+-]+);/;
 
+/** Opening fence of an interactive block (smrt-ask / smrt-plan) — the server twin of
+ *  the client's BLOCK_RE (`src/components/claude/interactive/blocks.ts`), OPENING only
+ *  so it still matches text that was truncated before the close. Computed ONCE at run
+ *  completion into `claude_runs.ends_with_block` so the rail can read a cheap boolean
+ *  instead of re-scanning result_summary on every 5s poll. No `g` flag — `.test()`
+ *  must stay stateless. */
+export const ENDS_WITH_BLOCK_RE = /```[ \t]*smrt-(?:ask|plan)[ \t]*\r?\n/;
+
 /**
  * Extract the usage-window reset time from the CLI's failure text, when present.
  *
@@ -1734,6 +1742,10 @@ async function executeRunBody(runId: string): Promise<void> {
     // fallback fired, this turn resumed nothing, and the row must say so.
     resumed_session: effectiveResume,
     result_summary: truncate(lastResult === null ? null : redactSecrets(lastResult)),
+    // Did this turn end on an interactive question? Computed here, once, so the rail's
+    // "ממתין לך: שאלה" (needs-you) hourglass reads a boolean per newest run instead of
+    // re-scanning result_summary every poll. On the raw text (fence, not secrets).
+    ends_with_block: lastResult != null && ENDS_WITH_BLOCK_RE.test(lastResult),
     // Recorded even for a failed run: a run that burned tokens before failing
     // still consumed them, and hiding that would understate real usage.
     ...usageFromResult(resultEvent),
