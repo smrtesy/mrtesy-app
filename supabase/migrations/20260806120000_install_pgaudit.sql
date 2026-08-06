@@ -1,0 +1,18 @@
+-- Security-hardening plan §7 step 1: install pgaudit.
+--
+-- Why now, and why only the extension. pgaudit is already listed in this
+-- instance's shared_preload_libraries (verified 2026-08-06 via
+-- `show shared_preload_libraries`), so role-scoped audit logging
+-- (`ALTER ROLE <dev> SET pgaudit.log = ...`) will function the moment a role
+-- exists to scope it to. Installing the extension is additive and fully
+-- reversible (`DROP EXTENSION pgaudit`).
+--
+-- We deliberately do NOT turn on database- or session-wide pgaudit logging
+-- here. That would write every service-role cron query — dozens per minute
+-- (gmail-sync every 2m, ai-process/batch-details every 3m, and ~25 more jobs)
+-- — into the Postgres log with no per-actor value, drowning the signal we
+-- actually want. pgaudit is scoped to the developer DB role in §7 step 4,
+-- where a distinct non-service_role role to watch is created; that is also
+-- where the anomaly monitor (§5.6) lands, because a monitor needs a role to
+-- watch and pgaudit needs a role to scope to — the two are inseparable.
+CREATE EXTENSION IF NOT EXISTS pgaudit;
