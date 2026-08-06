@@ -252,9 +252,7 @@
     "claude": "Claude",
     "design": "Design",
     "music": "24Six",
-    "musicTooltip": "Open 24Six player",
-    "musicExpandTab": "Open in full tab",
-    "musicClose": "Close player"
+    "musicTooltip": "Open 24Six in a new tab"
   },
   "account": {
     "title": "Account",
