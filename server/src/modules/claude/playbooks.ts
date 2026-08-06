@@ -678,9 +678,8 @@ export async function composePrompt(
       "- **מזהה הסשן הזה (ה-code הקצר):** המזהה הקצר של הצ'אט הזה נמצא במשתנה-הסביבה " +
         "`$CLAUDE_THREAD_CODE` (למשל `K7`) — זה מה שמוסרים בין סשנים כדי להצביע על צ'אט מסוים. " +
         'כשמבקשים ממך "מה ה-ID שלך" הרץ `echo $CLAUDE_THREAD_CODE` וענה את הערך. כדי לזהות צ\'אט אחר ' +
-        "שנמסר לך ב-code כזה (למשל `K7`), פנה ל-" +
-        "`GET $SMRTESY_API_URL/api/claude/threads/by-code/<code>` (עם ה-Authorization וה-X-Org-Id הרגילים) — " +
-        "הוא מחזיר את ה-thread ואת ה-UUID שלו כדי שתוכל להמשיך לקרוא אותו.",
+        "שנמסר לך ב-code כזה (למשל `K7`), פנה — דרך גישת-ה-API שלך (ראה בהמשך) — ל-" +
+        "`GET /api/claude/threads/by-code/<code>`; הוא מחזיר את ה-thread ואת ה-UUID שלו כדי שתוכל להמשיך לקרוא אותו.",
     );
   }
 

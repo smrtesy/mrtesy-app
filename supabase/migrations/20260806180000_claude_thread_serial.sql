@@ -63,7 +63,15 @@ FROM ordered o
 WHERE ct.id = o.id;
 
 -- Advance the sequence past the backfilled max so the next insert continues cleanly.
-SELECT setval('claude_thread_seq', (SELECT COALESCE(max(serial), 0) FROM public.claude_threads), true);
+-- GREATEST(..,1) + is_called=EXISTS(rows): on a non-empty table this sets the seq to
+-- max(serial) is_called → nextval = max+1; on an EMPTY table (fresh/staging DB) it
+-- would otherwise error ("0 is out of bounds", MINVALUE 1) — instead we set 1 not-yet-
+-- called so the first nextval returns 1.
+SELECT setval(
+  'claude_thread_seq',
+  GREATEST(COALESCE((SELECT max(serial) FROM public.claude_threads), 0), 1),
+  EXISTS (SELECT 1 FROM public.claude_threads)
+);
 
 -- ─── 5. Constraints + lookup index ─────────────────────────────────────────
 CREATE UNIQUE INDEX IF NOT EXISTS uq_claude_threads_serial_display ON public.claude_threads(serial_display);
