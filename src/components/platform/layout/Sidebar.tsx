@@ -25,6 +25,7 @@ import {
   Sparkles,
   Search,
   ListPlus,
+  Music,
   CalendarRange,
   Archive,
   Send,
@@ -41,7 +42,6 @@ import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
 import { BrandWordmark } from "@/components/platform/branding/BrandWordmark";
 import { SystemStatusStrip } from "@/components/platform/layout/SystemStatusStrip";
-import { MusicPlayerPanel } from "@/components/platform/layout/MusicPlayerPanel";
 import { SystemMessagesBell } from "@/components/platform/layout/SystemMessagesBell";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
 import { APPS, type AppDef } from "@/lib/apps/registry";
@@ -530,10 +530,30 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
 
         {showTaskExtras && (
           <div className="p-3 border-t space-y-2">
-            <Button onClick={() => setManualTaskOpen(true)} variant="outline" className="w-full gap-2">
-              <ListPlus className="h-4 w-4" />
-              {t("newTask")}
-            </Button>
+            {/* "משימה חדשה" — the primary button fills the row. When the 24Six
+                music launcher is enabled for this user it splits off a small
+                slice on the right (mirroring the Claude row's search split, on
+                the opposite side): a music-note icon button that opens 24six.app
+                in a new tab. The full-width sidebar 24Six panel it replaces is
+                gone (was MusicPlayerPanel). */}
+            <div className="flex gap-2">
+              {showMusicPlayer && (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  aria-label={t("music")}
+                  title={t("musicTooltip")}
+                  onClick={() => window.open("https://24six.app", "_blank", "noopener,noreferrer")}
+                >
+                  <Music className="h-4 w-4" />
+                </Button>
+              )}
+              <Button onClick={() => setManualTaskOpen(true)} variant="outline" className="flex-1 gap-2">
+                <ListPlus className="h-4 w-4" />
+                {t("newTask")}
+              </Button>
+            </div>
             {/* This slot used to open the free-text task router ("עדכון"). It now
                 opens the Claude screen, which is the primary way into work — and
                 the router itself moved onto that screen, so nothing was lost.
@@ -606,11 +626,6 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             </div>
           </div>
         )}
-        {/* 24Six music player — collapsed by default, docked under the status
-            strip. Desktop-only by construction (this whole aside is hidden on
-            mobile). Embedded iframe + open-in-full-tab fallback. Gated to a
-            single user for now (see showMusicPlayer in (app)/layout.tsx). */}
-        {showMusicPlayer && <MusicPlayerPanel />}
       </aside>
 
       {/* Mobile Bottom Tab Bar */}
