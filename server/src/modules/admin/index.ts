@@ -12,6 +12,7 @@ import domainTrackerRouter from "./domain-tracker";
 import priceTrackerRouter from "./price-tracker";
 import secretsRouter from "./secrets/routes";
 import claudeAccountsRouter from "./claude-accounts";
+import docsRouter from "./docs/routes";
 
 const router = Router();
 router.use(usersRouter);
@@ -22,5 +23,6 @@ router.use(domainTrackerRouter);
 router.use(priceTrackerRouter);
 router.use(secretsRouter);
 router.use(claudeAccountsRouter);
+router.use(docsRouter);
 
 export default router;
