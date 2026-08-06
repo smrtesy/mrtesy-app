@@ -413,7 +413,7 @@ router.post("/api/bot/jobs/health-check", async (_req: Request, res: Response) =
   const failed: string[] = [];
   for (const bot of (bots as (BotCreds & { id: string; org_id: string; slug: string; transport?: string | null })[]) ?? []) {
     if (bot.transport === "baileys") continue;
-    const creds = resolveCreds(bot, "live");
+    const creds = await resolveCreds(bot, "live");
     if (!creds) continue; // no live number configured — nothing to probe
     checked++;
 
