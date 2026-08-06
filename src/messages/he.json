@@ -252,9 +252,7 @@
     "claude": "קלוד",
     "design": "עיצוב",
     "music": "24Six",
-    "musicTooltip": "פתח נגן 24Six",
-    "musicExpandTab": "פתח בטאב מלא",
-    "musicClose": "סגור נגן"
+    "musicTooltip": "פתח את 24Six בטאב חדש"
   },
   "account": {
     "title": "ניהול חשבון",
@@ -4754,7 +4752,15 @@
       "live": "רצה עכשיו",
       "done": "התור האחרון הסתיים",
       "failed": "התור האחרון נכשל",
-      "idle": "עדיין לא רצה"
+      "idle": "עדיין לא רצה",
+      "waitUsage": "ממתין לחלון הטוקנים",
+      "waitMerge": "ממתין למיזוג ל-main",
+      "needsApproval": "ממתין לך: אישור מיגרציה",
+      "needsConflict": "ממתין לך: קונפליקט מיזוג לפתור",
+      "shipLive": "עלה ל-main ונפרס בפרודקשן ✓",
+      "shipFailed": "נדחף ל-main אך הבנייה נכשלה",
+      "shipBuilding": "נדחף ל-main — הבנייה רצה",
+      "shipBranch": "נדחף לענף (לא ל-main)"
     },
     "handled": {
       "mark": "סמן כטופל",
@@ -4858,6 +4864,12 @@
       "now": "אגד עכשיו",
       "done": "האיגוד עודכן",
       "none": "ללא נושא"
+    },
+    "search": {
+      "open": "חיפוש בצ'אטים",
+      "placeholder": "חיפוש בכותרת ובתוכן…",
+      "searching": "מחפש…",
+      "noResults": "אין תוצאות"
     },
     "mergeQueue": {
       "pending": "ממתין למיזוג",

@@ -33,6 +33,7 @@ import path from "node:path";
 import { db } from "../../db";
 import { notify } from "../../lib/platform/notify";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
+import { markThreadShipped } from "./ship-status";
 
 /** Master switch. The coordinator AND the push-gate are both gated on this, so
  *  with it unset the entire feature is inert (nothing queues, nothing deploys). */
@@ -50,6 +51,19 @@ export const MAX_WAIT_MS = 30 * 60_000;
 /** A 'building' row whose run stopped heartbeating this long ago is an abandoned
  *  fix — dropped so it can't hold the batch forever. */
 const STALE_BUILDING_MS = 5 * 60_000;
+/** The batch's push redeploys Railway, which SIGTERMs every live console run
+ *  mid-turn — the real reason console runs "fall" (diagnosed 2026-08-06: it's
+ *  deploy restarts, NOT OOM). So hold the batch until no run is actively working:
+ *  status running/queued AND a heartbeat (claude_runs.updated_at, bumped every 20s
+ *  by the runner) fresher than this. A staler run is dead or sleeping (e.g. parked
+ *  on a usage limit) and must NOT hold the deploy. Quiet windows are frequent —
+ *  ~69% of 5-min samples had zero active runs — so a gap is found in minutes. */
+const RUN_HEARTBEAT_FRESH_MS = 2 * 60_000;
+/** …but never hold for a quiet window longer than this from the earliest queued
+ *  fix. A perpetually-busy console must not strand a server fix forever — past this
+ *  the batch deploys even into active runs (recover.ts replays what the restart
+ *  interrupts). */
+const RUN_QUIET_CAP_MS = 45 * 60_000;
 /** How often the coordinator evaluates the queue. */
 const SCAN_INTERVAL_MS = 30_000;
 /** Give the server a moment to settle before the first evaluation. */
@@ -164,6 +178,14 @@ async function removeRow(id: string): Promise<void> {
   if (error) console.error("[deploy-coord] delete failed:", error.message);
 }
 
+/** Read the current main tip in DEPLOY_DIR (post-merge/post-push HEAD) so the ship
+ *  watcher has a SHA to confirm the Railway build against. Best-effort — a failure
+ *  just means the dot settles by timeout instead of by SHA match. */
+async function currentMainSha(env: NodeJS.ProcessEnv): Promise<string | null> {
+  const r = await exec("git", ["rev-parse", "HEAD"], { cwd: DEPLOY_DIR, timeoutMs: 30_000, env });
+  return r.code === 0 ? r.stdout.trim() || null : null;
+}
+
 /** Is `branch` already contained in origin/main? (i.e. its deploy already landed) */
 async function branchInMain(branch: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   const r = await exec(
@@ -261,7 +283,14 @@ async function reconcileDeploying(rows: QueueRow[], env: NodeJS.ProcessEnv): Pro
       env,
     }).catch(() => undefined);
     if (await branchInMain(row.branch, env)) {
-      await tellOwner(row, "success", "התיקון נפרס ✅", `הענף \`${row.branch}\` מוזג ל-main ונפרס.`);
+      // Already landed on main (this or a prior process pushed it) — arm the ship
+      // watcher so the rail dot goes green when the Railway build confirms live.
+      await markThreadShipped(row.thread_id, {
+        state: "main_building",
+        sha: await currentMainSha(env),
+        surface: "railway",
+        branch: row.branch,
+      });
       await removeRow(row.id);
     } else {
       await setState(row.id, "ready"); // push never happened — retry in the next batch
@@ -297,6 +326,31 @@ async function dropStaleBuilding(): Promise<void> {
 }
 
 /**
+ * Is any console run actively working right now? A run counts as active only if its
+ * status is running/queued AND its heartbeat is fresher than RUN_HEARTBEAT_FRESH_MS
+ * — a stale-heartbeat run is dead or sleeping (e.g. parked on a usage limit) and does
+ * not deserve to hold the deploy. Used as the pre-deploy quiet-window gate so the
+ * batch's Railway restart lands when it won't kill mid-turn work.
+ */
+async function activeRunsExist(): Promise<boolean> {
+  const freshAfter = new Date(Date.now() - RUN_HEARTBEAT_FRESH_MS).toISOString();
+  const { data, error } = await db
+    .from("claude_runs")
+    .select("id")
+    .in("status", ["running", "queued"])
+    .gte("updated_at", freshAfter)
+    .limit(1);
+  if (error) {
+    // Fail SAFE: if we can't tell whether runs are live, assume they are and wait.
+    // Never redeploy blind into what might be a busy window — the RUN_QUIET_CAP_MS
+    // cap still guarantees the batch eventually ships even if this keeps erroring.
+    console.error("[deploy-coord] active-run check failed (holding batch):", error.message);
+    return true;
+  }
+  return (data?.length ?? 0) > 0;
+}
+
+/**
  * The batch deploy: merge every ready branch into main, build once, push once.
  * Rows are already 'deploying'. Never auto-resolves a conflict — it surfaces it.
  */
@@ -323,6 +377,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
   for (const row of rows) {
     if (!row.branch) {
       await setState(row.id, "failed", "no branch recorded");
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "אין ענף רשום" });
       settled.add(row.id);
       continue;
     }
@@ -339,6 +394,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
     });
     if (f.code !== 0) {
       await setState(row.id, "failed", redact(f.stderr, token).slice(0, 300));
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "כשל בהבאת הענף" });
       await tellOwner(row, "action_required", "פריסה נכשלה", `לא הצלחתי להביא את הענף \`${row.branch}\`.`);
       settled.add(row.id);
       continue;
@@ -384,6 +440,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
       }
 
       await setState(row.id, "conflict", "merge conflict with the batch");
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "קונפליקט מיזוג" });
       await tellOwner(
         row,
         "action_required",
@@ -433,6 +490,7 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
     const tail = redact(`${build.stdout}\n${build.stderr}`, token).slice(-800);
     for (const row of merged) {
       await setState(row.id, "failed", tail);
+      await markThreadShipped(row.thread_id, { state: "failed", branch: row.branch, detail: "בניית-הצרור נכשלה" });
       await tellOwner(row, "action_required", "בניית-הצרור נכשלה — לא נפרס", `הבנייה על הצרור הממוזג נכשלה, לא דחפתי ל-main.\n\n${tail}`);
     }
     await exec("git", ["reset", "--hard", "origin/main"], { cwd: DEPLOY_DIR, timeoutMs: GIT_TIMEOUT_MS, env });
@@ -453,8 +511,16 @@ async function runBatchDeploy(rows: QueueRow[], token: string, pastCap: boolean)
     console.error("[deploy-coord] push failed:", redact(push.stderr, token).slice(0, 400));
     return;
   }
+  // The main tip we just pushed — the SHA the ship watcher confirms the Railway
+  // build against, flipping each thread's rail dot to green when it goes live.
+  const mainSha = await currentMainSha(env);
   for (const row of merged) {
-    await tellOwner(row, "success", "התיקון נפרס ✅", `הענף \`${row.branch}\` נכלל בפריסת-הצרור ל-main.`);
+    await markThreadShipped(row.thread_id, {
+      state: "main_building",
+      sha: mainSha,
+      surface: "railway",
+      branch: row.branch,
+    });
     await removeRow(row.id);
   }
   console.log(`[deploy-coord] deployed batch of ${merged.length} branch(es)`);
@@ -511,6 +577,17 @@ async function coordinatorTick(): Promise<void> {
     const lastActivity = Math.max(...all.map((r) => Date.parse(r.updated_at) || 0));
     if (Date.now() - lastActivity < SETTLE_MS && !pastCap) return;
 
+    // Quiet-window gate: the push below redeploys Railway and SIGTERMs every live
+    // console run mid-turn — the actual cause of runs "falling". Hold the batch
+    // until no run is actively working, so the restart lands in a gap. Force past it
+    // once the earliest queued fix has waited RUN_QUIET_CAP_MS, so a never-quiet
+    // console can't strand a server fix indefinitely.
+    const pastQuietCap = Date.now() - earliest > RUN_QUIET_CAP_MS;
+    if (!pastQuietCap && (await activeRunsExist())) {
+      console.log("[deploy-coord] active console run(s) — holding batch for a quiet window");
+      return;
+    }
+
     // Claim the ready rows atomically (ready → deploying) so a second tick can't
     // grab them; then deploy.
     const claimed: QueueRow[] = [];
@@ -540,7 +617,7 @@ async function coordinatorTick(): Promise<void> {
 export function startDeployCoordinator(): void {
   console.log(
     `[deploy-coord] ${enabled() ? "armed" : "inert (DEPLOY_QUEUE_ENABLED unset)"} — ` +
-      `settle ${SETTLE_MS / 60000}m, cap ${MAX_WAIT_MS / 60000}m`,
+      `settle ${SETTLE_MS / 60000}m, cap ${MAX_WAIT_MS / 60000}m, quiet-window cap ${RUN_QUIET_CAP_MS / 60000}m`,
   );
   const boot = setTimeout(() => void coordinatorTick(), BOOT_DELAY_MS);
   if (typeof boot.unref === "function") boot.unref();

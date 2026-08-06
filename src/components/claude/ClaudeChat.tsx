@@ -24,6 +24,7 @@ import {
   CircleUser,
   Clock,
   Crosshair,
+  Hourglass,
   Loader2,
   MessageSquarePlus,
   PanelLeftClose,
@@ -62,7 +63,7 @@ import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { Scissors, FolderTree, ExternalLink, ListTree } from "lucide-react";
+import { Scissors, FolderTree, ExternalLink, ListTree, Search } from "lucide-react";
 
 /**
  * Models, with the id visible — not just a friendly name.
@@ -184,6 +185,22 @@ interface Thread {
     error: string | null;
     deadline: string;
   } | null;
+  /** Persistent SHIP outcome → the rail's deploy dot. Set by ship-status.ts and kept
+   *  across turns (unlike `deploy`, which the coordinator deletes once merged):
+   *  pushed_branch=yellow (branch, not main), main_building=yellow (pushed to main,
+   *  build running), main_live=green (live in production), failed=red (build failed).
+   *  Null when the thread never pushed. */
+  ship?: {
+    state: "pushed_branch" | "main_building" | "main_live" | "failed";
+    detail: string | null;
+    branch: string | null;
+  } | null;
+  /** Waiting on the usage-limit window to reset (yellow hourglass). ISO reset moment
+   *  when known, "" when the window is unknown, null when not waiting. */
+  usage_wait_until?: string | null;
+  /** A pending destructive-migration approval — the "needs you" blue hourglass. (A
+   *  merge conflict, the other needs-you case, is read from `deploy.state`.) */
+  needs_you?: boolean;
 }
 
 /** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
@@ -348,6 +365,50 @@ export function ClaudeChat() {
   const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
   const [grouped, setGrouped] = useState(false);
   const [regrouping, setRegrouping] = useState(false);
+  /** Rail search — a collapsed magnifier by default (compact-UI convention);
+   *  clicking it reveals an input row that filters the rail. Title/preview/serial
+   *  match client-side over the loaded list; conversation CONTENT (what was said
+   *  in the thread) matches server-side via GET /claude/threads/search, whose
+   *  thread ids land in `contentMatchIds`. Escape / the X closes and resets. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [contentMatchIds, setContentMatchIds] = useState<Set<string>>(new Set());
+  const [searching, setSearching] = useState(false);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+    setContentMatchIds(new Set());
+  }, []);
+  // Debounced content search: as the user types, ask the backend which threads
+  // mention the term in their turns, and union those ids into the rail filter.
+  // Debounced so a burst of keystrokes fires one request; a stale response is
+  // dropped by the `active` guard so results always match the latest query.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setContentMatchIds(new Set());
+      setSearching(false);
+      return;
+    }
+    let active = true;
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const { thread_ids } = await api<{ thread_ids: string[] }>(
+          `/api/claude/threads/search?q=${encodeURIComponent(q)}`,
+        );
+        if (active) setContentMatchIds(new Set(thread_ids));
+      } catch {
+        if (active) setContentMatchIds(new Set());
+      } finally {
+        if (active) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
   /** The Claude accounts the console can run on — feeds the header switcher. Loaded
    *  once; empty until then, which hides the switcher rather than showing a guess. */
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -1285,6 +1346,18 @@ export function ClaudeChat() {
               <MessageSquarePlus className="size-4" />
               {t("newChat")}
             </Button>
+            {/* Collapsed search — a quiet magnifier next to the group toggle; click
+                to reveal the filter input below (compact-UI convention). */}
+            <Button
+              size="sm"
+              variant={searchOpen ? "secondary" : "ghost"}
+              className="h-8 w-8 p-0"
+              onClick={() => setSearchOpen((v) => !v)}
+              aria-label={t("search.open")}
+              title={t("search.open")}
+            >
+              <Search className="size-4" />
+            </Button>
             {/* Group-by-topic toggle. Off by default so the rail is a plain list;
                 the folder icon opts in, matching the compact-UI convention. */}
             <Button
@@ -1323,6 +1396,21 @@ export function ClaudeChat() {
               <X className="size-4" />
             </Button>
           </div>
+          {searchOpen && (
+            <div className="relative border-b p-2">
+              <Search className="pointer-events-none absolute top-1/2 start-4 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") closeSearch();
+                }}
+                placeholder={t("search.placeholder")}
+                className="h-8 ps-8 text-xs"
+              />
+            </div>
+          )}
           <div ref={railScrollRef} className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
               <p className="p-2 text-xs text-muted-foreground">…</p>
@@ -1330,17 +1418,42 @@ export function ClaudeChat() {
               <p className="p-2 text-xs text-muted-foreground">{t("noThreads")}</p>
             ) : (
               (() => {
+                // Rail search: a thread is visible when it matches the query on
+                // title / fallback preview / task serial (client-side over the
+                // loaded list) OR its conversation content matched server-side
+                // (`contentMatchIds`). When a query is active the rail flattens
+                // (grouping is ignored) so matches across topics all show together.
+                const q = query.trim().toLowerCase();
+                const visible = q
+                  ? threads.filter(
+                      (x) =>
+                        contentMatchIds.has(x.id) ||
+                        [x.title, x.preview, x.task_serial].some((s) =>
+                          s?.toLowerCase().includes(q),
+                        ),
+                    )
+                  : threads;
+                if (visible.length === 0) {
+                  // While the content request is still in flight, say "searching…"
+                  // rather than "no results" — a title-only miss may still gain
+                  // content matches when the response lands.
+                  return (
+                    <p className="p-2 text-xs text-muted-foreground">
+                      {searching ? t("search.searching") : q ? t("search.noResults") : t("noThreads")}
+                    </p>
+                  );
+                }
                 // Threads with a fix waiting in the deploy queue lift out into the
                 // pinned "ממתין למיזוג" category above; the rest render as usual
                 // (flat or topic-grouped) so a queued thread never shows twice.
-                const queued = threads.filter((x) => x.deploy);
-                const rest = threads.filter((x) => !x.deploy);
+                const queued = visible.filter((x) => x.deploy);
+                const rest = visible.filter((x) => !x.deploy);
                 return (
                   <>
                     {queued.length > 0 && (
                       <DeployQueueGroup threads={queued} activeId={activeId} onOpen={pickThread} t={t} />
                     )}
-                    {grouped ? (
+                    {grouped && !q ? (
                       renderGroupedRail(rest, topics, activeId, t, pickThread, remove, (id, h) =>
                         void setHandled(id, h),
                       )
@@ -1867,21 +1980,79 @@ function railThreadTitle(thread: Thread, untitled: string): string {
   return title || untitled;
 }
 
-/** The live/last-status dot at the head of a rail row. Pulsing amber (brown) while a
- *  turn runs; otherwise a resting colour for the newest run's outcome. */
+/** HH:MM in New York — the timezone the user reads everything in. */
+function railTimeNY(iso: string): string {
+  return new Date(iso).toLocaleTimeString("he-IL", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+  });
+}
+
+type Indicator =
+  | { shape: "pulse"; cls: string; label: string }
+  | { shape: "hourglass"; cls: string; label: string }
+  | { shape: "dot"; cls: string; label: string };
+
+/**
+ * The ONE source of truth for a rail row's status glyph. Two shapes carry the heavy
+ * distinction so the colour set stays tight:
+ *   ● dot       — a SETTLED outcome: green live · red failed · grey nothing-to-ship
+ *   ⏳ hourglass — WAITING: amber = resolves itself (build / merge / usage window),
+ *                  blue = needs YOU (approval pending / merge conflict to resolve)
+ *   ● pulse     — a turn RUNNING right now
+ * Priority: needs-you › running › passive-wait › settled. Used by both the normal
+ * row and the merge-queue group so they can never drift.
+ */
+function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>): Indicator {
+  const deployState = thread.deploy?.state;
+  const conflict = deployState === "conflict";
+
+  // 1. Needs YOU — you must act before anything moves; surfaced above all else.
+  if (thread.needs_you || conflict) {
+    return { shape: "hourglass", cls: "text-blue-600", label: conflict ? t("dot.needsConflict") : t("dot.needsApproval") };
+  }
+  // 2. Running now.
+  if (thread.live) return { shape: "pulse", cls: "bg-amber-600", label: t("dot.live") };
+  // 3. Passive wait — resolves on its own.
+  if (thread.usage_wait_until != null) {
+    const at = thread.usage_wait_until ? ` · ${railTimeNY(thread.usage_wait_until)}` : "";
+    return { shape: "hourglass", cls: "text-amber-500", label: `${t("dot.waitUsage")}${at}` };
+  }
+  if (deployState === "building" || deployState === "ready" || deployState === "deploying") {
+    return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitMerge") };
+  }
+  const ship = thread.ship?.state;
+  if (ship === "main_building") return { shape: "hourglass", cls: "text-amber-500", label: t("dot.shipBuilding") };
+  if (ship === "pushed_branch") return { shape: "hourglass", cls: "text-amber-500", label: t("dot.shipBranch") };
+  // 4. Settled outcome (dot).
+  if (ship === "main_live") return { shape: "dot", cls: "bg-status-ok", label: t("dot.shipLive") };
+  if (ship === "failed" || deployState === "failed")
+    return { shape: "dot", cls: "bg-destructive", label: t("dot.shipFailed") };
+  if (thread.last_status === "failed") return { shape: "dot", cls: "bg-destructive", label: t("dot.failed") };
+  return { shape: "dot", cls: "bg-muted-foreground/30", label: t("dot.idle") };
+}
+
+/** Renders the indicator from threadIndicator() — the glyph at the head of a rail row. */
 function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTranslations> }) {
-  if (thread.live) {
+  const ind = threadIndicator(thread, t);
+  const title = thread.ship?.detail ? `${ind.label} · ${thread.ship.detail}` : ind.label;
+  if (ind.shape === "pulse") {
     return (
-      <span className="relative flex size-2 shrink-0" title={t("dot.live")} aria-label={t("dot.live")}>
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-800 opacity-75" />
-        <span className="relative inline-flex size-2 rounded-full bg-amber-800" />
+      <span className="relative flex size-2 shrink-0" title={title} aria-label={ind.label}>
+        <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", ind.cls)} />
+        <span className={cn("relative inline-flex size-2 rounded-full", ind.cls)} />
       </span>
     );
   }
-  const s = thread.last_status;
-  const cls = s === "done" ? "bg-status-ok" : s === "failed" ? "bg-destructive" : "bg-muted-foreground/30";
-  const label = s === "done" ? t("dot.done") : s === "failed" ? t("dot.failed") : t("dot.idle");
-  return <span className={cn("size-2 shrink-0 rounded-full", cls)} title={label} aria-label={label} />;
+  if (ind.shape === "hourglass") {
+    return (
+      <span className="flex shrink-0" title={title} aria-label={ind.label}>
+        <Hourglass className={cn("size-3", ind.cls)} />
+      </span>
+    );
+  }
+  return <span className={cn("size-2 shrink-0 rounded-full", ind.cls)} title={title} aria-label={ind.label} />;
 }
 
 /** One row in the thread rail — status dot, title (RTL, ≤2 lines), a faint "handled"
@@ -2078,7 +2249,6 @@ function DeployRow({
   const d = thread.deploy;
   if (!d) return null;
   const stuck = d.state === "failed" || d.state === "conflict";
-  const running = d.state === "building" || d.state === "deploying";
 
   let status: ReactNode;
   if (stuck) {
@@ -2111,17 +2281,9 @@ function DeployRow({
   return (
     <div className={cn("group flex flex-col gap-0.5 border-b border-dashed px-2 py-1.5", active && "bg-muted")}>
       <div className="flex items-center gap-1.5">
-        {running ? (
-          <span className="relative flex size-2 shrink-0" title={t("mergeQueue.pending")}>
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-600 opacity-75" />
-            <span className="relative inline-flex size-2 rounded-full bg-amber-600" />
-          </span>
-        ) : (
-          <span
-            className={cn("size-2 shrink-0 rounded-full", stuck ? "bg-destructive" : "bg-amber-600")}
-            title={t("mergeQueue.pending")}
-          />
-        )}
+        {/* Same glyph vocabulary as every other row (threadIndicator): a queued fix is
+            an amber hourglass, a conflict a blue one (needs you), a failure a red dot. */}
+        <ThreadDot thread={thread} t={t} />
         <button
           type="button"
           onClick={onOpen}

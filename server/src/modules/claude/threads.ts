@@ -24,7 +24,15 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, cancelRun, runOneShot, listAccountIds, BG_MODEL_FAST } from "./runner";
+import {
+  executeRun,
+  cancelRun,
+  runOneShot,
+  listAccountIds,
+  BG_MODEL_FAST,
+  USAGE_LIMIT_SENTINEL,
+  USAGE_UNTIL_RE,
+} from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
@@ -55,7 +63,7 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, ship_state, ship_detail, ship_branch";
 
 /** Is `account` one the runner can route to right now? The valid ids are the
  *  runner's registry (listAccountIds — primary + the configured extras), so this
@@ -241,15 +249,34 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
   const rows = data ?? [];
   const ids = rows.map((r) => r.id);
   const liveSet = new Set<string>();
+  // Threads whose only non-terminal run is PARKED waiting for the usage-limit window
+  // to reset — that is "waiting", not "running", so it must NOT show the live pulse.
+  // Value = the reset moment (ISO) when the sentinel carried one, else "".
+  const usageWaitByThread = new Map<string, string>();
   const lastStatus = new Map<string, string>();
   if (ids.length > 0) {
     const { data: liveRows, error: lErr } = await db
       .from("claude_runs")
-      .select("thread_id")
+      .select("thread_id, error")
       .in("thread_id", ids)
       .in("status", ["running", "queued", "waiting"]);
     if (lErr) console.error("[claude/threads] live status failed:", lErr.message);
-    for (const r of liveRows ?? []) if (r.thread_id) liveSet.add(r.thread_id);
+    for (const r of liveRows ?? []) {
+      if (!r.thread_id) continue;
+      const err = (r.error ?? "") as string;
+      if (err.startsWith(USAGE_LIMIT_SENTINEL)) {
+        // Don't let a usage-parked run also register as live. A real running run for
+        // the same thread (below) still wins by adding it to liveSet.
+        if (!usageWaitByThread.has(r.thread_id)) {
+          const m = USAGE_UNTIL_RE.exec(err);
+          usageWaitByThread.set(r.thread_id, m?.[1] ?? "");
+        }
+      } else {
+        liveSet.add(r.thread_id);
+      }
+    }
+    // A thread that has BOTH a real running run and a parked one is live, not waiting.
+    for (const id of liveSet) usageWaitByThread.delete(id);
 
     const { data: statusRows, error: sErr } = await db
       .from("claude_runs")
@@ -295,6 +322,22 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     }
   }
 
+  // Threads with a destructive-migration approval still PENDING — the "ממתין לך"
+  // (needs-you) signal, alongside a deploy-queue merge conflict. Org-scoped; the
+  // table is service-role only, so the list carries the flag rather than the client
+  // reading it. A conflict is derived on the client from `deploy.state`.
+  const needsYouByThread = new Set<string>();
+  if (ids.length > 0) {
+    const { data: apRows, error: apErr } = await db
+      .from("claude_action_approvals")
+      .select("thread_id")
+      .eq("org_id", req.org!.id)
+      .eq("status", "pending")
+      .in("thread_id", ids);
+    if (apErr) console.error("[claude/threads] approvals failed:", apErr.message);
+    for (const r of apRows ?? []) if (r.thread_id) needsYouByThread.add(r.thread_id);
+  }
+
   // First user message per thread — the deterministic title fallback (see
   // firstLinePreview). Fetched ONLY for the threads that lack an AI title, so the
   // response never carries prompt text we won't use. turn_index=1 is the first turn
@@ -323,8 +366,74 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     preview: (r.title ?? "").trim() ? null : firstPrompt.get(r.id) || null,
     // Deploy-queue state (pending-merge category + countdown), null when not queued.
     deploy: deployByThread.get(r.id) ?? null,
+    // Persistent SHIP outcome → the rail's deploy dot (ship-status.ts). Null when the
+    // thread never pushed anything. Kept as one object so the client reads one shape.
+    ship: r.ship_state
+      ? { state: r.ship_state as string, detail: (r.ship_detail as string | null) ?? null, branch: (r.ship_branch as string | null) ?? null }
+      : null,
+    // Waiting on the usage-limit window to reset → the yellow hourglass (passive
+    // wait). ISO reset moment when known, "" when the window is unknown, null when
+    // not waiting. Distinct from `live` (which is a real running turn).
+    usage_wait_until: usageWaitByThread.has(r.id) ? usageWaitByThread.get(r.id) || "" : null,
+    // A pending destructive-migration approval → the blue hourglass (needs you).
+    needs_you: needsYouByThread.has(r.id),
   }));
   return res.json({ threads });
+});
+
+// Rail content search — the list endpoint above carries only titles/previews, so
+// the client can filter the loaded rail by title on its own. To also match the
+// CONVERSATION CONTENT (what was actually said in a thread), this searches the
+// turns: the user's clean prompt (`user_prompt`) and Claude's per-turn summary
+// (`result_summary`). We deliberately skip the composed `prompt` column — it
+// carries the env preamble + standing instructions on every first turn, so a
+// match there would fire on nearly every thread. Returns the set of matching
+// thread ids; the client unions them with its own title filter.
+//
+// MUST stay ABOVE `GET /claude/threads/:id` — otherwise "search" is captured as
+// an :id. Two separate ilike queries (not a single `.or(...)`) so a comma or
+// paren in the query can't break PostgREST's or-filter syntax.
+router.get("/claude/threads/search", async (req: Request, res: Response) => {
+  const raw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  // Too-short queries would match almost everything and cost a full scan; the
+  // client already filters titles locally, so a 1-char content search adds noise.
+  if (raw.length < 2) return res.json({ thread_ids: [] });
+  // Escape LIKE wildcards so the term is matched literally, then wrap it.
+  const pat = `%${raw.replace(/[\\%_]/g, "\\$&")}%`;
+  const orgId = req.org!.id;
+
+  const [byPrompt, bySummary] = await Promise.all([
+    db.from("claude_runs").select("thread_id").eq("org_id", orgId).ilike("user_prompt", pat).limit(1000),
+    db.from("claude_runs").select("thread_id").eq("org_id", orgId).ilike("result_summary", pat).limit(1000),
+  ]);
+  if (byPrompt.error || bySummary.error) {
+    console.error(
+      "[claude/threads/search] failed:",
+      byPrompt.error?.message ?? bySummary.error?.message,
+    );
+    return res.status(500).json({ error: "search failed" });
+  }
+
+  const ids = new Set<string>();
+  for (const r of byPrompt.data ?? []) if (r.thread_id) ids.add(r.thread_id);
+  for (const r of bySummary.data ?? []) if (r.thread_id) ids.add(r.thread_id);
+  if (ids.size === 0) return res.json({ thread_ids: [] });
+
+  // Keep only ids the rail actually shows: existing, non-archived threads. The
+  // list endpoint above loads `is(archived_at, null)`, so returning a match on an
+  // archived thread would give the client an id with no row to render (a silent
+  // miss). Filtering here keeps content search consistent with the visible list.
+  const { data: liveThreads, error: tErr } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("org_id", orgId)
+    .is("archived_at", null)
+    .in("id", [...ids]);
+  if (tErr) {
+    console.error("[claude/threads/search] thread filter failed:", tErr.message);
+    return res.status(500).json({ error: "search failed" });
+  }
+  return res.json({ thread_ids: (liveThreads ?? []).map((r) => r.id) });
 });
 
 router.post("/claude/threads", async (req: Request, res: Response) => {

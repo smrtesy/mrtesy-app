@@ -252,9 +252,7 @@
     "claude": "Claude",
     "design": "Design",
     "music": "24Six",
-    "musicTooltip": "Open 24Six player",
-    "musicExpandTab": "Open in full tab",
-    "musicClose": "Close player"
+    "musicTooltip": "Open 24Six in a new tab"
   },
   "account": {
     "title": "Account",
@@ -4755,7 +4753,15 @@
       "live": "Running now",
       "done": "Last turn finished",
       "failed": "Last turn failed",
-      "idle": "Hasn't run yet"
+      "idle": "Hasn't run yet",
+      "waitUsage": "Waiting for the usage window",
+      "waitMerge": "Waiting to merge into main",
+      "needsApproval": "Needs you: migration approval",
+      "needsConflict": "Needs you: resolve a merge conflict",
+      "shipLive": "Merged to main and live in production ✓",
+      "shipFailed": "Pushed to main but the build failed",
+      "shipBuilding": "Pushed to main — build running",
+      "shipBranch": "Pushed to a branch (not main)"
     },
     "handled": {
       "mark": "Mark as handled",
@@ -4859,6 +4865,12 @@
       "now": "Group now",
       "done": "Grouping updated",
       "none": "No topic"
+    },
+    "search": {
+      "open": "Search chats",
+      "placeholder": "Search title & content…",
+      "searching": "Searching…",
+      "noResults": "No results"
     },
     "mergeQueue": {
       "pending": "Pending merge",
