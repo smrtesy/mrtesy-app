@@ -4782,6 +4782,7 @@
       "needsApproval": "Needs you: migration approval",
       "needsConflict": "Needs you: resolve a merge conflict",
       "needsAnswer": "Needs you: an unanswered question",
+      "conflictResolving": "Merge conflict — resolving automatically",
       "shipLive": "Merged to main and live in production ✓",
       "shipFailed": "Pushed to main but the build failed",
       "shipBuilding": "Pushed to main — build running",
@@ -4905,7 +4906,8 @@
       "countdown": "~{mins} min left",
       "soon": "any moment",
       "failed": "Merge failed",
-      "conflict": "Merge conflict"
+      "conflict": "Merge conflict",
+      "conflictResolving": "Conflict — the session is resolving and re-shipping"
     },
     "usage": {
       "tokens": "tokens",
