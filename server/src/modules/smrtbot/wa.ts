@@ -9,12 +9,21 @@
  * Ported from botsite/src/modules/wa.js.
  */
 import { metaErrorSummary } from "../../lib/meta-errors";
-import { whatsappApiBase, whatsappBearer } from "../../lib/whatsapp-endpoint";
 
-// v25.0 — the only version DualHook's proxy relays (older versions 404 on
-// api.dualhook.com); v25.0 is also valid direct-to-Meta. See
-// docs/whatsapp-dualhook-outbound-migration.md.
-const META_API_VERSION = "v25.0";
+// smrtBot bots each run on their OWN Meta app + phone numbers (rl, sholem, …),
+// NOT the smrtTask personal-number DualHook Coexistence connection. The DualHook
+// outbound proxy (WHATSAPP_OUTBOUND_KEY) exists only for that personal number;
+// routing smrtBot through it makes DualHook reject every send with HTTP 403
+// "Credential is not valid for this phone number" — its key does not own these
+// numbers. So smrtBot ALWAYS talks to Meta directly with the bot's own token,
+// deliberately ignoring the global proxy switch. (Verified 2026-08-06:
+// direct-to-Meta send works, and Meta's "Require App Secret" is NOT enabled on
+// the smrtBot app, so no appsecret_proof is needed.) The smrtTask WhatsApp reader
+// (whatsapp-view.ts / transcription-experiment.ts) keeps using the proxy — its
+// Coexistence number does require it since 2026-08-05.
+// See docs/whatsapp-dualhook-outbound-migration.md.
+const META_DIRECT_BASE = "https://graph.facebook.com";
+const META_API_VERSION = "v25.0"; // valid direct-to-Meta.
 const MIN_GAP_MS = 500; // minimum gap between messages on the same number
 const MAX_RETRIES = 3;
 
@@ -77,6 +86,31 @@ export function resolveCreds(bot: BotCreds, env: BotEnv): ResolvedCreds | null {
   return { phoneNumberId, accessToken };
 }
 
+/** Read-only health probe of a bot's credentials against Meta, WITHOUT sending a
+ *  message: a GET on the phone-number node using the EXACT same direct-to-Meta
+ *  base + bearer as send(). Returns ok=false with Meta's HTTP status + body when
+ *  the token/number is rejected (expired/revoked token, disabled number, …) —
+ *  the same 401/403 a real send would hit — so the daily cron can raise ONE
+ *  notification before users find a dead bot. A network blip carries no HTTP
+ *  status, so it returns status 0; the caller treats that as transient and does
+ *  not alert. Zero cost (no message sent). */
+export async function checkNumberHealth(
+  creds: ResolvedCreds,
+): Promise<{ ok: true } | { ok: false; status: number; detail: string }> {
+  const url =
+    `${META_DIRECT_BASE}/${META_API_VERSION}/${creds.phoneNumberId}` +
+    `?fields=display_phone_number,quality_rating`;
+  let resp: Response;
+  try {
+    resp = await fetch(url, { headers: { Authorization: `Bearer ${creds.accessToken}` } });
+  } catch (e) {
+    return { ok: false, status: 0, detail: e instanceof Error ? e.message : String(e) };
+  }
+  if (resp.ok) return { ok: true };
+  const detail = await resp.text().catch(() => "");
+  return { ok: false, status: resp.status, detail };
+}
+
 /** A Meta message template, flattened for the smrtReach picker. */
 export interface WaTemplate {
   name: string;
@@ -93,14 +127,13 @@ export interface WaTemplate {
  * (whatsapp_business_account) and an access token with whatsapp_business_management.
  */
 export async function listTemplates(wabaId: string, accessToken: string): Promise<WaTemplate[]> {
-  // Auth via Bearer header (not the access_token query param) so the DualHook
-  // proxy path works: it expects the dh_live_ key as the bearer. Meta accepts
-  // the header identically for this GET.
+  // Direct to Meta with the bot's own token (Bearer header). smrtBot never uses
+  // the DualHook proxy — see the top-of-file note.
   const url =
-    `${whatsappApiBase()}/${META_API_VERSION}/${wabaId}/message_templates` +
+    `${META_DIRECT_BASE}/${META_API_VERSION}/${wabaId}/message_templates` +
     `?fields=name,language,status,category,components&limit=200`;
   const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${whatsappBearer(accessToken)}` },
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {
     const detail = await resp.text().catch(() => "");
@@ -149,7 +182,7 @@ async function send(
   if (wait > 0) await sleep(wait);
   lastSentAt.set(creds.phoneNumberId, Date.now());
 
-  const url = `${whatsappApiBase()}/${META_API_VERSION}/${creds.phoneNumberId}/messages`;
+  const url = `${META_DIRECT_BASE}/${META_API_VERSION}/${creds.phoneNumberId}/messages`;
   const body = JSON.stringify({ messaging_product: "whatsapp", to, ...message });
 
   let lastErr: WhatsAppSendError | null = null;
@@ -159,7 +192,7 @@ async function send(
       resp = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${whatsappBearer(creds.accessToken)}`,
+          Authorization: `Bearer ${creds.accessToken}`,
           "Content-Type": "application/json",
         },
         body,
