@@ -26,11 +26,23 @@ set -uo pipefail
 # coordinator and ship.sh. With it unset the hook does nothing at all.
 [ "${DEPLOY_QUEUE_ENABLED:-}" = "1" ] || exit 0
 
-command -v jq >/dev/null 2>&1 || exit 0
 command -v git >/dev/null 2>&1 || exit 0
 
 payload="$(cat 2>/dev/null || true)"
-cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
+# Extract .tool_input.command. Prefer jq; fall back to node — which, unlike jq, is
+# ALWAYS present in the backend image that runs console turns. A hard `command -v jq
+# || exit 0` here silently fail-opened the WHOLE gate inside every console run (jq is
+# not installed there), so server changes pushed straight to main were never
+# redirected to ship.sh and the deploy queue processed 0 batches while the redeploys
+# kept SIGTERM-killing live runs. If NEITHER jq nor node exists, fail open (map-guard
+# philosophy: a broken guard is disabled, not fixed).
+if command -v jq >/dev/null 2>&1; then
+  cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
+elif command -v node >/dev/null 2>&1; then
+  cmd="$(printf '%s' "$payload" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).tool_input||{}).command||""))}catch{}})' 2>/dev/null || true)"
+else
+  exit 0
+fi
 [ -n "$cmd" ] || exit 0
 
 # Only a `git push` in COMMAND position (line start, or after ; & | ( or env-var
