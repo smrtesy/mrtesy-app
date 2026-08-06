@@ -8,7 +8,7 @@
  */
 
 export { requireAuth } from "./auth";
-export { requireOrg } from "./org-context";
+export { requireOrg, invalidateOrgContext } from "./org-context";
 export { requireRole, denyDeveloper, rankOf, canManageRank, canAssignRank, type Role } from "./require-role";
 export { requireApp, requireAnyApp } from "./require-app";
 export { requireResource } from "./require-resource";

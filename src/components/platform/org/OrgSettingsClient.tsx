@@ -87,8 +87,12 @@ export function OrgSettingsClient() {
 
   // Role comes from the active org (the hook returns my role per org).
   const myRoleFromOrgs = active?.role;
-  const canManage = myRoleFromOrgs === "owner" || myRoleFromOrgs === "admin";
-  const isOwner = myRoleFromOrgs === "owner";
+  // §5.2: a developer is excluded from user management even if they also hold
+  // owner/admin, so management affordances must be hidden from them (the backend
+  // enforces this via denyDeveloper regardless).
+  const iAmDeveloper = members.find((m) => m.user_id === myUserId)?.is_developer === true;
+  const canManage = (myRoleFromOrgs === "owner" || myRoleFromOrgs === "admin") && !iAmDeveloper;
+  const isOwner = myRoleFromOrgs === "owner" && !iAmDeveloper;
 
   const appName = (slug: string) => orgApps.find((a) => a.slug === slug)?.name ?? slug;
 

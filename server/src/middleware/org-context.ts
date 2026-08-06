@@ -24,6 +24,17 @@ type OrgContext = {
 
 const orgContextCache = new TtlCache<OrgContext>(60 * 1000);
 
+/**
+ * Drop the cached (org, member) row for one user so the next request re-reads
+ * it from the DB. Call this after mutating a membership fact that a
+ * security-sensitive gate reads out of req.member — e.g. flipping is_developer,
+ * whose 60s staleness would otherwise leave a just-flagged developer able to
+ * act (or a just-cleared one blocked) for up to a minute.
+ */
+export function invalidateOrgContext(orgId: string, userId: string) {
+  orgContextCache.delete(`${orgId}:${userId}`);
+}
+
 export async function requireOrg(req: Request, res: Response, next: NextFunction) {
   if (!req.user) {
     return res.status(500).json({ error: "requireOrg used without requireAuth" });

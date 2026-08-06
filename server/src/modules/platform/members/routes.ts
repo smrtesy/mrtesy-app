@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import {
   requireAuth, requireOrg, requireRole, denyDeveloper,
-  canManageRank, canAssignRank, type Role,
+  canManageRank, canAssignRank, invalidateOrgContext, type Role,
 } from "../../../middleware";
 import { sendInviteEmail } from "../../../lib/email";
 import { invalidatePermissions } from "../../../lib/permissions/resolve";
@@ -534,6 +534,9 @@ router.patch("/org/members/:userId/role",
 
     if (error) return res.status(500).json({ error: error.message });
     if (!data)  return res.status(404).json({ error: "member not found" });
+    // The role gate reads req.member.role; drop the cache so a demotion/promotion
+    // is enforced now rather than lingering up to 60s.
+    invalidateOrgContext(req.org!.id, userId);
     res.json({ member: data });
   },
 );
@@ -567,6 +570,9 @@ router.patch("/org/members/:userId/developer",
       .maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: "member not found" });
+    // Take effect now, not in ≤60s: the developer exclusion is a security gate,
+    // so drop this user's cached membership so their next request re-reads it.
+    invalidateOrgContext(req.org!.id, userId);
     res.json({ member: data });
   },
 );
