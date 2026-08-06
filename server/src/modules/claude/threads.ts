@@ -268,7 +268,7 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
   // Deploy-queue state per thread — the rail's "ממתין למיזוג" (pending-merge)
   // category. One row per thread while a server/** fix waits for the coordinator to
   // batch-merge it; the row is deleted once the deploy lands (state 'done'), so we
-  // skip 'done' and surface only the still-pending states (building/ready/deploying)
+  // skip 'done' and surface only the still-pending states (ready/deploying)
   // plus the stuck terminals (failed/conflict, which stay so the rail can show why).
   // `deadline` is the hard cap the coordinator honours: the batch ships by
   // created_at + MAX_WAIT_MS at the latest ("will merge by"). Service-role only

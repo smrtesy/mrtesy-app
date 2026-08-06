@@ -179,7 +179,7 @@ interface Thread {
    *  thread isn't queued (the coordinator deletes the row once the deploy lands).
    *  `deadline` is the hard cap ISO ("will merge by"); `error` is set on failed/conflict. */
   deploy?: {
-    state: "building" | "ready" | "deploying" | "failed" | "conflict";
+    state: "ready" | "deploying" | "failed" | "conflict";
     title: string;
     error: string | null;
     deadline: string;
@@ -2147,8 +2147,8 @@ function renderGroupedRail(
 
 /**
  * The "ממתין למיזוג" (pending-merge) category, pinned above the rest of the rail. It
- * groups the threads whose server/** fix is waiting in the deploy queue — building /
- * ready (with a countdown to the hard-cap "will merge by" moment) / deploying — plus
+ * groups the threads whose server/** fix is waiting in the deploy queue — ready
+ * (with a countdown to the hard-cap "will merge by" moment) / deploying — plus
  * the stuck terminals (failed / conflict) shown with a red badge and the reason. A
  * single 30s ticker drives every row's countdown so the minutes fall between the
  * rail's 5s list polls; the deadline itself is authoritative from the server.
@@ -2190,7 +2190,7 @@ function DeployQueueGroup({
 }
 
 /** One row of the pending-merge category: status dot, title, and a status line that is
- *  either a countdown (ready), a spinner-word (building/deploying), or a red reason
+ *  either a countdown (ready), a spinner-word (deploying), or a red reason
  *  (failed/conflict). */
 function DeployRow({
   thread,
@@ -2208,7 +2208,7 @@ function DeployRow({
   const d = thread.deploy;
   if (!d) return null;
   const stuck = d.state === "failed" || d.state === "conflict";
-  const running = d.state === "building" || d.state === "deploying";
+  const running = d.state === "deploying";
 
   let status: ReactNode;
   if (stuck) {
@@ -2219,8 +2219,6 @@ function DeployRow({
         <span className="line-clamp-2">{d.error ? `${label} · ${d.error}` : label}</span>
       </span>
     );
-  } else if (d.state === "building") {
-    status = <span>{t("mergeQueue.building")}</span>;
   } else if (d.state === "deploying") {
     status = <span>{t("mergeQueue.deploying")}</span>;
   } else {

@@ -4871,7 +4871,6 @@
     },
     "mergeQueue": {
       "pending": "ממתין למיזוג",
-      "building": "בונה…",
       "deploying": "ממזג ומעלה…",
       "mergeBy": "יימזג עד {time}",
       "countdown": "עוד ~{mins} דק׳",
