@@ -1823,7 +1823,30 @@
     "domainTracker": "מעקב דומיינים",
     "priceTracker": "השוואת מחירים",
     "secrets": "סודות",
-    "claude": "עבודות קלוד"
+    "claude": "עבודות קלוד",
+    "features": "ערוצי-בשלות"
+  },
+  "featureReport": {
+    "open": "דווח תקלה",
+    "title": "דיווח על תקלה",
+    "descriptionLabel": "מה ניסית לעשות?",
+    "descriptionPlaceholder": "תאר במשפט מה ניסית לעשות ומה קרה",
+    "previewLabel": "מה יישלח",
+    "fieldScreen": "מסך",
+    "fieldFeature": "פיצ'ר",
+    "fieldChannel": "ערוץ",
+    "fieldVersion": "גרסה",
+    "fieldUrl": "כתובת",
+    "fieldBrowser": "דפדפן",
+    "fieldConsoleErrors": "שגיאות קונסולה אחרונות",
+    "fieldFailedRequests": "בקשות שנכשלו",
+    "none": "אין",
+    "privacyNote": "המידע הזה יישלח לצוות כדי לאבחן את התקלה. לא נאסף מידע נוסף.",
+    "cancel": "ביטול",
+    "send": "שלח דיווח",
+    "sending": "שולח…",
+    "sent": "הדיווח נשלח, תודה",
+    "sendFailed": "השליחה נכשלה, נסה שוב"
   },
   "adminSecretsManaged": {
     "title": "ניהול סודות",

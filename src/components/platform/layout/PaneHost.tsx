@@ -12,9 +12,11 @@
  * becomes an iframe at that href.
  */
 
-import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
+import { FeatureIdContext } from "@/components/platform/features/FeatureIdContext";
+import { reportFeatureCrash } from "@/lib/error-capture";
 import { useTabsWorkspace, type WorkspaceTab } from "@/contexts/TabsWorkspaceContext";
 import {
   PaneNavProvider,
@@ -32,15 +34,35 @@ function withEmbed(href: string): string {
 }
 
 /** One crashing screen must not take down the whole workspace — iframes gave
- *  this isolation for free, the boundary restores it for component panes. */
+ *  this isolation for free, the boundary restores it for component panes.
+ *
+ *  Source 1 of the feature log (docs/feature-channels-plan.md §8): the crash is
+ *  still swallowed and the fallback still shown (getDerivedStateFromError), and
+ *  componentDidCatch additionally records a category='feature' row. The feature
+ *  id comes from FeatureIdContext when the boundary sits inside a <FeatureGate>
+ *  (static contextType — a class can't use the hook), else the screen key from
+ *  the path is the tag. */
 class PaneErrorBoundary extends Component<
-  { fallback: (reset: () => void) => ReactNode; children: ReactNode },
+  { fallback: (reset: () => void) => ReactNode; screenKey: string; children: ReactNode },
   { failed: boolean }
 > {
+  static contextType = FeatureIdContext;
+  declare context: string | null;
+
   state = { failed: false };
 
   static getDerivedStateFromError() {
     return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    reportFeatureCrash({
+      featureId: this.context ?? null,
+      screenKey: this.props.screenKey,
+      message: error?.message || String(error),
+      stack: error?.stack ?? info?.componentStack ?? undefined,
+      url: typeof window !== "undefined" ? window.location.href : this.props.screenKey,
+    });
   }
 
   render() {
@@ -109,6 +131,7 @@ export function PaneHost({ tab }: { tab: WorkspaceTab }) {
             A different screen in the same pane still gets a fresh boundary. */}
         <PaneErrorBoundary
           key={location.pathname}
+          screenKey={stripLocale(location.pathname)}
           fallback={(reset) => <PaneError reset={reset} />}
         >
           {screen.fullHeight ? (
