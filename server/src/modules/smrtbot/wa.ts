@@ -86,6 +86,31 @@ export function resolveCreds(bot: BotCreds, env: BotEnv): ResolvedCreds | null {
   return { phoneNumberId, accessToken };
 }
 
+/** Read-only health probe of a bot's credentials against Meta, WITHOUT sending a
+ *  message: a GET on the phone-number node using the EXACT same direct-to-Meta
+ *  base + bearer as send(). Returns ok=false with Meta's HTTP status + body when
+ *  the token/number is rejected (expired/revoked token, disabled number, …) —
+ *  the same 401/403 a real send would hit — so the daily cron can raise ONE
+ *  notification before users find a dead bot. A network blip carries no HTTP
+ *  status, so it returns status 0; the caller treats that as transient and does
+ *  not alert. Zero cost (no message sent). */
+export async function checkNumberHealth(
+  creds: ResolvedCreds,
+): Promise<{ ok: true } | { ok: false; status: number; detail: string }> {
+  const url =
+    `${META_DIRECT_BASE}/${META_API_VERSION}/${creds.phoneNumberId}` +
+    `?fields=display_phone_number,quality_rating`;
+  let resp: Response;
+  try {
+    resp = await fetch(url, { headers: { Authorization: `Bearer ${creds.accessToken}` } });
+  } catch (e) {
+    return { ok: false, status: 0, detail: e instanceof Error ? e.message : String(e) };
+  }
+  if (resp.ok) return { ok: true };
+  const detail = await resp.text().catch(() => "");
+  return { ok: false, status: resp.status, detail };
+}
+
 /** A Meta message template, flattened for the smrtReach picker. */
 export interface WaTemplate {
   name: string;
