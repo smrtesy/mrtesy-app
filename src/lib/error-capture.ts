@@ -112,6 +112,35 @@ export function takeStashedDetail(text: string): ClientErrorDetail | undefined {
   return undefined;
 }
 
+// ── recent-events ring buffer ─────────────────────────────────────────────────
+// A small rolling record of the last uncaught errors and failed API calls, kept
+// so the user-facing "report a problem" dialog can SHOW the user what it will
+// send (privacy: nothing is transmitted until they press send). Fed from the two
+// capture points below, unconditionally (before dedup/rate-limit), so a report
+// filed right after a swallowed error still carries it.
+export interface RecentClientEvent {
+  /** "js" / "promise" (a console error) or "api" (a failed backend request). */
+  type: "js" | "promise" | "api";
+  message: string;
+  at: number;
+  /** For an api event: the failed request's method / url / status. */
+  method?: string;
+  url?: string;
+  status?: number;
+}
+const RECENT_MAX = 10;
+const recentEvents: RecentClientEvent[] = [];
+
+function pushRecent(e: RecentClientEvent) {
+  recentEvents.push(e);
+  if (recentEvents.length > RECENT_MAX) recentEvents.splice(0, recentEvents.length - RECENT_MAX);
+}
+
+/** The recent client events, newest last. Read by the report dialog for preview. */
+export function getRecentClientEvents(): RecentClientEvent[] {
+  return recentEvents.slice();
+}
+
 // ── dedup + rate limit ────────────────────────────────────────────────────────
 const DEDUP_WINDOW_MS = 10_000;
 const RATE_WINDOW_MS = 60_000;
@@ -146,11 +175,11 @@ function currentPath(): string {
 /** Fire-and-forget POST to the backend recorder. Never throws, never reports its
  *  OWN failure (that would recurse), and never goes through `api()` (same reason
  *  + avoids a circular import). */
-async function postToBackend(body: Record<string, unknown>) {
+async function postToBackend(body: Record<string, unknown>): Promise<boolean> {
   try {
     const { data: { session } } = await createClient().auth.getSession();
-    if (!session) return; // not signed in — nothing to attribute the row to
-    await fetch(`${BACKEND}/api/client-errors`, {
+    if (!session) return false; // not signed in — nothing to attribute the row to
+    const res = await fetch(`${BACKEND}/api/client-errors`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -159,8 +188,10 @@ async function postToBackend(body: Record<string, unknown>) {
       body: JSON.stringify(body),
       keepalive: true, // survive a navigation triggered by the same error
     });
+    return res.ok;
   } catch {
     // Best-effort: the bell entry still captured it locally.
+    return false;
   }
 }
 
@@ -187,6 +218,7 @@ export function reportApiError(input: {
   // Stash unconditionally (cheap) so a de-duplicated repeat still enriches its
   // toast; only the network/log side is rate-limited.
   stashDetail(input.message, detail);
+  pushRecent({ type: "api", message: input.message, at: Date.now(), method: input.method, url: input.url, status: input.status });
   if (!shouldHandle(`api ${input.status} ${input.url} ${input.message}`)) return;
   void postToBackend({
     kind: "api",
@@ -208,6 +240,7 @@ function reportUncaught(kind: "js" | "promise", message: string, stack?: string)
   const clean = (message || "Unknown error").trim().slice(0, 300);
   const detail: ClientErrorDetail = { kind, stack: stack?.slice(0, 4000) };
   stashDetail(clean, detail);
+  pushRecent({ type: kind, message: clean, at: Date.now() });
   if (!shouldHandle(`${kind} ${clean}`)) return;
 
   const path = currentPath();
@@ -269,4 +302,61 @@ export function installGlobalErrorCatcher(): () => void {
     window.removeEventListener("error", onError);
     window.removeEventListener("unhandledrejection", onRejection);
   };
+}
+
+// ── feature-channels telemetry (docs/feature-channels-plan.md §8) ───────────────
+// The same backend sink (POST /api/client-errors → a log_entries row) carries the
+// feature log too — no new endpoint. Two categories set it apart from the plain
+// client_error rows: 'feature' (auto — a boundary caught a crash) and
+// 'feature_report' (the user pressed "report a problem").
+
+/**
+ * Source 1 — automatic. Called by PaneHost's PaneErrorBoundary from
+ * componentDidCatch: the crash is still caught and the fallback still shown, this
+ * only records it. category='feature'. Best-effort, never throws.
+ */
+export function reportFeatureCrash(input: {
+  featureId: string | null;
+  screenKey: string;
+  message: string;
+  stack?: string;
+  url: string;
+}): void {
+  if (typeof window === "undefined") return;
+  if (!shouldHandle(`feature-crash ${input.screenKey} ${input.featureId ?? ""} ${input.message}`)) return;
+  void postToBackend({
+    kind: "react",
+    category: "feature",
+    message: (input.message || "Feature crash").slice(0, 2000),
+    route: input.url,
+    feature_id: input.featureId ?? undefined,
+    screen_key: input.screenKey,
+    stack: input.stack?.slice(0, 4000),
+    url: input.url,
+    userAgent: navigator.userAgent,
+  });
+}
+
+/**
+ * Source 2 — user-initiated. Called by the "report a problem" dialog after the
+ * user has SEEN the collected context and pressed send. category='feature_report'.
+ * Returns whether the backend accepted it, so the dialog can toast success/failure.
+ */
+export async function submitFeatureReport(input: {
+  featureId: string | null;
+  screenKey: string;
+  description: string;
+  report: Record<string, unknown>;
+}): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  return postToBackend({
+    kind: "user",
+    category: "feature_report",
+    message: (input.description || "(no description)").slice(0, 2000),
+    route: input.screenKey,
+    feature_id: input.featureId ?? undefined,
+    screen_key: input.screenKey,
+    report: input.report,
+    userAgent: navigator.userAgent,
+  });
 }

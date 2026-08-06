@@ -1821,7 +1821,30 @@
     "domainTracker": "Domain Tracker",
     "priceTracker": "Price Compare",
     "secrets": "Secrets",
-    "claude": "Claude runs"
+    "claude": "Claude runs",
+    "features": "Feature channels"
+  },
+  "featureReport": {
+    "open": "Report a problem",
+    "title": "Report a problem",
+    "descriptionLabel": "What were you trying to do?",
+    "descriptionPlaceholder": "Describe in a sentence what you tried to do and what happened",
+    "previewLabel": "What will be sent",
+    "fieldScreen": "Screen",
+    "fieldFeature": "Feature",
+    "fieldChannel": "Channel",
+    "fieldVersion": "Version",
+    "fieldUrl": "URL",
+    "fieldBrowser": "Browser",
+    "fieldConsoleErrors": "Recent console errors",
+    "fieldFailedRequests": "Failed requests",
+    "none": "None",
+    "privacyNote": "This information is sent to the team to diagnose the problem. No other data is collected.",
+    "cancel": "Cancel",
+    "send": "Send report",
+    "sending": "Sending…",
+    "sent": "Report sent, thank you",
+    "sendFailed": "Sending failed, try again"
   },
   "adminSecretsManaged": {
     "title": "Managed Secrets",

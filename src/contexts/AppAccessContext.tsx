@@ -28,6 +28,21 @@ export type AppAccess = {
    * docs/permissions-management-plan.md.
    */
   restrictedResources: string[];
+  /**
+   * The maturity channel this user resolves to (user override wins over the org
+   * default; new users default to "stable"). Orthogonal to permissions — it
+   * picks WHICH maturity of the product they see, not what they're allowed.
+   * See docs/feature-channels-plan.md.
+   */
+  channel: "stable" | "beta";
+  /**
+   * Per-feature channel STATE for this user's channel, keyed by feature_id from
+   * src/lib/feature-registry.ts: `visible` = show it, `version` = which version
+   * to render. Resolved once server-side from the `feature_channels` table.
+   * Screens gate via `useFeature(featureId)` / `<FeatureGate>`. See
+   * docs/feature-channels-plan.md.
+   */
+  features: Record<string, { visible: boolean; version: string }>;
 };
 
 const FALLBACK: AppAccess = {
@@ -35,6 +50,8 @@ const FALLBACK: AppAccess = {
   isAdmin: false,
   taskAccess: "full",
   restrictedResources: [],
+  channel: "stable",
+  features: {},
 };
 
 const AppAccessContext = createContext<AppAccess | null>(null);

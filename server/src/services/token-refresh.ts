@@ -11,6 +11,26 @@ interface Credentials {
   expires_at: string | null;
   scopes: string[] | null;
   email: string | null;
+  access_token_secret_id: string | null;
+  refresh_token_secret_id: string | null;
+}
+
+/**
+ * Security plan §5.1 step 2b: read a user_credentials token from Vault, falling
+ * back to the plaintext column during the transition. The mirror trigger
+ * (trg_user_credentials_vault_sync) keeps both in sync until step 2c blanks the
+ * plaintext, so a missing secret id — or a Vault read that errors — degrades to
+ * exactly today's behaviour rather than breaking the integration.
+ */
+async function resolveToken(
+  secretId: string | null,
+  plaintext: string | null,
+): Promise<string | null> {
+  if (secretId) {
+    const { data, error } = await db.rpc("vault_read_secret", { secret_id: secretId });
+    if (!error && data) return data as string;
+  }
+  return plaintext;
 }
 
 /**
@@ -43,6 +63,10 @@ export async function getOAuthClient(userId: string, service: string) {
 
   const c = cred as Credentials;
 
+  // §5.1 step 2b: prefer the Vault-stored token, fall back to plaintext.
+  const accessToken = await resolveToken(c.access_token_secret_id, c.access_token);
+  const refreshToken = await resolveToken(c.refresh_token_secret_id, c.refresh_token);
+
   // A fresh OAuth2 client per call. A module-level singleton would be
   // shared across concurrent requests (different users AND different
   // services for the same user), and `setCredentials` would race —
@@ -57,8 +81,8 @@ export async function getOAuthClient(userId: string, service: string) {
   );
 
   oauth2Client.setCredentials({
-    access_token: c.access_token,
-    refresh_token: c.refresh_token ?? undefined,
+    access_token: accessToken ?? undefined,
+    refresh_token: refreshToken ?? undefined,
     expiry_date: c.expires_at ? new Date(c.expires_at).getTime() : undefined,
   });
 

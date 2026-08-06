@@ -190,15 +190,7 @@ export function invalidateAppSecretCache(appSlug: string, key?: string): void {
   }
 }
 
-// ── Helper: get OAuth credentials for a user ─────────────────────────────────
-export async function getCredentials(userId: string, service: string) {
-  const { data, error } = await db
-    .from("user_credentials")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("service", service)
-    .single();
-
-  if (error) return null;
-  return data;
-}
+// getCredentials was removed (§5.1 step 2b): it selected user_credentials.* —
+// including the token columns — but had zero callers, so it was a latent
+// plaintext/decrypt landmine. Read tokens through getOAuthClient
+// (services/token-refresh.ts), which resolves them from Vault.
