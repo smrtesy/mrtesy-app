@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle, Mail, RefreshCw, X, LogIn, Copy } from "lucide-react";
+import { Building2, UserPlus, Trash2, Crown, Shield, User, Loader2, AlertTriangle, Mail, RefreshCw, X, LogIn, Copy, Code2 } from "lucide-react";
 import { useActiveOrg } from "@/lib/api/use-active-org";
 import { useOrgMembers, type OrgMember } from "@/lib/api/use-org-members";
 import { personLabel } from "@/lib/smrtplan/people";
@@ -65,6 +65,9 @@ export function OrgSettingsClient() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewCopied, setPreviewCopied] = useState(false);
+  // My own user id in the active org — so the developer toggle is hidden on my
+  // own row (the backend forbids self-flagging to avoid a management lockout).
+  const [myUserId, setMyUserId] = useState<string | null>(null);
 
   // Populate inputs when active org loads or switches
   useEffect(() => {
@@ -75,13 +78,21 @@ export function OrgSettingsClient() {
     api<{ org: { error_handler_user_id: string | null } }>("/api/org")
       .then(({ org }) => setErrorHandlerUserId(org.error_handler_user_id))
       .catch(() => { /* non-critical, dropdown defaults to null = owner */ });
+
+    api<{ user_id: string }>("/api/org/me")
+      .then(({ user_id }) => setMyUserId(user_id))
+      .catch(() => { /* non-critical; self-row toggle just stays visible */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id]);
 
   // Role comes from the active org (the hook returns my role per org).
   const myRoleFromOrgs = active?.role;
-  const canManage = myRoleFromOrgs === "owner" || myRoleFromOrgs === "admin";
-  const isOwner = myRoleFromOrgs === "owner";
+  // §5.2: a developer is excluded from user management even if they also hold
+  // owner/admin, so management affordances must be hidden from them (the backend
+  // enforces this via denyDeveloper regardless).
+  const iAmDeveloper = members.find((m) => m.user_id === myUserId)?.is_developer === true;
+  const canManage = (myRoleFromOrgs === "owner" || myRoleFromOrgs === "admin") && !iAmDeveloper;
+  const isOwner = myRoleFromOrgs === "owner" && !iAmDeveloper;
 
   const appName = (slug: string) => orgApps.find((a) => a.slug === slug)?.name ?? slug;
 
@@ -241,6 +252,16 @@ export function OrgSettingsClient() {
     try {
       await api(`/api/org/members/${userId}/role`, { method: "PATCH", body: { role } });
       toast.success(tOrg("roleUpdated"));
+      refreshMembers();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function handleToggleDeveloper(userId: string, next: boolean) {
+    try {
+      await api(`/api/org/members/${userId}/developer`, { method: "PATCH", body: { is_developer: next } });
+      toast.success(next ? tOrg("developerOn") : tOrg("developerOff"));
       refreshMembers();
     } catch (e) {
       toast.error((e as Error).message);
@@ -464,6 +485,11 @@ export function OrgSettingsClient() {
                           {!unrestricted && m.access_level === "lite" && (
                             <Badge variant="secondary" className="shrink-0 text-[9px]">{tOrg("projectOnlyBadge")}</Badge>
                           )}
+                          {m.is_developer && (
+                            <Badge variant="outline" className="shrink-0 text-[9px] gap-0.5">
+                              <Code2 className="h-2.5 w-2.5" />{tOrg("developerBadge")}
+                            </Badge>
+                          )}
                         </div>
                         {m.is_placeholder && canManage && (
                           <input
@@ -505,6 +531,20 @@ export function OrgSettingsClient() {
                         </select>
                       ) : (
                         <Badge variant="outline" className="text-[10px] uppercase shrink-0">{m.role}</Badge>
+                      )}
+                      {/* Developer axis (§5.2): owner-only toggle. Full feature
+                          visibility, but hard-excluded from user management, key
+                          exposure and impersonation (backend enforces). Not on self. */}
+                      {isOwner && m.user_id !== myUserId && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className={`shrink-0 h-8 w-8 ${m.is_developer ? "text-primary bg-accent" : "text-muted-foreground"}`}
+                          title={m.is_developer ? tOrg("developerOn") : tOrg("developerToggle")}
+                          onClick={() => handleToggleDeveloper(m.user_id, !m.is_developer)}
+                        >
+                          <Code2 className="h-3.5 w-3.5" />
+                        </Button>
                       )}
                       {/* Preview-as: regular members only. Never for owner/admin —
                           minting a session as them would be privilege escalation
