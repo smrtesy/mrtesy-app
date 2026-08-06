@@ -253,6 +253,8 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
   // to reset — that is "waiting", not "running", so it must NOT show the live pulse.
   // Value = the reset moment (ISO) when the sentinel carried one, else "".
   const usageWaitByThread = new Map<string, string>();
+  // Threads whose newest completed turn ends on an unanswered interactive block.
+  const awaitingReplyByThread = new Set<string>();
   const lastStatus = new Map<string, string>();
   if (ids.length > 0) {
     const { data: liveRows, error: lErr } = await db
@@ -280,7 +282,7 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
 
     const { data: statusRows, error: sErr } = await db
       .from("claude_runs")
-      .select("thread_id, status, turn_index")
+      .select("thread_id, status, turn_index, ends_with_block")
       .in("thread_id", ids)
       .order("thread_id", { ascending: true })
       .order("turn_index", { ascending: false })
@@ -288,7 +290,13 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     if (sErr) console.error("[claude/threads] run status failed:", sErr.message);
     // Ordered turn_index DESC, so the FIRST row seen for a thread is its newest run.
     for (const r of statusRows ?? []) {
-      if (r.thread_id && !lastStatus.has(r.thread_id)) lastStatus.set(r.thread_id, r.status);
+      if (!r.thread_id || lastStatus.has(r.thread_id)) continue;
+      lastStatus.set(r.thread_id, r.status);
+      // Newest turn is a COMPLETED interactive question still awaiting the user → the
+      // blue "needs you" hourglass. `ends_with_block` is precomputed by the runner (a
+      // newer turn would make the block read-only, so only the newest turn counts —
+      // exactly the client's "interactive only on the last turn").
+      if (r.status === "done" && r.ends_with_block) awaitingReplyByThread.add(r.thread_id);
     }
   }
 
@@ -377,6 +385,9 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     usage_wait_until: usageWaitByThread.has(r.id) ? usageWaitByThread.get(r.id) || "" : null,
     // A pending destructive-migration approval → the blue hourglass (needs you).
     needs_you: needsYouByThread.has(r.id),
+    // Newest completed turn ended on an unanswered interactive question → also the
+    // blue "needs you" hourglass, with its own label.
+    awaiting_reply: awaitingReplyByThread.has(r.id),
   }));
   return res.json({ threads });
 });

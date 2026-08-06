@@ -201,6 +201,9 @@ interface Thread {
   /** A pending destructive-migration approval — the "needs you" blue hourglass. (A
    *  merge conflict, the other needs-you case, is read from `deploy.state`.) */
   needs_you?: boolean;
+  /** The newest completed turn ended on an unanswered interactive question
+   *  (smrt-ask / smrt-plan) → also the blue "needs you" hourglass. */
+  awaiting_reply?: boolean;
 }
 
 /** One selectable Claude subscription account, as GET /api/claude/accounts reports it. */
@@ -2009,8 +2012,14 @@ function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>):
   const conflict = deployState === "conflict";
 
   // 1. Needs YOU — you must act before anything moves; surfaced above all else.
-  if (thread.needs_you || conflict) {
-    return { shape: "hourglass", cls: "text-blue-600", label: conflict ? t("dot.needsConflict") : t("dot.needsApproval") };
+  //    An unanswered interactive question, a merge conflict, or a pending approval.
+  if (thread.awaiting_reply || thread.needs_you || conflict) {
+    const label = conflict
+      ? t("dot.needsConflict")
+      : thread.needs_you
+        ? t("dot.needsApproval")
+        : t("dot.needsAnswer");
+    return { shape: "hourglass", cls: "text-blue-600", label };
   }
   // 2. Running now.
   if (thread.live) return { shape: "pulse", cls: "bg-amber-600", label: t("dot.live") };
