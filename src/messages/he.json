@@ -252,9 +252,7 @@
     "claude": "קלוד",
     "design": "עיצוב",
     "music": "24Six",
-    "musicTooltip": "פתח נגן 24Six",
-    "musicExpandTab": "פתח בטאב מלא",
-    "musicClose": "סגור נגן"
+    "musicTooltip": "פתח את 24Six בטאב חדש"
   },
   "account": {
     "title": "ניהול חשבון",
