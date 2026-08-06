@@ -1,123 +1,127 @@
 {
   "ai-chochom-plan.md": {
     "created": "2026-07-31T06:48:02Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "browser-page-test-plan.md": {
     "created": "2026-08-02T13:21:27Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "changelog-2026-05.md": {
     "created": "2026-05-14T22:21:20+05:30",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "classifier-review-2026-07.md": {
     "created": "2026-07-27T22:06:42Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "claude-knowledge-center-plan.md": {
     "created": "2026-07-29T20:54:11Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "claude-session-hooks.md": {
     "created": "2026-08-04T21:39:52Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "claude-usage-calibration-process.md": {
     "created": "2026-08-05T15:11:49Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "claude-usage-card-stage4.md": {
     "created": "2026-08-05T00:08:19Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
+  },
+  "claude-usage-real-data.md": {
+    "created": null,
+    "updated": null
   },
   "codebase-map.md": {
     "created": "2026-07-30T00:20:21Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "corrections-autofix-diagnosis-plan.md": {
     "created": "2026-07-31T18:32:56Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "corrections-triage-v2-plan.md": {
     "created": "2026-07-28T14:19:04Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "daily-report-plan.md": {
     "created": "2026-07-20T20:57:37Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "day-tools-plan.md": {
     "created": "2026-07-12T17:00:05Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "design-process.md": {
     "created": "2026-08-02T05:24:06Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "drive-catalog-plan.md": {
     "created": "2026-08-02T17:26:14Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "global-search-plan.md": {
     "created": "2026-07-30T03:10:50Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "info-center-handoff.md": {
     "created": "2026-07-15T20:20:57Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "info-center-plan.md": {
     "created": "2026-07-15T19:51:01Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "managed-secrets-plan.md": {
     "created": "2026-07-31T03:47:09Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "new-app-guide.md": {
     "created": "2026-05-17T01:54:53-04:00",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "onlinejobs-marketing-hire-plan.md": {
     "created": "2026-07-24T03:53:32Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "pending-outcome-followup-plan.md": {
     "created": "2026-07-16T01:30:40Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "permissions-management-plan.md": {
     "created": "2026-08-03T17:50:32Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "permissions-model-audit.md": {
     "created": "2026-07-14T20:47:40Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "plan-2a-2b-flow.md": {
     "created": "2026-05-10T23:12:29+05:30",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "platform-integration.md": {
     "created": "2026-05-18T01:36:20Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "pool-cleanup-fix-plan.md": {
     "created": "2026-07-22T21:57:46Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "pre-push-protocol.md": {
     "created": "2026-05-15T18:34:29Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "project-planning-protocol.md": {
     "created": "2026-07-12T20:34:58Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "router-panes-plan.md": {
     "created": "2026-07-13T23:23:46Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "security-hardening-plan.md": {
     "created": "2026-08-05T22:39:27Z",
@@ -129,110 +133,110 @@
   },
   "smart-studio-content-plan.md": {
     "created": "2026-07-28T20:19:01Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smart-studio-dashboard-stats.md": {
     "created": "2026-07-29T01:26:28Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtbot-feature-parity.md": {
     "created": "2026-06-03T19:20:35Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtbot-migration-plan.md": {
     "created": "2026-06-03T13:39:01Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtcrm-smrtreach-brief.md": {
     "created": "2026-06-03T19:46:56Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtcrm-smrtreach-build-plan.md": {
     "created": "2026-06-03T21:19:11Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtcrm-smrtreach-open-questions.md": {
     "created": "2026-06-03T20:03:17Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtdesign-plan.md": {
     "created": "2026-08-02T07:12:10Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtplan-focus-integration.md": {
     "created": "2026-07-12T19:36:59Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtplan-overview.md": {
     "created": "2026-06-05T14:24:34Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtplan-roadmap.md": {
     "created": "2026-06-08T23:04:02Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtplan-simulation-plan.md": {
     "created": "2026-07-17T04:31:02Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "smrtstudio-plan.md": {
     "created": "2026-07-26T18:13:02Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "sms-mms-media-handoff.md": {
     "created": "2026-07-28T05:17:31Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "sms-outgoing-capture-handoff.md": {
     "created": "2026-07-02T06:24:52Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "sms-self-note-capture-plan.md": {
     "created": "2026-07-15T19:16:22Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "studio-build-plan.md": {
     "created": "2026-07-30T06:27:55Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "studio-hierarchy-plan.md": {
     "created": "2026-07-31T03:50:58Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "studio-production-pipeline.md": {
     "created": "2026-07-31T04:42:48Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "studio-quick-line-plan.md": {
     "created": "2026-07-30T20:48:21Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "supabase-io-incident-2026-07-30.md": {
     "created": "2026-07-30T19:31:13Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "task-scheduling-calendar-plan.md": {
     "created": "2026-08-03T18:29:44Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "tasks-unification-spec.md": {
     "created": "2026-06-10T18:33:59Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "user-routing-stop-hook-plan.md": {
     "created": "2026-07-22T03:21:04Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "web-action-agent-plan.md": {
     "created": "2026-08-02T14:51:38Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "whatsapp-dualhook-outbound-migration.md": {
     "created": "2026-07-30T21:40:26Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   },
   "workclock-plan.md": {
     "created": "2026-07-14T18:21:50Z",
-    "updated": "2026-08-05T21:33:10Z"
+    "updated": "2026-08-05T21:11:14Z"
   }
 }
