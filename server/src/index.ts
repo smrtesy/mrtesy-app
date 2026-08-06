@@ -47,6 +47,16 @@ import claudeRouter, {
 } from "./modules/claude";
 
 const app = express();
+// Disable Express's automatic weak ETag on responses. Every route here serves
+// dynamic, per-user authenticated JSON (e.g. the ~1s Claude-console `/live`
+// poll) — none of it should be conditionally cached. With an ETag, an unchanged
+// poll body makes the browser revalidate and Express answers 304 Not Modified;
+// the frontend `api()` client treats any non-2xx (304 included) as a failure,
+// logs a `client_error` row and pages every super-admin. A 304 is a success,
+// not an error — removing the validator means no conditional request and no 304
+// ever surfaces. (The service worker's offline snapshot lives in Cache Storage,
+// independent of the HTTP cache, so it is unaffected.)
+app.set("etag", false);
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const HOST = process.env.HOST ?? "0.0.0.0"; // Bind to all interfaces — required by Railway/Fly/Render
 

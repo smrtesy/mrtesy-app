@@ -250,7 +250,11 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
         // fires and the recorder can attach it. Skip the benign/self-healing statuses:
         // 401 routes to login, and the org-membership 403 self-heals above.
         const apiErr = new ApiError(res.status, errMsg, json);
-        if (res.status !== 401 && !/not a member of this organization/i.test(errMsg)) {
+        // 304 Not Modified is a success semantic (the browser's cached copy is
+        // still valid), never a failure — don't page a super-admin for it. The
+        // server disables ETags so this shouldn't surface, but a proxy/CDN could
+        // still emit one; either way it must not be logged as a client_error.
+        if (res.status !== 401 && res.status !== 304 && !/not a member of this organization/i.test(errMsg)) {
           reportApiError({
             message: errMsg,
             method,
@@ -307,7 +311,8 @@ export async function apiStream(path: string, opts: ApiOptions = {}): Promise<Re
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
     const errMsg = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
     const streamErr = new ApiError(res.status, errMsg, json);
-    if (res.status !== 401 && !/not a member of this organization/i.test(errMsg)) {
+    // 304 is not a failure (see api() above) — never log it as a client_error.
+    if (res.status !== 401 && res.status !== 304 && !/not a member of this organization/i.test(errMsg)) {
       reportApiError({
         message: errMsg,
         method: (opts.method ?? "GET").toUpperCase(),
