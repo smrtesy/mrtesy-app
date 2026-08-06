@@ -13,6 +13,7 @@ import { runPart0 } from "../parts/part0-style";
 import { runPart1 } from "../parts/part1-collector";
 import { runPart4 } from "../parts/part4-projects";
 import { listCalendars } from "../../../services/calendar";
+import { searchFiles, searchFolders, resolveFolder } from "../../../services/drive";
 import { notifyError } from "../../../lib/platform";
 
 const router = Router();
@@ -35,6 +36,46 @@ router.get("/calendars", ...smrttaskGate, async (req: Request, res: Response) =>
   try {
     const calendars = await listCalendars(req.user!.id);
     return res.json({ calendars });
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ── Drive: folder/file search (server-side; token never leaves the server) ──
+// These replace three browser calls that read the plaintext Drive access_token
+// straight out of user_credentials. §5.1 of the security-hardening plan: no
+// frontend screen reads a token — the server holds it and calls Google.
+
+// Free-text file search (task doc finder).
+router.get("/drive/search-files", ...smrttaskGate, async (req: Request, res: Response) => {
+  try {
+    const keywords = String(req.query.q ?? "").slice(0, 500);
+    const files = await searchFiles(req.user!.id, keywords);
+    return res.json({ files });
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// Folder-name search (onboarding folder picker).
+router.get("/drive/search-folders", ...smrttaskGate, async (req: Request, res: Response) => {
+  try {
+    const q = String(req.query.q ?? "").slice(0, 200);
+    const folders = await searchFolders(req.user!.id, q);
+    return res.json({ folders });
+  } catch (e) {
+    return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// Resolve a folder id to its name (onboarding: user pasted a Drive URL).
+router.get("/drive/resolve-folder", ...smrttaskGate, async (req: Request, res: Response) => {
+  try {
+    const id = String(req.query.id ?? "").trim();
+    if (!id) return res.status(400).json({ error: "missing id" });
+    const folder = await resolveFolder(req.user!.id, id);
+    if (!folder) return res.status(404).json({ error: "folder not found" });
+    return res.json({ folder });
   } catch (e) {
     return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }

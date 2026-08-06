@@ -4898,7 +4898,6 @@
     },
     "mergeQueue": {
       "pending": "Pending merge",
-      "building": "Building…",
       "deploying": "Merging & deploying…",
       "mergeBy": "Merges by {time}",
       "countdown": "~{mins} min left",
