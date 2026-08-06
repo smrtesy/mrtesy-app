@@ -6,19 +6,22 @@
  * background coordinator (later phase) merges the whole `ready` batch and deploys
  * ONCE, so parallel server fixes stop restarting each other.
  *
- * Two endpoints, both x-cron-secret gated (no JWT — the caller is the console
- * run's hook / push step, which has the shared internal secret, not a user token):
- *
- *   POST /claude-deploy/register-building { thread_id, run_id?, branch?, title? }
- *     Called on a run's FIRST edit under server/**. Marks the thread's fix
- *     'building' so the coordinator holds the deploy for a fix still in flight.
- *     Fire-and-forget on the caller side; idempotent here.
+ * x-cron-secret gated (no JWT — the caller is the console run's push step, which has
+ * the shared internal secret, not a user token):
  *
  *   POST /claude-deploy/mark-ready { thread_id, branch, title? }
  *     Called at push time when a run's diff touches server/**: instead of pushing
- *     to `main`, it pushes its branch and calls this, moving the fix to 'ready'.
- *     Also the fallback that catches a side-channel edit the fast hook missed —
- *     it upserts even when no 'building' row exists.
+ *     to `main`, ship.sh pushes its branch and calls this, moving the fix to 'ready'.
+ *     The coordinator then batch-merges every 'ready' fix in one redeploy.
+ *
+ *   POST /claude-deploy/mark-shipped { thread_id, sha, surface?, branch? }
+ *     ship.sh's DIRECT path (frontend/docs push straight to main) — arms the
+ *     ship-status dot without going through the queue.
+ *
+ * (An earlier `register-building` endpoint that pre-marked a fix 'building' was
+ * removed: nothing ever called it, and the coordinator's active-run gate already
+ * holds the batch while any run — including one mid-build — is live, so a separate
+ * 'building' queue state was redundant.)
  *
  * org_id is resolved from the thread, so the caller never has to pass it. Writes
  * go through the service-role client; the table's RLS denies everyone else.
@@ -47,10 +50,10 @@ function text(v: unknown, max = 200): string | null {
 }
 
 /** A row reused from a terminal state (or a brand-new one) starts a NEW fix, so its
- *  `created_at` must be reset — the coordinator's 30-minute cap keys off the
+ *  `created_at` must be reset — the coordinator's MAX_WAIT_MS hard cap keys off the
  *  earliest `created_at`, and a stale one from a fix that finished days ago would
- *  make the new batch look ancient and deploy prematurely. A re-fire onto a live
- *  'building' row keeps its original `created_at` (same fix). */
+ *  make the new batch look ancient and deploy prematurely. A re-fire onto a still
+ *  -pending 'ready'/'deploying' row keeps its original `created_at` (same fix). */
 const TERMINAL = ["done", "failed", "conflict"];
 function isFreshFix(existingState: string | null | undefined): boolean {
   return !existingState || TERMINAL.includes(existingState);
@@ -69,53 +72,6 @@ async function orgOfThread(threadId: string): Promise<string | null> {
   }
   return data?.org_id ?? null;
 }
-
-router.post("/claude-deploy/register-building", async (req: Request, res: Response) => {
-  if (!authed(req)) return res.status(403).json({ error: "Forbidden" });
-
-  const threadId = uuid(req.body?.thread_id);
-  if (!threadId) return res.status(400).json({ error: "thread_id (uuid) required" });
-  const orgId = await orgOfThread(threadId);
-  if (!orgId) return res.status(404).json({ error: "thread not found" });
-
-  // Don't drag a fix that has already advanced back to 'building' — the marker on
-  // the run side makes a re-fire rare, but a stale one must not un-ready a fix or
-  // interrupt an in-progress deploy. Fail CLOSED on a read error: a swallowed error
-  // here would skip the guard and silently un-ready a fix.
-  const { data: existing, error: readErr } = await db
-    .from("claude_deploy_queue")
-    .select("state")
-    .eq("thread_id", threadId)
-    .maybeSingle();
-  if (readErr) {
-    console.error("[claude-deploy] register-building read failed:", readErr.message);
-    return res.status(500).json({ error: "read failed" });
-  }
-  if (existing && ["ready", "deploying"].includes(existing.state)) {
-    return res.json({ ok: true, state: existing.state, unchanged: true });
-  }
-
-  const now = new Date().toISOString();
-  const row: Record<string, unknown> = {
-    org_id: orgId,
-    thread_id: threadId,
-    run_id: uuid(req.body?.run_id),
-    branch: text(req.body?.branch, 300),
-    title: text(req.body?.title, 200) ?? "",
-    state: "building",
-    error: null,
-    updated_at: now,
-  };
-  if (isFreshFix(existing?.state)) row.created_at = now; // a new fix restarts the clock
-  const { error } = await db
-    .from("claude_deploy_queue")
-    .upsert(row, { onConflict: "thread_id" });
-  if (error) {
-    console.error("[claude-deploy] register-building failed:", error.message);
-    return res.status(500).json({ error: "write failed" });
-  }
-  return res.json({ ok: true, state: "building" });
-});
 
 router.post("/claude-deploy/mark-ready", async (req: Request, res: Response) => {
   if (!authed(req)) return res.status(403).json({ error: "Forbidden" });
@@ -143,8 +99,9 @@ router.post("/claude-deploy/mark-ready", async (req: Request, res: Response) => 
     return res.json({ ok: true, state: existing.state, unchanged: true });
   }
 
-  // Upsert so a side-channel edit the fast hook never saw (no 'building' row) is
-  // still caught here at push time — the gate that guarantees correctness.
+  // Upsert (onConflict thread_id): a repeat ship of the same thread's fix reuses its
+  // row; a brand-new fix creates one. This push-time call is the sole entry into the
+  // queue — the gate that guarantees a server change is batched, not pushed to main.
   const now = new Date().toISOString();
   const row: Record<string, unknown> = {
     org_id: orgId,
