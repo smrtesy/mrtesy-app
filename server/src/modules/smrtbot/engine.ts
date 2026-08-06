@@ -36,8 +36,10 @@ export interface BotRow {
   wa_access_token?: string | null;
   test_wa_phone_number_id?: string | null;
   test_wa_access_token?: string | null;
+  test_wa_access_token_secret_id?: string | null;
   live_wa_phone_number_id?: string | null;
   live_wa_access_token?: string | null;
+  live_wa_access_token_secret_id?: string | null;
 }
 
 interface MenuNode {
@@ -442,7 +444,7 @@ export async function handleInbound(
 
   let channel = channelOverride;
   if (!channel) {
-    const creds = resolveCreds(bot, env);
+    const creds = await resolveCreds(bot, env);
     if (!creds) {
       await reportError(orgId, {
         area: "engine",
