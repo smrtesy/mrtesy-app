@@ -2009,19 +2009,18 @@ type Indicator =
  */
 function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>): Indicator {
   const deployState = thread.deploy?.state;
-  const conflict = deployState === "conflict";
 
-  // 1. Needs YOU — you must act before anything moves; surfaced above all else.
-  //    An unanswered interactive question, a merge conflict, or a pending approval.
-  if (thread.awaiting_reply || thread.needs_you || conflict) {
-    const label = conflict
-      ? t("dot.needsConflict")
-      : thread.needs_you
-        ? t("dot.needsApproval")
-        : t("dot.needsAnswer");
+  // 1. Needs YOU — you must act before anything moves; surfaced above all else. An
+  //    unanswered question or a pending approval. A merge conflict is NOT here: the
+  //    coordinator auto-resolves it by handing it back to the session, so it shows as
+  //    running / being-resolved (steps 2–3), not as an action required from you. Only
+  //    an ESCALATED conflict — parked 'failed' after the retries are exhausted —
+  //    becomes a red settled failure below.
+  if (thread.awaiting_reply || thread.needs_you) {
+    const label = thread.needs_you ? t("dot.needsApproval") : t("dot.needsAnswer");
     return { shape: "hourglass", cls: "text-blue-600", label };
   }
-  // 2. Running now.
+  // 2. Running now — includes a conflict's live self-resolve turn.
   if (thread.live) return { shape: "pulse", cls: "bg-amber-600", label: t("dot.live") };
   // 3. Passive wait — resolves on its own.
   if (thread.usage_wait_until != null) {
@@ -2030,6 +2029,11 @@ function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>):
   }
   if (deployState === "ready" || deployState === "deploying") {
     return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitMerge") };
+  }
+  // A conflict between self-resolve turns (the last one ended, the re-ship hasn't
+  // landed yet) — still being handled automatically, not an action for you.
+  if (deployState === "conflict") {
+    return { shape: "hourglass", cls: "text-amber-500", label: t("dot.conflictResolving") };
   }
   const ship = thread.ship?.state;
   if (ship === "main_building") return { shape: "hourglass", cls: "text-amber-500", label: t("dot.shipBuilding") };
@@ -2257,15 +2261,26 @@ function DeployRow({
 }) {
   const d = thread.deploy;
   if (!d) return null;
-  const stuck = d.state === "failed" || d.state === "conflict";
+  // 'conflict' is NOT stuck: the coordinator auto-resolves it (hands it back to the
+  // session), so it reads as "resolving automatically", not a red failure. Only a
+  // 'failed' row (an escalated conflict or a build failure) is the red, needs-you one.
+  const stuck = d.state === "failed";
+  const resolving = d.state === "conflict";
 
   let status: ReactNode;
   if (stuck) {
-    const label = d.state === "conflict" ? t("mergeQueue.conflict") : t("mergeQueue.failed");
     status = (
       <span className="flex items-start gap-1 text-destructive">
         <AlertTriangle className="mt-px size-3 shrink-0" />
-        <span className="line-clamp-2">{d.error ? `${label} · ${d.error}` : label}</span>
+        <span className="line-clamp-2">{d.error ? `${t("mergeQueue.failed")} · ${d.error}` : t("mergeQueue.failed")}</span>
+      </span>
+    );
+  } else if (resolving) {
+    // Auto-healing in progress — amber, no alarm; the session is rebasing + re-shipping.
+    status = (
+      <span className="flex items-start gap-1 text-amber-600">
+        <Hourglass className="mt-px size-3 shrink-0" />
+        <span className="line-clamp-2">{t("mergeQueue.conflictResolving")}</span>
       </span>
     );
   } else if (d.state === "deploying") {
