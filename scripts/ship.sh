@@ -98,7 +98,7 @@ fi
 MAIN_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 git checkout "$BRANCH"
 git push origin "$BRANCH"
-echo "[ship] merged '$BRANCH' into main and pushed. Verify Production advanced (/api/deploy-info)."
+echo "[ship] merged '$BRANCH' into main and pushed. Don't poll deploy-info or promise to monitor — the session's rail deploy-dot reports live/failed on its own."
 
 # Arm the ship-status watcher so the thread's rail dot goes green only once the
 # production build for THIS push is confirmed live (red if it fails). Best-effort:

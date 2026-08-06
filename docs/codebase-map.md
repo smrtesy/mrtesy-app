@@ -147,7 +147,16 @@ Per-user app access: `user_app_access`
 (which apps a member is granted) vs `app_user_access` (the smrtTask full/lite
 level — two similarly-named tables, don't confuse). Permission layer:
 `org_restrictions` (which catalog resources an org restricts),
-`user_resource_grants` (per-user exceptions), `permission_audit_log`. Pipeline: `source_messages` (raw ingest) →
+`user_resource_grants` (per-user exceptions), `permission_audit_log`. Feature
+channels (beta vs stable maturity, ORTHOGONAL to permissions — plan
+`docs/feature-channels-plan.md`): `feature_channels` (per-feature state — which
+channel/version enabled, edited at `/admin/features`) + `user_settings.release_channel`
+/ `organizations.release_channel` (which channel a user/org sees). The STRUCTURE
+half is code: `src/lib/feature-registry.ts` (+ server twin
+`server/src/lib/feature-registry.ts`), enforced by push hook
+`.claude/hooks/feature-registry-guard.sh`; frontend gate
+`src/components/platform/features/` (`<FeatureGate>`/`useFeature`), server
+`server/src/modules/admin/features/`. Pipeline: `source_messages` (raw ingest) →
 `tasks` (+ `task_activities`) → `projects` / `reminders` / `contacts`.
 Rules & AI: `rules_memory` (skip rules — parser lives in
 `server/src/modules/smrttask/lib/rule-filters.ts` with a Deno twin in

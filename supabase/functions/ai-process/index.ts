@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extractEmailBody } from "../_shared/email-body.ts";
 import { anthropicCostUsdFromCounts, anthropicFamily } from "../_shared/ai-pricing.ts";
+import { resolveToken } from "../_shared/vault-tokens.ts";
 import {
   isWhatsApp, isConversational, threadKey,
   bodyForAI, bodyForClassify, hasMeetingInvite,
@@ -1806,15 +1807,18 @@ const gmailLabelMapCache = new Map<string, Promise<Map<string, string>>>();
 async function refreshGmailToken(userId: string): Promise<string> {
   const { data: cred } = await supabase
     .from("user_credentials")
-    .select("access_token, refresh_token, expires_at")
+    .select("access_token, refresh_token, expires_at, access_token_secret_id, refresh_token_secret_id")
     .eq("user_id", userId)
     .eq("service", "gmail")
     .single();
   if (!cred) throw new Error("No Gmail credentials found");
 
+  const accessToken = await resolveToken(supabase, cred.access_token_secret_id, cred.access_token);
+  const refreshToken = await resolveToken(supabase, cred.refresh_token_secret_id, cred.refresh_token);
+
   // Still valid (5-min buffer) → reuse.
   if (cred.expires_at && new Date(cred.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
-    return cred.access_token;
+    return accessToken;
   }
 
   const resp = await fetch("https://oauth2.googleapis.com/token", {
@@ -1823,7 +1827,7 @@ async function refreshGmailToken(userId: string): Promise<string> {
     body: new URLSearchParams({
       client_id: Deno.env.get("GOOGLE_CLIENT_ID")!,
       client_secret: Deno.env.get("GOOGLE_CLIENT_SECRET")!,
-      refresh_token: cred.refresh_token!,
+      refresh_token: refreshToken!,
       grant_type: "refresh_token",
     }),
   });

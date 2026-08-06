@@ -46,6 +46,10 @@
           },
           {
             "type": "command",
+            "command": ".claude/hooks/feature-registry-guard.sh"
+          },
+          {
+            "type": "command",
             "command": ".claude/hooks/deploy-gate.sh"
           }
         ]

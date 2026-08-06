@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { extractText, getDocumentProxy } from "npm:unpdf@1.6.2";
 import { anthropicCostUsd } from "../_shared/ai-pricing.ts";
+import { resolveToken } from "../_shared/vault-tokens.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -72,7 +73,7 @@ async function markDriveDisconnected(userId: string, reason: string) {
 async function refreshGoogleToken(userId: string, service: string): Promise<string> {
   const { data: cred } = await supabase
     .from("user_credentials")
-    .select("access_token, refresh_token, expires_at")
+    .select("access_token, refresh_token, expires_at, access_token_secret_id, refresh_token_secret_id")
     .eq("user_id", userId)
     .eq("service", service)
     .single();
@@ -83,8 +84,11 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
   // retried on the next cron run.
   if (!cred) throw new Error("AUTH: no google_drive credentials found");
 
+  const accessToken = await resolveToken(supabase, cred.access_token_secret_id, cred.access_token);
+  const refreshToken = await resolveToken(supabase, cred.refresh_token_secret_id, cred.refresh_token);
+
   if (cred.expires_at && new Date(cred.expires_at) > new Date(Date.now() + 5 * 60 * 1000)) {
-    return cred.access_token;
+    return accessToken;
   }
 
   const resp = await fetch("https://oauth2.googleapis.com/token", {
@@ -93,7 +97,7 @@ async function refreshGoogleToken(userId: string, service: string): Promise<stri
     body: new URLSearchParams({
       client_id: Deno.env.get("GOOGLE_CLIENT_ID")!,
       client_secret: Deno.env.get("GOOGLE_CLIENT_SECRET")!,
-      refresh_token: cred.refresh_token!,
+      refresh_token: refreshToken!,
       grant_type: "refresh_token",
     }),
   });
