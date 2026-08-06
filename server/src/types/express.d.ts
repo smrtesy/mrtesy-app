@@ -22,6 +22,10 @@ declare global {
       org_id: string;
       user_id: string;
       role: "owner" | "admin" | "member";
+      /** Security plan §5.2: independent developer axis (not a rank). true =
+       *  full feature visibility, but hard-excluded from user management (§5.3),
+       *  key exposure (§5.4) and impersonation (§9.7). Enforced by denyDeveloper. */
+      is_developer: boolean;
     }
 
     interface Request {

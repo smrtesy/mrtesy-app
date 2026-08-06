@@ -14,6 +14,9 @@ export interface OrgMember {
   display_name: string | null;
   /** A no-email placeholder employee (added by name; can be given a real email later). */
   is_placeholder?: boolean;
+  /** Security plan §5.2: the developer axis. Full feature visibility, but
+   *  hard-excluded from user management, key exposure and impersonation. */
+  is_developer?: boolean;
   /** App slugs explicitly granted to this user (only enforced for role='member'). */
   app_slugs: string[];
   /** smrtTask access level. "lite" = a project-only worker (tasks assigned to

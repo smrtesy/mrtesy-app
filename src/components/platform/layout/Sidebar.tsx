@@ -41,6 +41,7 @@ import { ManualTaskInput } from "@/components/smrttask/tasks/ManualTaskInput";
 import { UserAvatarLink } from "@/components/platform/account/UserAvatarLink";
 import { BrandWordmark } from "@/components/platform/branding/BrandWordmark";
 import { SystemStatusStrip } from "@/components/platform/layout/SystemStatusStrip";
+import { MusicPlayerPanel } from "@/components/platform/layout/MusicPlayerPanel";
 import { SystemMessagesBell } from "@/components/platform/layout/SystemMessagesBell";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
 import { APPS, type AppDef } from "@/lib/apps/registry";
@@ -127,7 +128,7 @@ const ALL_NAV_HREFS: readonly string[] = [
   .map((i): string => i.href)
   .concat(["/inbox", "/settings", "/map", "/transcription-experiment", "/admin"]);
 
-export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full" }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite" }) {
+export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full", showMusicPlayer = false }: { locale: string; isAdmin?: boolean; enabledApps?: string[]; taskAccess?: "full" | "lite"; showMusicPlayer?: boolean }) {
   const hasSmrtTask = enabledApps.includes("smrttask");
   // Project-only ("lite") worker: smrtTask collapses to just the task list — no
   // inbox, projects, whatsapp/sms, knowledge, task-creation FABs or experiments.
@@ -605,6 +606,11 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             </div>
           </div>
         )}
+        {/* 24Six music player — collapsed by default, docked under the status
+            strip. Desktop-only by construction (this whole aside is hidden on
+            mobile). Embedded iframe + open-in-full-tab fallback. Gated to a
+            single user for now (see showMusicPlayer in (app)/layout.tsx). */}
+        {showMusicPlayer && <MusicPlayerPanel />}
       </aside>
 
       {/* Mobile Bottom Tab Bar */}

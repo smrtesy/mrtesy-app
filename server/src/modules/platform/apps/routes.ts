@@ -8,7 +8,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
-import { requireAuth, requireOrg, requireRole } from "../../../middleware";
+import { requireAuth, requireOrg, requireRole, denyDeveloper } from "../../../middleware";
 
 const router = Router();
 
@@ -35,7 +35,7 @@ router.get("/org/apps", requireAuth, requireOrg, async (req: Request, res: Respo
 
 /** POST /org/apps/:slug — enable an app for the active org (owner only) */
 router.post("/org/apps/:slug",
-  requireAuth, requireOrg, requireRole("owner"),
+  requireAuth, requireOrg, requireRole("owner"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { slug } = req.params;
     const { data: app } = await db.from("apps").select("id").eq("slug", slug).maybeSingle();
@@ -57,7 +57,7 @@ router.post("/org/apps/:slug",
 
 /** DELETE /org/apps/:slug — disable an app (owner only) */
 router.delete("/org/apps/:slug",
-  requireAuth, requireOrg, requireRole("owner"),
+  requireAuth, requireOrg, requireRole("owner"), denyDeveloper,
   async (req: Request, res: Response) => {
     const { slug } = req.params;
     const { data: app } = await db.from("apps").select("id").eq("slug", slug).maybeSingle();
