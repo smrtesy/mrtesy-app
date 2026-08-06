@@ -25,7 +25,7 @@ const router = Router();
 router.get("/bot/bots/:botId/wa/templates", requireBotAccess(), async (req: Request, res: Response) => {
   const { data: bot, error } = await db
     .from("smrtbot_bots")
-    .select("waba_id, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token")
+    .select("waba_id, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id")
     .eq("org_id", req.org!.id)
     .eq("id", req.params.botId)
     .maybeSingle();
@@ -33,7 +33,7 @@ router.get("/bot/bots/:botId/wa/templates", requireBotAccess(), async (req: Requ
   if (!bot) return res.status(404).json({ error: "Bot not found" });
   const wabaId = (bot as { waba_id?: string | null }).waba_id;
   if (!wabaId) return res.status(400).json({ error: "bot has no WABA id configured" });
-  const creds = resolveCreds(bot as Parameters<typeof resolveCreds>[0], "live");
+  const creds = await resolveCreds(bot as Parameters<typeof resolveCreds>[0], "live");
   if (!creds) return res.status(400).json({ error: "bot has no live WhatsApp credentials" });
 
   try {

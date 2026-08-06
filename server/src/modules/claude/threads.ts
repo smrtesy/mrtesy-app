@@ -64,7 +64,7 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, ship_state, ship_detail, ship_branch";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, serial, serial_display, ship_state, ship_detail, ship_branch";
 
 /** Is `account` one the runner can route to right now? The valid ids are the
  *  runner's registry (listAccountIds — primary + the configured extras), so this
@@ -292,7 +292,7 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
 
     const { data: statusRows, error: sErr } = await db
       .from("claude_runs")
-      .select("thread_id, status, turn_index, ends_with_block")
+      .select("thread_id, status, turn_index, ends_with_block, ends_with_question")
       .in("thread_id", ids)
       .order("thread_id", { ascending: true })
       .order("turn_index", { ascending: false })
@@ -302,11 +302,15 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     for (const r of statusRows ?? []) {
       if (!r.thread_id || lastStatus.has(r.thread_id)) continue;
       lastStatus.set(r.thread_id, r.status);
-      // Newest turn is a COMPLETED interactive question still awaiting the user → the
-      // blue "needs you" hourglass. `ends_with_block` is precomputed by the runner (a
-      // newer turn would make the block read-only, so only the newest turn counts —
-      // exactly the client's "interactive only on the last turn").
-      if (r.status === "done" && r.ends_with_block) awaitingReplyByThread.add(r.thread_id);
+      // Newest turn is a COMPLETED question still awaiting the user → the blue "needs
+      // you" hourglass. Two precomputed booleans (a newer turn would make either
+      // read-only, so only the newest turn counts — exactly the client's "interactive
+      // only on the last turn"): `ends_with_block` = an interactive block; the far more
+      // common `ends_with_question` = a plain-text question mark (GENERATED column,
+      // migration 20260806222312). Reading a boolean keeps this off a per-poll scan of
+      // result_summary.
+      if (r.status === "done" && (r.ends_with_block || r.ends_with_question))
+        awaitingReplyByThread.add(r.thread_id);
     }
   }
 
@@ -396,8 +400,9 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     deploy_wait: deployWaitByThread.has(r.id) || null,
     // A pending destructive-migration approval → the blue hourglass (needs you).
     needs_you: needsYouByThread.has(r.id),
-    // Newest completed turn ended on an unanswered interactive question → also the
-    // blue "needs you" hourglass, with its own label.
+    // Newest completed turn ended on an unanswered question — either an interactive
+    // block (ends_with_block) or a plain-text question (ends_with_question) → the blue
+    // "needs you" hourglass, with its own label.
     awaiting_reply: awaitingReplyByThread.has(r.id),
   }));
   return res.json({ threads });
@@ -574,6 +579,33 @@ async function signedUrlFor(storagePath: string): Promise<string | null> {
  * poll ran ~9 queries and returned every turn + every event every 900ms, growing
  * linearly with the thread. This route is two small indexed queries, constant.
  */
+/** Resolve a short thread code — "K7", "k7", or the bare "7" — to the thread.
+ *  This is the lookup another Claude session uses when the user hands it a rail
+ *  code ("go look at K7"): it maps the code to the thread's UUID + metadata so the
+ *  session can then read /claude/threads/:uuid. Org-scoped, so a code only ever
+ *  resolves a thread the caller's own org owns (serials are global, but a
+ *  cross-org code returns 404 — never another org's thread). Declared BEFORE the
+ *  /:id routes so "by-code" is never swallowed as a thread id. */
+router.get("/claude/threads/by-code/:code", async (req: Request, res: Response) => {
+  const m = String(req.params.code || "").trim().match(/^[Kk]?(\d{1,15})$/);
+  const serial = m ? Number(m[1]) : NaN;
+  if (!Number.isSafeInteger(serial) || serial < 1) {
+    return res.status(404).json({ error: "thread not found" });
+  }
+  const { data: thread, error } = await db
+    .from("claude_threads")
+    .select(THREAD_COLS)
+    .eq("serial", serial)
+    .eq("org_id", req.org!.id)
+    .maybeSingle();
+  if (error) {
+    console.error("[claude/threads] by-code failed:", error.message);
+    return res.status(500).json({ error: "could not resolve code" });
+  }
+  if (!thread) return res.status(404).json({ error: "thread not found" });
+  res.json({ thread });
+});
+
 router.get("/claude/threads/:id/live", async (req: Request, res: Response) => {
   if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "thread not found" });
   const runId = typeof req.query.run === "string" && UUID_RE.test(req.query.run) ? req.query.run : null;

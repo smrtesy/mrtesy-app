@@ -89,8 +89,10 @@ export interface GameBot {
   wa_phone_number_id?: string | null;
   test_wa_phone_number_id?: string | null;
   test_wa_access_token?: string | null;
+  test_wa_access_token_secret_id?: string | null;
   live_wa_phone_number_id?: string | null;
   live_wa_access_token?: string | null;
+  live_wa_access_token_secret_id?: string | null;
   wa_access_token?: string | null;
 }
 
@@ -731,13 +733,13 @@ export async function processReferral(bot: GameBot, env: BotEnv, newPhone: strin
   const next = Number(data?.share_tickets ?? 0) + 1;
   await db.from("smrtbot_wa_users").upsert({ org_id: bot.org_id, bot_id: bot.id, phone: referrerPhone, share_tickets: next }, { onConflict: "bot_id,phone" });
   await db.from("smrtbot_referral_log").insert({ org_id: bot.org_id, bot_id: bot.id, referrer_phone: referrerPhone, new_phone: newPhone });
-  const creds = resolveCreds(bot, env);
+  const creds = await resolveCreds(bot, env);
   if (creds) { try { await sendText(creds, referrerPhone, await getMsg(bot, env, "GAME_REFERRAL_NOTIFY")); } catch { /* ignore */ } }
 }
 
 // ── cron entry points (called per-bot from jobs.ts) ─────────
 export async function sendScheduledReminders(bot: GameBot, env: BotEnv, hourLabel: string): Promise<number> {
-  const creds = resolveCreds(bot, env);
+  const creds = await resolveCreds(bot, env);
   if (!creds) return 0;
   const { data } = await db.from("smrtbot_children").select("phone").eq("bot_id", bot.id).eq("reminder_time", hourLabel).eq("active_reminders", true);
   const seen = new Set<string>();
@@ -755,7 +757,7 @@ export async function sendScheduledReminders(bot: GameBot, env: BotEnv, hourLabe
 }
 
 export async function executeRaffle(bot: GameBot, env: BotEnv, raffleType: string): Promise<string | null> {
-  const creds = resolveCreds(bot, env);
+  const creds = await resolveCreds(bot, env);
   const { data: coupon } = await db.from("smrtbot_coupons").select("coupon_code, description").eq("bot_id", bot.id).eq("status", "available").eq("raffle_type", raffleType).limit(1).maybeSingle();
   if (!coupon) return null;
   const code = coupon.coupon_code as string;

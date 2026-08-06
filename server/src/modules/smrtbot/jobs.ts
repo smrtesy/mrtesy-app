@@ -18,7 +18,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import { db } from "../../db";
-import { resolveCreds, sendText, sendImage, type BotEnv, type BotCreds } from "./wa";
+import { resolveCreds, sendText, sendImage, checkNumberHealth, type BotEnv, type BotCreds } from "./wa";
 import { reportError, errInfo } from "./report-error";
 import { sendScheduledReminders, executeRaffle, type GameBot } from "./game";
 import { sendBaileysText, sendBaileysImage, toJid } from "./baileys";
@@ -83,10 +83,10 @@ router.post("/api/bot/jobs/scheduled", async (_req: Request, res: Response) => {
 
     const { data: bot } = await db
       .from("smrtbot_bots")
-      .select("test_wa_phone_number_id, test_wa_access_token, live_wa_phone_number_id, live_wa_access_token, wa_phone_number_id, wa_access_token")
+      .select("test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, wa_phone_number_id, wa_access_token")
       .eq("id", cfg.bot_id)
       .maybeSingle();
-    const creds = bot ? resolveCreds(bot as BotCreds, cfg.env) : null;
+    const creds = bot ? await resolveCreds(bot as BotCreds, cfg.env) : null;
     if (!creds) continue;
 
     const inactiveBefore = new Date(Date.now() - cfg.inactivity_minutes * 60_000).toISOString();
@@ -136,7 +136,7 @@ router.post("/api/bot/jobs/scheduled", async (_req: Request, res: Response) => {
 });
 
 const BOT_SELECT =
-  "id, org_id, slug, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token";
+  "id, org_id, slug, public_phone_number, live_phone_display, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id";
 
 // ── game daily reminders (hourly): match children whose reminder_time == now ─
 router.post("/api/bot/jobs/reminders", async (_req: Request, res: Response) => {
@@ -244,7 +244,7 @@ router.post("/api/bot/jobs/broadcasts", async (_req: Request, res: Response) => 
       const { data: bot } = await db
         .from("smrtbot_bots")
         .select(
-          "id, transport, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token",
+          "id, transport, wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id",
         )
         .eq("id", b.bot_id)
         .maybeSingle();
@@ -264,7 +264,7 @@ router.post("/api/bot/jobs/broadcasts", async (_req: Request, res: Response) => 
         if (b.target_type === "group") {
           throw new Error("meta transport cannot broadcast to a group");
         }
-        const creds = resolveCreds(bot as BotCreds, "live");
+        const creds = await resolveCreds(bot as BotCreds, "live");
         if (!creds) throw new Error("bot has no live WhatsApp credentials");
         const out = b.media_url
           ? await sendImage(creds, b.target_jid, b.media_url, b.body_text || undefined)
@@ -365,7 +365,7 @@ router.post("/api/bot/jobs/daily-summary", async (_req: Request, res: Response) 
 
       if (totals.size > 0) {
         const isBaileys = bot.transport === "baileys";
-        const creds = isBaileys ? null : resolveCreds(bot as BotCreds, "live") ?? resolveCreds(bot as BotCreds, "test");
+        const creds = isBaileys ? null : (await resolveCreds(bot as BotCreds, "live")) ?? (await resolveCreds(bot as BotCreds, "test"));
         for (const [phone, mins] of totals) {
           if (sent >= DAILY_SUMMARY_MAX) break;
           const body = `📊 *סיכום יום*\nלמדת היום סה״כ ${fmtDuration(mins)}. כל הכבוד! 💪`;
@@ -393,6 +393,56 @@ router.post("/api/bot/jobs/daily-summary", async (_req: Request, res: Response) 
     }
   }
   res.json({ ok: true, sent, bots: ran });
+});
+
+// ── health check: probe every LIVE Meta bot's credentials against Meta, so a
+//    revoked/expired token (or any auth failure that would break sends) is caught
+//    by ONE daily notification instead of by children hitting a dead bot.
+//    Read-only GET, no message sent, zero cost. Baileys bots have no Meta token
+//    to probe and are skipped. Only 4xx (a real credential rejection) alerts;
+//    a transient network/Meta-5xx is left for the next daily run. ─────────────
+router.post("/api/bot/jobs/health-check", async (_req: Request, res: Response) => {
+  const { data: bots, error } = await db
+    .from("smrtbot_bots")
+    .select(`${BOT_SELECT}, transport`)
+    .eq("active", true);
+  if (error) return res.status(500).json({ error: error.message });
+
+  let checked = 0;
+  let healthy = 0;
+  const failed: string[] = [];
+  for (const bot of (bots as (BotCreds & { id: string; org_id: string; slug: string; transport?: string | null })[]) ?? []) {
+    if (bot.transport === "baileys") continue;
+    const creds = await resolveCreds(bot, "live");
+    if (!creds) continue; // no live number configured — nothing to probe
+    checked++;
+
+    const health = await checkNumberHealth(creds);
+    if (health.ok) {
+      healthy++;
+      continue;
+    }
+    // Transient (network blip = status 0, or Meta 5xx) — don't page; the next
+    // daily run re-checks. Only a 4xx credential rejection is worth an alert.
+    if (health.status === 0 || health.status >= 500) continue;
+
+    failed.push(bot.slug);
+    await reportError(bot.org_id, {
+      area: "cron",
+      title: `בוט ${bot.slug} — אימות מול Meta נכשל בבדיקת הבריאות היומית`,
+      message: `שליחת הודעות מהבוט לא תעבוד עד שהטוקן/ההרשאות יתוקנו בהגדרות הבוט (HTTP ${health.status}).`,
+      botId: bot.id,
+      env: "live",
+      details: {
+        slug: bot.slug,
+        phone_number_id: creds.phoneNumberId,
+        http_status: health.status,
+        meta_error: health.detail.slice(0, 400),
+      },
+      link: `/bots/${bot.id}`,
+    });
+  }
+  res.json({ ok: true, checked, healthy, failed });
 });
 
 export default router;
