@@ -198,8 +198,11 @@ export default async function AppLayout({
       {/* Shared open/close state for the Claude side-drawer — wraps both the
           Sidebar (whose Claude button opens it) and the ClaudeDrawer below. */}
       <ClaudeDrawerProvider>
-        {/* Desktop Sidebar */}
-        <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} taskAccess={taskAccess} />
+        {/* Desktop Sidebar. showMusicPlayer: the 24Six music player is
+            temporarily gated to Chanoch only (his request, 2026-08-06) —
+            matched by user id so it never renders for anyone else. Broaden or
+            remove this gate when rolling the player out more widely. */}
+        <Sidebar locale={locale} isAdmin={isAdmin} enabledApps={enabledApps} taskAccess={taskAccess} showMusicPlayer={user?.id === "9cb6086a-2deb-44c1-93b6-93408f4d273c"} />
         {/* WhatsApp side-panel: lets the operator keep a conversation open
             alongside the task lists. Provider wraps the content so entry points
             (SourceLink / QuickAction / log) can open it; the docked panel
