@@ -24,7 +24,15 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../db";
-import { executeRun, cancelRun, runOneShot, listAccountIds, BG_MODEL_FAST } from "./runner";
+import {
+  executeRun,
+  cancelRun,
+  runOneShot,
+  listAccountIds,
+  BG_MODEL_FAST,
+  USAGE_LIMIT_SENTINEL,
+  USAGE_UNTIL_RE,
+} from "./runner";
 import { composePrompt } from "./playbooks";
 import { isValidRepo, isValidBranch } from "./github";
 import { saveAttachment, removeThreadAttachments, MAX_BASE64_CHARS, BUCKET } from "./attachments";
@@ -241,15 +249,34 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
   const rows = data ?? [];
   const ids = rows.map((r) => r.id);
   const liveSet = new Set<string>();
+  // Threads whose only non-terminal run is PARKED waiting for the usage-limit window
+  // to reset — that is "waiting", not "running", so it must NOT show the live pulse.
+  // Value = the reset moment (ISO) when the sentinel carried one, else "".
+  const usageWaitByThread = new Map<string, string>();
   const lastStatus = new Map<string, string>();
   if (ids.length > 0) {
     const { data: liveRows, error: lErr } = await db
       .from("claude_runs")
-      .select("thread_id")
+      .select("thread_id, error")
       .in("thread_id", ids)
       .in("status", ["running", "queued", "waiting"]);
     if (lErr) console.error("[claude/threads] live status failed:", lErr.message);
-    for (const r of liveRows ?? []) if (r.thread_id) liveSet.add(r.thread_id);
+    for (const r of liveRows ?? []) {
+      if (!r.thread_id) continue;
+      const err = (r.error ?? "") as string;
+      if (err.startsWith(USAGE_LIMIT_SENTINEL)) {
+        // Don't let a usage-parked run also register as live. A real running run for
+        // the same thread (below) still wins by adding it to liveSet.
+        if (!usageWaitByThread.has(r.thread_id)) {
+          const m = USAGE_UNTIL_RE.exec(err);
+          usageWaitByThread.set(r.thread_id, m?.[1] ?? "");
+        }
+      } else {
+        liveSet.add(r.thread_id);
+      }
+    }
+    // A thread that has BOTH a real running run and a parked one is live, not waiting.
+    for (const id of liveSet) usageWaitByThread.delete(id);
 
     const { data: statusRows, error: sErr } = await db
       .from("claude_runs")
@@ -295,6 +322,22 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     }
   }
 
+  // Threads with a destructive-migration approval still PENDING — the "ממתין לך"
+  // (needs-you) signal, alongside a deploy-queue merge conflict. Org-scoped; the
+  // table is service-role only, so the list carries the flag rather than the client
+  // reading it. A conflict is derived on the client from `deploy.state`.
+  const needsYouByThread = new Set<string>();
+  if (ids.length > 0) {
+    const { data: apRows, error: apErr } = await db
+      .from("claude_action_approvals")
+      .select("thread_id")
+      .eq("org_id", req.org!.id)
+      .eq("status", "pending")
+      .in("thread_id", ids);
+    if (apErr) console.error("[claude/threads] approvals failed:", apErr.message);
+    for (const r of apRows ?? []) if (r.thread_id) needsYouByThread.add(r.thread_id);
+  }
+
   // First user message per thread — the deterministic title fallback (see
   // firstLinePreview). Fetched ONLY for the threads that lack an AI title, so the
   // response never carries prompt text we won't use. turn_index=1 is the first turn
@@ -328,6 +371,12 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
     ship: r.ship_state
       ? { state: r.ship_state as string, detail: (r.ship_detail as string | null) ?? null, branch: (r.ship_branch as string | null) ?? null }
       : null,
+    // Waiting on the usage-limit window to reset → the yellow hourglass (passive
+    // wait). ISO reset moment when known, "" when the window is unknown, null when
+    // not waiting. Distinct from `live` (which is a real running turn).
+    usage_wait_until: usageWaitByThread.has(r.id) ? usageWaitByThread.get(r.id) || "" : null,
+    // A pending destructive-migration approval → the blue hourglass (needs you).
+    needs_you: needsYouByThread.has(r.id),
   }));
   return res.json({ threads });
 });
