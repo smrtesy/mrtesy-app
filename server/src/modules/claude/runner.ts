@@ -571,6 +571,13 @@ const FLUSH_INTERVAL_MS = 500;
 /** Text is cheap but not free: keep rows bounded, keep media as URLs elsewhere. */
 const MAX_TEXT = 20_000;
 const MAX_PAYLOAD_CHARS = 100_000;
+// A single stdout line longer than this is a giant tool_result (a big file
+// printed, a long build log). Past this we stop accumulating the line: keep a
+// truncated head as a system event, drop the rest to its newline. Prevents both
+// the O(n^2) line-split re-scan and the multi-second JSON.parse + redact on one
+// huge line — the exact synchronous work that blocked the shared event loop and
+// 502'd every concurrent chat load (a 40MB line stalled it ~21s; audit 2026-08-06).
+const MAX_LINE_CHARS = 1_000_000;
 
 type EventKind =
   | "user"
@@ -1113,14 +1120,18 @@ async function executeRunBody(runId: string): Promise<void> {
   // workspace_thread_id carries that directory key durably (it survives the parent's
   // deletion — see the migration), so it is the authority on where turns run.
   let workspaceThreadId: string | null = run.thread_id;
+  // The thread's short human code ("K7") — injected as CLAUDE_THREAD_CODE below so a
+  // session can state its own id when the user asks ("what's your id?").
+  let threadCode: string | null = null;
   if (run.thread_id) {
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
-      .select("session_id, fork_from_session, seed_context, workspace_thread_id")
+      .select("session_id, fork_from_session, seed_context, workspace_thread_id, serial_display")
       .eq("id", run.thread_id)
       .maybeSingle();
     if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
     resumeSession = thread?.session_id ?? null;
+    threadCode = thread?.serial_display ?? null;
     if (thread?.workspace_thread_id) workspaceThreadId = thread.workspace_thread_id;
     // Only when the thread has no session of its own yet — a split child's first
     // turn. Once it has resumed once, it owns a session and these are irrelevant.
@@ -1238,6 +1249,9 @@ async function executeRunBody(runId: string): Promise<void> {
     env.CLAUDE_RUN_ID = run.id;
     env.CLAUDE_ORG_ID = run.org_id;
     if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
+    // The short human code (e.g. "K7") the user hands between sessions to point at
+    // this thread — so the session can answer "what's your id?" without a lookup.
+    if (threadCode) env.CLAUDE_THREAD_CODE = threadCode;
   }
 
   // Supabase migration credentials. Without the access token a run can WRITE a
@@ -1579,11 +1593,34 @@ async function executeRunBody(runId: string): Promise<void> {
     }, timeoutMs);
 
     let stdoutRest = "";
+    // We are inside a single line that blew past MAX_LINE_CHARS and are skipping
+    // the rest of it up to its newline (see the size guard below).
+    let dropLine = false;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
+      // Split incrementally: scan only the freshly-arrived chunk for newlines (a
+      // newline in the old remainder would already have been consumed). The old
+      // `stdoutRest.split("\n")` over the WHOLE buffer every chunk was O(n^2) for
+      // a single huge no-newline line — a 40MB tool_result blocked the shared
+      // event loop ~21s, stalling every concurrent chat load to a 502.
+      const lines: string[] = [];
+      let searchFrom = stdoutRest.length;
       stdoutRest += chunk;
-      const lines = stdoutRest.split("\n");
-      stdoutRest = lines.pop() ?? "";
+      let lineStart = 0;
+      for (;;) {
+        const nl = stdoutRest.indexOf("\n", searchFrom);
+        if (nl === -1) break;
+        const line = stdoutRest.slice(lineStart, nl);
+        lineStart = nl + 1;
+        searchFrom = nl + 1;
+        // The newline that closes the giant line we started dropping — resume normally.
+        if (dropLine) {
+          dropLine = false;
+          continue;
+        }
+        lines.push(line);
+      }
+      if (lineStart > 0) stdoutRest = stdoutRest.slice(lineStart);
       for (const raw of lines) {
         const trimmed = raw.trim();
         if (!trimmed) continue;
@@ -1662,6 +1699,24 @@ async function executeRunBody(runId: string): Promise<void> {
         buffer.push(...mapped);
         if (buffer.length >= FLUSH_EVERY) void flush();
       }
+      // Size guard — runs AFTER the line loop so its truncated-head event gets a
+      // seq that follows any complete lines in the same chunk. A remaining line
+      // with no newline that grew past the cap is a giant tool_result: keep a
+      // truncated head as a system event so the transcript isn't silent, then
+      // drop the rest of that line until its newline (dropLine).
+      if (stdoutRest.length > MAX_LINE_CHARS) {
+        if (!dropLine) {
+          buffer.push({
+            seq: nextSeq(),
+            kind: "system",
+            text: `${truncate(stdoutRest) ?? ""} …[פלט חתוך: שורת פלט חורגת מ-${MAX_LINE_CHARS} תווים]`,
+            tool_name: null,
+            payload: null,
+          });
+        }
+        stdoutRest = "";
+        dropLine = true;
+      }
     });
 
     child.stderr.setEncoding("utf8");
@@ -1694,7 +1749,9 @@ async function executeRunBody(runId: string): Promise<void> {
     running.delete(runId);
     // Whatever tail the holdback still held — the process is done, flush it.
     flushDeltas(true);
-    if (stdoutRest.trim()) {
+    // Skip a tail we were mid-drop on (an oversized final line already recorded
+    // its truncated head via the size guard) — don't re-emit its partial remainder.
+    if (!dropLine && stdoutRest.trim()) {
       buffer.push({
         seq: nextSeq(),
         kind: "system",

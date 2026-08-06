@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
@@ -63,6 +63,13 @@ export function PlanEditDialog({
     cost_approval_threshold_usd: "",
   });
   const [saving, setSaving] = useState(false);
+  // Idempotency key for CREATE. A "Failed to fetch" is a transient Railway blip
+  // (the request never reached the server, or its response was lost) — the create
+  // POST may now be retried safely because it carries this stable token, which the
+  // server dedupes on. It stays fixed while the dialog is open (so a manual
+  // re-click after a blip reuses it) and is minted fresh each time the dialog
+  // opens for a NEW plan, below.
+  const createTokenRef = useRef<string | null>(null);
   // Snapshot of the form as it was loaded, so an edit PATCHes only the fields the
   // user actually touched. Sending the whole record would let a dialog left open
   // for hours write back stale values — e.g. re-writing status 'draft' after
@@ -111,6 +118,9 @@ export function PlanEditDialog({
     setForm(loaded);
     setInitial(loaded);
     setAssignAllTo("");
+    // A fresh idempotency key per opening of the CREATE dialog. Re-clicking "Add"
+    // after a transient failure reuses it (no duplicate); a new plan gets a new one.
+    if (!plan?.id) createTokenRef.current = crypto.randomUUID();
   }, [open, plan]);
 
   // Prefill the daily-minutes commitment when editing an existing plan. When a
@@ -192,7 +202,9 @@ export function PlanEditDialog({
     try {
       if (plan?.id) {
         if (Object.keys(changed).length) {
-          await api(`/api/plans/${plan.id}`, { method: "PATCH", body: changed });
+          // PATCH/assign-all/PUT-focus write ABSOLUTE values (not increments), so
+          // replaying one is a no-op — safe to ride out a transient blip via retry.
+          await api(`/api/plans/${plan.id}`, { method: "PATCH", body: changed, idempotent: true });
         }
         // Single-performer plan: hand every still-open task to that person. Runs
         // before the commitment upsert so the minutes land on someone who now
@@ -201,6 +213,7 @@ export function PlanEditDialog({
           const { assigned } = await api<{ assigned: number }>(`/api/plans/${plan.id}/assign-all`, {
             method: "POST",
             body: { assignee_user_id: assignAllTo },
+            idempotent: true,
           });
           toast.success(te("assignedAll", { n: assigned }));
         }
@@ -219,10 +232,21 @@ export function PlanEditDialog({
               workdays: sorted.length ? sorted : null,
               ...(assignAllTo ? { user_id: assignAllTo } : {}),
             },
+            idempotent: true,
           });
         }
       } else {
-        await api("/api/plans", { method: "POST", body: full });
+        // Create carries a client_token so a retry (or a re-click after a blip)
+        // returns the same plan instead of creating a duplicate — which makes the
+        // POST safe to retry via idempotent:true. Guard the token so idempotent:true
+        // is never sent without one (which would let a retry duplicate).
+        const token = createTokenRef.current ?? crypto.randomUUID();
+        createTokenRef.current = token;
+        await api("/api/plans", {
+          method: "POST",
+          body: { ...full, client_token: token },
+          idempotent: true,
+        });
       }
       onSaved();
       onClose();
