@@ -359,8 +359,17 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
     if (!w?.resets_at || new Date(w.resets_at).getTime() <= nowMs) return null;
     return w;
   };
-  const utilPct = (w: { utilization: number | null }) =>
-    w.utilization != null ? Math.round(Number(w.utilization) * 100) : null;
+  // Anthropic's real percent for a live window. A `status:"rejected"` reading is
+  // the strongest ground truth there is — the CLI's request was BLOCKED because
+  // the window is exhausted, i.e. 100%. Crucially that is exactly the event that
+  // carries NO utilization (the number is absent precisely because we're over the
+  // line), so reading utilization alone would drop the meter back to the cost
+  // estimate at the very moment the account is maxed — the 99%→78% bug. Rank the
+  // rejection first, then the exact utilization when present, else unknown.
+  const realPct = (w: { utilization: number | null; status: string | null }) => {
+    if (w.status === "rejected") return 100;
+    return w.utilization != null ? Math.round(Number(w.utilization) * 100) : null;
+  };
 
   // Session (5-hour): live window wins; else the reconstructed estimate; else null.
   const liveSession = liveWindow("five_hour");
@@ -374,7 +383,7 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
     pct_source: "anthropic" | "estimate";
   } | null = null;
   if (liveSession) {
-    const real = utilPct(liveSession);
+    const real = realPct(liveSession);
     const pct = real ?? (s ? s.pct : 0);
     sessionOut = {
       pct: Math.min(100, pct),
@@ -412,7 +421,7 @@ router.get("/claude/account-usage", async (req: Request, res: Response) => {
   const estWeeklyPct = weeklyCalibrated
     ? Math.min(100, Math.floor((weekCost / weekCap) * 100))
     : null;
-  const weeklyReal = liveWeekly ? utilPct(liveWeekly) : null;
+  const weeklyReal = liveWeekly ? realPct(liveWeekly) : null;
   const weeklyOut = {
     pct: weeklyReal ?? estWeeklyPct,
     cost_used: Math.round(weekCost * 100) / 100,
