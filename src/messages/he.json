@@ -2133,7 +2133,17 @@
     "docsDownload": "הורד ‎.md",
     "docsCreated": "נוצר",
     "docsUpdated": "עודכן",
-    "docsEmpty": "אין מסמכים."
+    "docsEmpty": "אין מסמכים.",
+    "docsTranslate": "תרגם",
+    "docsTranslating": "מתרגם…",
+    "docsRetranslate": "תרגם מחדש",
+    "docsSourceUpdatedRetranslate": "המקור עודכן — תרגם מחדש",
+    "docsTranslationError": "התרגום נכשל — נסה שוב",
+    "docsCopyLink": "העתק קישור לאפליקציה",
+    "docsCopied": "הועתק",
+    "docsLangHe": "עברית",
+    "docsLangEn": "אנגלית",
+    "docsAutoTranslated": "תרגום אוטומטי"
   },
   "adminParameters": {
     "title": "פרמטרי מערכת",

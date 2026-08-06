@@ -2133,7 +2133,17 @@
     "docsDownload": "Download .md",
     "docsCreated": "Created",
     "docsUpdated": "Updated",
-    "docsEmpty": "No documents."
+    "docsEmpty": "No documents.",
+    "docsTranslate": "Translate",
+    "docsTranslating": "Translating…",
+    "docsRetranslate": "Re-translate",
+    "docsSourceUpdatedRetranslate": "Source updated — re-translate",
+    "docsTranslationError": "Translation failed — retry",
+    "docsCopyLink": "Copy in-app link",
+    "docsCopied": "Copied",
+    "docsLangHe": "Hebrew",
+    "docsLangEn": "English",
+    "docsAutoTranslated": "Auto-translated"
   },
   "adminParameters": {
     "title": "System Parameters",
