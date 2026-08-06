@@ -4861,7 +4861,8 @@
     },
     "search": {
       "open": "חיפוש בצ'אטים",
-      "placeholder": "חיפוש לפי כותרת…",
+      "placeholder": "חיפוש בכותרת ובתוכן…",
+      "searching": "מחפש…",
       "noResults": "אין תוצאות"
     },
     "mergeQueue": {

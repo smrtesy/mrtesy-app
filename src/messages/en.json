@@ -4862,7 +4862,8 @@
     },
     "search": {
       "open": "Search chats",
-      "placeholder": "Search by title…",
+      "placeholder": "Search title & content…",
+      "searching": "Searching…",
       "noResults": "No results"
     },
     "mergeQueue": {

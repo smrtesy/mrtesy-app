@@ -327,6 +327,61 @@ router.get("/claude/threads", async (req: Request, res: Response) => {
   return res.json({ threads });
 });
 
+// Rail content search — the list endpoint above carries only titles/previews, so
+// the client can filter the loaded rail by title on its own. To also match the
+// CONVERSATION CONTENT (what was actually said in a thread), this searches the
+// turns: the user's clean prompt (`user_prompt`) and Claude's per-turn summary
+// (`result_summary`). We deliberately skip the composed `prompt` column — it
+// carries the env preamble + standing instructions on every first turn, so a
+// match there would fire on nearly every thread. Returns the set of matching
+// thread ids; the client unions them with its own title filter.
+//
+// MUST stay ABOVE `GET /claude/threads/:id` — otherwise "search" is captured as
+// an :id. Two separate ilike queries (not a single `.or(...)`) so a comma or
+// paren in the query can't break PostgREST's or-filter syntax.
+router.get("/claude/threads/search", async (req: Request, res: Response) => {
+  const raw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  // Too-short queries would match almost everything and cost a full scan; the
+  // client already filters titles locally, so a 1-char content search adds noise.
+  if (raw.length < 2) return res.json({ thread_ids: [] });
+  // Escape LIKE wildcards so the term is matched literally, then wrap it.
+  const pat = `%${raw.replace(/[\\%_]/g, "\\$&")}%`;
+  const orgId = req.org!.id;
+
+  const [byPrompt, bySummary] = await Promise.all([
+    db.from("claude_runs").select("thread_id").eq("org_id", orgId).ilike("user_prompt", pat).limit(1000),
+    db.from("claude_runs").select("thread_id").eq("org_id", orgId).ilike("result_summary", pat).limit(1000),
+  ]);
+  if (byPrompt.error || bySummary.error) {
+    console.error(
+      "[claude/threads/search] failed:",
+      byPrompt.error?.message ?? bySummary.error?.message,
+    );
+    return res.status(500).json({ error: "search failed" });
+  }
+
+  const ids = new Set<string>();
+  for (const r of byPrompt.data ?? []) if (r.thread_id) ids.add(r.thread_id);
+  for (const r of bySummary.data ?? []) if (r.thread_id) ids.add(r.thread_id);
+  if (ids.size === 0) return res.json({ thread_ids: [] });
+
+  // Keep only ids the rail actually shows: existing, non-archived threads. The
+  // list endpoint above loads `is(archived_at, null)`, so returning a match on an
+  // archived thread would give the client an id with no row to render (a silent
+  // miss). Filtering here keeps content search consistent with the visible list.
+  const { data: liveThreads, error: tErr } = await db
+    .from("claude_threads")
+    .select("id")
+    .eq("org_id", orgId)
+    .is("archived_at", null)
+    .in("id", [...ids]);
+  if (tErr) {
+    console.error("[claude/threads/search] thread filter failed:", tErr.message);
+    return res.status(500).json({ error: "search failed" });
+  }
+  return res.json({ thread_ids: (liveThreads ?? []).map((r) => r.id) });
+});
+
 router.post("/claude/threads", async (req: Request, res: Response) => {
   const body = req.body ?? {};
 

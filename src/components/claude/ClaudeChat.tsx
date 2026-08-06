@@ -349,14 +349,49 @@ export function ClaudeChat() {
   const [grouped, setGrouped] = useState(false);
   const [regrouping, setRegrouping] = useState(false);
   /** Rail search — a collapsed magnifier by default (compact-UI convention);
-   *  clicking it reveals an input row that filters the rail by thread title,
-   *  client-side over the already-loaded list. Escape / the X closes and resets. */
+   *  clicking it reveals an input row that filters the rail. Title/preview/serial
+   *  match client-side over the loaded list; conversation CONTENT (what was said
+   *  in the thread) matches server-side via GET /claude/threads/search, whose
+   *  thread ids land in `contentMatchIds`. Escape / the X closes and resets. */
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [contentMatchIds, setContentMatchIds] = useState<Set<string>>(new Set());
+  const [searching, setSearching] = useState(false);
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setQuery("");
+    setContentMatchIds(new Set());
   }, []);
+  // Debounced content search: as the user types, ask the backend which threads
+  // mention the term in their turns, and union those ids into the rail filter.
+  // Debounced so a burst of keystrokes fires one request; a stale response is
+  // dropped by the `active` guard so results always match the latest query.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setContentMatchIds(new Set());
+      setSearching(false);
+      return;
+    }
+    let active = true;
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const { thread_ids } = await api<{ thread_ids: string[] }>(
+          `/api/claude/threads/search?q=${encodeURIComponent(q)}`,
+        );
+        if (active) setContentMatchIds(new Set(thread_ids));
+      } catch {
+        if (active) setContentMatchIds(new Set());
+      } finally {
+        if (active) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
   /** The Claude accounts the console can run on — feeds the header switcher. Loaded
    *  once; empty until then, which hides the switcher rather than showing a guess. */
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -1366,20 +1401,28 @@ export function ClaudeChat() {
               <p className="p-2 text-xs text-muted-foreground">{t("noThreads")}</p>
             ) : (
               (() => {
-                // Rail search: filter the loaded list by title / fallback preview /
-                // task serial. When a query is active the rail flattens (grouping is
-                // ignored) so matches across topics all show together.
+                // Rail search: a thread is visible when it matches the query on
+                // title / fallback preview / task serial (client-side over the
+                // loaded list) OR its conversation content matched server-side
+                // (`contentMatchIds`). When a query is active the rail flattens
+                // (grouping is ignored) so matches across topics all show together.
                 const q = query.trim().toLowerCase();
                 const visible = q
-                  ? threads.filter((x) =>
-                      [x.title, x.preview, x.task_serial]
-                        .some((s) => s?.toLowerCase().includes(q)),
+                  ? threads.filter(
+                      (x) =>
+                        contentMatchIds.has(x.id) ||
+                        [x.title, x.preview, x.task_serial].some((s) =>
+                          s?.toLowerCase().includes(q),
+                        ),
                     )
                   : threads;
                 if (visible.length === 0) {
+                  // While the content request is still in flight, say "searching…"
+                  // rather than "no results" — a title-only miss may still gain
+                  // content matches when the response lands.
                   return (
                     <p className="p-2 text-xs text-muted-foreground">
-                      {q ? t("search.noResults") : t("noThreads")}
+                      {searching ? t("search.searching") : q ? t("search.noResults") : t("noThreads")}
                     </p>
                   );
                 }
