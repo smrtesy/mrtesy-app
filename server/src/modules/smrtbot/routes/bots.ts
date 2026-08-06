@@ -88,6 +88,23 @@ function pickUpdatable(body: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+// Strip every plaintext secret/token from a bot row before it leaves the server.
+// The values live in Supabase Vault (security plan §5.1 / step 3); the client
+// only ever needs the *_secret_id pointers (presence), never the plaintext. This
+// also future-proofs step 3c: once the plaintext columns are blanked they are
+// already absent from every response, so no client relies on them.
+const REDACTED_BOT_FIELDS = [
+  "app_secret",
+  "wa_access_token",
+  "live_wa_access_token",
+  "test_wa_access_token",
+] as const;
+function redactBot<T extends Record<string, unknown>>(row: T): Record<string, unknown> {
+  const safe: Record<string, unknown> = { ...row };
+  for (const f of REDACTED_BOT_FIELDS) delete safe[f];
+  return safe;
+}
+
 // ── List bots the caller can see ─────────────────────────────
 router.get("/bot/bots", async (req: Request, res: Response) => {
   const orgId = req.org!.id;
@@ -110,7 +127,7 @@ router.get("/bot/bots", async (req: Request, res: Response) => {
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ bots: data ?? [] });
+  res.json({ bots: (data ?? []).map(redactBot) });
 });
 
 // ── Create a bot (managers only) ─────────────────────────────
@@ -141,7 +158,7 @@ router.post("/bot/bots", requireRole("owner", "admin"), async (req: Request, res
   }
 
   await emitEvent(req.org!.id, "smrtbot", "bot.created", "bot", data.id, { name: data.name });
-  res.status(201).json({ bot: data });
+  res.status(201).json({ bot: redactBot(data as Record<string, unknown>) });
 });
 
 // ── Get one bot ──────────────────────────────────────────────
@@ -161,10 +178,10 @@ router.get("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: Res
     .select("slug")
     .eq("id", req.org!.id)
     .maybeSingle();
-  // Never ship the legacy plaintext App Secret to the client — it's write-only
-  // now (per-env values live in Vault, exposed only as *_app_secret_id pointers).
-  const { app_secret: _omitAppSecret, ...safe } = data as Record<string, unknown>;
-  res.json({ bot: { ...safe, org_slug: (org?.slug as string | null) ?? null } });
+  // Never ship plaintext secrets/tokens to the client — the App Secret and the
+  // WhatsApp access tokens are write-only now (values in Vault, exposed only as
+  // *_secret_id pointers). redactBot() strips all of them.
+  res.json({ bot: { ...redactBot(data as Record<string, unknown>), org_slug: (org?.slug as string | null) ?? null } });
 });
 
 /** PUT /bot/bots/:botId/app-secret { env: 'live'|'test', value } — store a
@@ -242,7 +259,7 @@ router.patch("/bot/bots/:botId", requireBotAccess(), async (req: Request, res: R
     });
     return res.status(500).json({ error: error.message });
   }
-  res.json({ bot: data });
+  res.json({ bot: redactBot(data as Record<string, unknown>) });
 });
 
 // ── Rotate the public web embed key ──────────────────────────

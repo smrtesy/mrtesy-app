@@ -9,6 +9,7 @@
  * Ported from botsite/src/modules/wa.js.
  */
 import { metaErrorSummary } from "../../lib/meta-errors";
+import { vaultRead } from "../admin/secrets/vault";
 
 // smrtBot bots each run on their OWN Meta app + phone numbers (rl, sholem, …),
 // NOT the smrtTask personal-number DualHook Coexistence connection. The DualHook
@@ -60,8 +61,10 @@ export type BotEnv = "test" | "live";
 export interface BotCreds {
   test_wa_phone_number_id?: string | null;
   test_wa_access_token?: string | null;
+  test_wa_access_token_secret_id?: string | null;
   live_wa_phone_number_id?: string | null;
   live_wa_access_token?: string | null;
+  live_wa_access_token_secret_id?: string | null;
   wa_phone_number_id?: string | null;
   wa_access_token?: string | null;
 }
@@ -72,18 +75,65 @@ export interface ResolvedCreds {
 }
 
 /** Resolve the phone_number_id + access_token for a bot in a given env,
- *  falling back to the legacy single-env credentials. */
-export function resolveCreds(bot: BotCreds, env: BotEnv): ResolvedCreds | null {
+ *  falling back to the legacy single-env credentials.
+ *
+ *  Vault-first (security plan §5.1 / step 3b): the access token is read from
+ *  Supabase Vault by its secret id; the still-synced plaintext column is only a
+ *  fallback until step 3c blanks it (and a fail-safe if a Vault read errors).
+ *  This is async because the Vault read is an RPC — every caller must `await`. */
+export async function resolveCreds(bot: BotCreds, env: BotEnv): Promise<ResolvedCreds | null> {
   const phoneNumberId =
     (env === "live" ? bot.live_wa_phone_number_id : bot.test_wa_phone_number_id) ||
     bot.wa_phone_number_id ||
     null;
-  const accessToken =
-    (env === "live" ? bot.live_wa_access_token : bot.test_wa_access_token) ||
-    bot.wa_access_token ||
-    null;
+
+  const secretId =
+    env === "live" ? bot.live_wa_access_token_secret_id : bot.test_wa_access_token_secret_id;
+  let accessToken: string | null = null;
+  if (secretId) {
+    try {
+      accessToken = await vaultRead(secretId);
+    } catch (err) {
+      console.error(
+        `[smrtbot] vault read failed for ${env} wa token (${secretId}); falling back to plaintext:`,
+        err,
+      );
+    }
+  }
+  if (!accessToken) {
+    accessToken =
+      (env === "live" ? bot.live_wa_access_token : bot.test_wa_access_token) ||
+      bot.wa_access_token ||
+      null;
+  }
+
   if (!phoneNumberId || !accessToken) return null;
   return { phoneNumberId, accessToken };
+}
+
+/** Read-only health probe of a bot's credentials against Meta, WITHOUT sending a
+ *  message: a GET on the phone-number node using the EXACT same direct-to-Meta
+ *  base + bearer as send(). Returns ok=false with Meta's HTTP status + body when
+ *  the token/number is rejected (expired/revoked token, disabled number, …) —
+ *  the same 401/403 a real send would hit — so the daily cron can raise ONE
+ *  notification before users find a dead bot. A network blip carries no HTTP
+ *  status, so it returns status 0; the caller treats that as transient and does
+ *  not alert. Zero cost (no message sent). */
+export async function checkNumberHealth(
+  creds: ResolvedCreds,
+): Promise<{ ok: true } | { ok: false; status: number; detail: string }> {
+  const url =
+    `${META_DIRECT_BASE}/${META_API_VERSION}/${creds.phoneNumberId}` +
+    `?fields=display_phone_number,quality_rating`;
+  let resp: Response;
+  try {
+    resp = await fetch(url, { headers: { Authorization: `Bearer ${creds.accessToken}` } });
+  } catch (e) {
+    return { ok: false, status: 0, detail: e instanceof Error ? e.message : String(e) };
+  }
+  if (resp.ok) return { ok: true };
+  const detail = await resp.text().catch(() => "");
+  return { ok: false, status: resp.status, detail };
 }
 
 /** A Meta message template, flattened for the smrtReach picker. */

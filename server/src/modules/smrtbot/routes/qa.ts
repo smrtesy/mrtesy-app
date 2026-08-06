@@ -13,7 +13,7 @@ import { resolveCreds, sendText, type BotCreds } from "../wa";
 const router = Router();
 
 const BOT_SELECT =
-  "wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, test_wa_phone_number_id, test_wa_access_token";
+  "wa_phone_number_id, wa_access_token, live_wa_phone_number_id, live_wa_access_token, live_wa_access_token_secret_id, test_wa_phone_number_id, test_wa_access_token, test_wa_access_token_secret_id";
 
 // Send the (admin) reply to the asker over WhatsApp, mark the question answered.
 router.post("/bot/:botId/questions/:id/reply", requireBotAccess("botId"), async (req: Request, res: Response) => {
@@ -33,7 +33,7 @@ router.post("/bot/:botId/questions/:id/reply", requireBotAccess("botId"), async 
   if (!q.phone) return res.status(400).json({ error: "question has no phone" });
 
   const { data: bot } = await db.from("smrtbot_bots").select(BOT_SELECT).eq("id", botId).maybeSingle();
-  const creds = bot ? resolveCreds(bot as BotCreds, "live") : null;
+  const creds = bot ? await resolveCreds(bot as BotCreds, "live") : null;
   if (!creds) return res.status(400).json({ error: "bot has no live WhatsApp credentials" });
 
   try {

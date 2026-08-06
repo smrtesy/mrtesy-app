@@ -165,6 +165,12 @@ interface Thread {
   /** The smrtTask serial (e.g. "T1699") of the task this thread was opened for,
    *  when it came from the corrections flow. Null for ordinary chats. */
   task_serial?: string | null;
+  /** Global running number of the thread (1-based). The rail shows this bare
+   *  number; clicking it copies serial_display. */
+  serial?: number | null;
+  /** Short human code, e.g. "K7" — what the user hands to another session to point
+   *  at this thread. The bare number is shown; this full form is copied on click. */
+  serial_display?: string | null;
   /** True when the thread has a run executing/queued right now — the rail's live
    *  (pulsing amber/brown) status dot. Set by GET /claude/threads. */
   live?: boolean;
@@ -2068,6 +2074,37 @@ function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTran
   return <span className={cn("size-2 shrink-0 rounded-full", ind.cls)} title={title} aria-label={ind.label} />;
 }
 
+/** The rail's per-thread code chip: shows the BARE number (e.g. "7"); a click
+ *  copies the canonical "K7" to the clipboard (so it can be handed to another
+ *  session) and briefly flips to a green ✓. stopPropagation so the click copies
+ *  rather than opening the thread. */
+function ThreadCodeBadge({ thread }: { thread: Thread }) {
+  const [copied, setCopied] = useState(false);
+  const code = (thread.serial_display ?? "").trim();
+  const num = thread.serial;
+  if (!code || num == null) return null;
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard?.writeText(code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`העתק ${code}`}
+      aria-label={`העתק מזהה ${code}`}
+      className={cn(
+        "shrink-0 rounded px-1 font-mono text-[10px] leading-none tabular-nums transition-colors",
+        copied ? "text-status-ok" : "text-muted-foreground/50 hover:text-foreground",
+      )}
+    >
+      {copied ? "✓" : num}
+    </button>
+  );
+}
+
 /** One row in the thread rail — status dot, title (RTL, ≤2 lines), a faint "handled"
  *  check that turns green, and the hover trash. */
 function ThreadRow({
@@ -2095,6 +2132,7 @@ function ThreadRow({
       )}
     >
       <ThreadDot thread={thread} t={t} />
+      <ThreadCodeBadge thread={thread} />
       {/* dir="rtl" (not "auto"): the title reads right-to-left even when it starts
           with a Latin serial like "T1699", because the rest is Hebrew. */}
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 line-clamp-2 break-words text-start text-xs" dir="rtl">
