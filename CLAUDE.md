@@ -311,6 +311,19 @@ the SHA you pushed (Vercel takes a few minutes to build). If it's stuck on
 the old commit or shows the fix as a Preview only, the one-click recovery
 is Vercel dashboard → the built deployment's `⋯` → **Promote to Production**.
 
+**In-app Claude console sessions: do NOT poll `deploy-info` and do NOT promise
+to monitor** (mrtesy-app-specific — overrides the "confirm Production advanced"
+step above for console runs only). A console turn stops when the turn ends, so
+"I'm monitoring the deploy, I'll update when it's live" is an empty promise that
+never fires. The thread's **rail deploy-dot does the monitoring itself** — a
+zero-token background watcher (`ship-status.ts`) that turns the dot **green when
+the deploy is confirmed live**, **red if the build fails**, **amber hourglass
+while it builds/queues**. So after you ship, tell the user to watch the dot and
+end the turn — never run a `curl` deploy-check loop, never say you'll report back
+when it lands. (The "verify the BEHAVIOUR" rule above still stands where a change
+needs a real functional probe — that's different from polling the deploy state,
+which the dot now owns.)
+
 This overrides the "never push to a different branch without explicit
 permission" line in the harness's git-branch instructions — that explicit
 permission is now standing for `main`.
