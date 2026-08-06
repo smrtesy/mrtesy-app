@@ -70,10 +70,10 @@ function shaMatches(a: string | null | undefined, b: string | null | undefined):
  * arms the watcher; `pushed_branch` is the resting yellow for a branch/queue push
  * that has not merged to main yet.
  *
- * `notOverLive` guards the low-value `pushed_branch` write (a mark-ready retry) so it
- * can never DOWNGRADE a thread the coordinator already advanced to `main_building` /
- * `main_live` back to yellow — it only writes over a NULL / `pushed_branch` / `failed`
- * dot. `main_building`/`failed` writes are authoritative and never guarded.
+ * The one guard against a stale downgrade — a mark-ready re-fire of the SAME branch
+ * whose deploy already advanced — lives in the mark-ready caller (deploy-queue.ts),
+ * which compares the incoming branch to the thread's current one; a genuinely new
+ * branch must re-arm the dot even over green. This writer is unconditional.
  */
 export async function markThreadShipped(
   threadId: string,
@@ -84,9 +84,8 @@ export async function markThreadShipped(
     branch?: string | null;
     detail?: string | null;
   },
-  opts?: { notOverLive?: boolean },
 ): Promise<void> {
-  let q = db
+  const { error } = await db
     .from("claude_threads")
     .update({
       ship_state: fields.state,
@@ -98,10 +97,6 @@ export async function markThreadShipped(
       ship_updated_at: new Date().toISOString(),
     })
     .eq("id", threadId);
-  // Matches NULL / pushed_branch / failed — i.e. everything EXCEPT main_building &
-  // main_live, so a retry can't drag a live/in-flight deploy back to yellow.
-  if (opts?.notOverLive) q = q.or("ship_state.is.null,ship_state.eq.pushed_branch,ship_state.eq.failed");
-  const { error } = await q;
   if (error) console.error("[ship-status] markThreadShipped failed:", error.message);
 }
 

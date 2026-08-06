@@ -164,11 +164,24 @@ router.post("/claude-deploy/mark-ready", async (req: Request, res: Response) => 
     console.error("[claude-deploy] mark-ready failed:", error.message);
     return res.status(500).json({ error: "write failed" });
   }
-  // Resting yellow dot on the thread: pushed a branch, waiting for the coordinator
-  // to batch-merge it to main. The coordinator overwrites this to 'main_building'
-  // once it actually merges + pushes. `notOverLive` so a retried mark-ready can't drag
-  // an already-merged thread's green/building dot back to yellow. Best-effort.
-  await markThreadShipped(threadId, { state: "pushed_branch", branch }, { notOverLive: true });
+  // Re-arm the thread's rail dot to the yellow "pushed a branch, waiting to merge"
+  // state. SKIP only a stale re-fire of the SAME branch whose deploy the coordinator
+  // already advanced (main_building/main_live) — dragging that back to yellow would
+  // hide a live/building deploy. But a DIFFERENT branch is a genuinely NEW ship and
+  // MUST re-arm even over a previous green, otherwise a second ship from the same chat
+  // leaves the dot stuck green while a new build is actually pending (the "green button
+  // but inside it's waiting for the build" bug). Best-effort — the deploy doesn't hinge
+  // on the dot.
+  const { data: shipRow } = await db
+    .from("claude_threads")
+    .select("ship_state, ship_branch")
+    .eq("id", threadId)
+    .maybeSingle();
+  const advanced = shipRow?.ship_state === "main_building" || shipRow?.ship_state === "main_live";
+  const sameBranch = (shipRow?.ship_branch ?? null) === branch;
+  if (!(advanced && sameBranch)) {
+    await markThreadShipped(threadId, { state: "pushed_branch", branch });
+  }
   return res.json({ ok: true, state: "ready" });
 });
 
