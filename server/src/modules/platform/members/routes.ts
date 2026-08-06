@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../../../db";
 import {
   requireAuth, requireOrg, requireRole, denyDeveloper,
-  canManageRank, canAssignRank, invalidateOrgContext, type Role,
+  canManageRank, canAssignRank, canImpersonate, invalidateOrgContext, type Role,
 } from "../../../middleware";
 import { sendInviteEmail } from "../../../lib/email";
 import { invalidatePermissions } from "../../../lib/permissions/resolve";
@@ -319,16 +319,22 @@ router.post("/org/members/:userId/preview-link",
       .from("org_members").select("user_id, role")
       .eq("org_id", req.org!.id).eq("user_id", userId).maybeSingle();
     if (!m) return res.status(404).json({ error: "member not found" });
-    // SECURITY: preview mints a REAL session as the target. Restrict it to
-    // regular members (the feature's purpose — previewing a worker's view). Minting
-    // as an owner/admin would let an admin escalate to owner within the org; minting
-    // as a super-admin would grant platform-wide admin (super_admins keys off the
-    // user_id the session belongs to). Both are blocked here.
-    if (m.role !== "member") {
-      return res.status(403).json({ error: "preview is only available for regular members" });
+    // SECURITY: preview mints a REAL session as the target. §7 step 8 replaces
+    // the flat "members only" rule with a rank hierarchy (canImpersonate): an
+    // owner may preview anyone in the org, an admin only members strictly below
+    // them (never another admin — that would leak a peer's org-management view —
+    // nor an owner, which would be escalation). A member may preview no one.
+    if (!canImpersonate(req.member!.role, m.role as Role)) {
+      return res.status(403).json({ error: "cannot preview as this member" });
     }
-    const { data: sa } = await db
+    // Independent of rank: minting as a super-admin would grant platform-wide
+    // admin (super_admins keys off the session's user_id), so block it as a
+    // target even for an owner. This is the anti-escalation guard rank can't
+    // express — so it must FAIL CLOSED: a query error means we can't prove the
+    // target isn't a super-admin, and must refuse rather than mint the session.
+    const { data: sa, error: saErr } = await db
       .from("super_admins").select("user_id").eq("user_id", userId).maybeSingle();
+    if (saErr) return res.status(500).json({ error: "could not verify member" });
     if (sa) return res.status(403).json({ error: "preview is not available for this member" });
 
     const expires_at = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutes
@@ -343,6 +349,17 @@ router.post("/org/members/:userId/preview-link",
       .select("token")
       .single();
     if (error || !tok) return res.status(500).json({ error: error?.message ?? "failed to create preview token" });
+
+    // §7 step 8: mandatory audit — one append-only row per minted impersonation.
+    const { error: logErr } = await db.from("impersonation_log").insert({
+      actor_user_id: req.user!.id,
+      target_user_id: userId,
+      org_id: req.org!.id,
+      via: "owner_admin",
+      ip: (req.headers["x-forwarded-for"] as string | undefined) ?? req.ip ?? null,
+      token: tok.token,
+    });
+    if (logErr) console.error("[org/members] impersonation_log write failed:", logErr.message);
 
     // FRONTEND_URL may be a comma-separated CORS list — the first entry is the
     // canonical app origin, which is where the /api/preview route lives.
