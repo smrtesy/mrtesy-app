@@ -4803,6 +4803,8 @@
     "loadingThread": "Loading conversation…",
     "loadError": "Couldn't load the conversation",
     "retry": "Try again",
+    "showEarlier": "Show {count} earlier messages",
+    "turnRenderError": "This message could not be displayed",
     "threadGone": "This conversation no longer exists",
     "thinking": "Thinking…",
     "live": {

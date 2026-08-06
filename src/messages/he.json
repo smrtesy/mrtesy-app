@@ -4802,6 +4802,8 @@
     "loadingThread": "טוען שיחה…",
     "loadError": "לא הצלחנו לטעון את השיחה",
     "retry": "נסה שוב",
+    "showEarlier": "הצג {count} הודעות קודמות",
+    "turnRenderError": "לא ניתן להציג הודעה זו",
     "threadGone": "השיחה כבר לא קיימת",
     "thinking": "חושב…",
     "live": {
