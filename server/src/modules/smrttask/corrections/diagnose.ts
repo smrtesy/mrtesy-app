@@ -128,7 +128,11 @@ export async function createDiagnosisRun(
         prompt: composed.prompt,
         user_prompt: message,
         repo: AUTOFIX_REPO,
-        // Automated read-only run — second subscription account, like triage.
+        // Automated read-only run — the background `automation` account, like triage.
+        // executeRun lets that account BORROW a healthy account's token when it is
+        // over its weekly limit (see effectiveAccount there), so the run still lands
+        // even during an automation-account outage; the row stays tagged "automation"
+        // so it keeps its no-phone-ping treatment.
         claude_account: AUTOMATION_ACCOUNT,
         status: "queued",
       })
