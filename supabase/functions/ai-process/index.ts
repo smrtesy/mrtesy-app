@@ -1205,7 +1205,14 @@ async function appendUpdateToTask(
     // Never convert a recurring occurrence into a follow-up snooze — recurrence
     // has its own materialise/advance lifecycle in reminders-check.
     && !existing?.recurrence_rule
-    && !existing?.recurrence_parent_id;
+    && !existing?.recurrence_parent_id
+    // A cross-source/cross-matter LINK (linkAndEnrichDuplicate) sets confirmOnly
+    // because it matched by thread/contact, not by matter — the linked message
+    // may be about a DIFFERENT open item on the same WhatsApp chat than the one
+    // this tracker follows (T1824: an unrelated reply reset a stale tracker's
+    // 48h clock to the new message's date). Mirrors the same guard already on
+    // the auto-dismiss branch below (`!opts?.confirmOnly`).
+    && !opts?.confirmOnly;
 
   // reopen wins over a stale completion flag: the thread resumed with a new
   // actionable turn on the SAME matter, so pull the task back to active and
