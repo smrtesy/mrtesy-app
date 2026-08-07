@@ -4777,10 +4777,12 @@
       "failed": "התור האחרון נכשל",
       "idle": "עדיין לא רצה",
       "waitUsage": "ממתין לחלון הטוקנים",
+      "waitDeploy": "השרת מתעדכן — ההודעה תתחיל כשיחזור",
       "waitMerge": "ממתין למיזוג ל-main",
       "needsApproval": "ממתין לך: אישור מיגרציה",
       "needsConflict": "ממתין לך: קונפליקט מיזוג לפתור",
       "needsAnswer": "ממתין לך: שאלה שלא ענית",
+      "conflictResolving": "קונפליקט מיזוג — נפתר אוטומטית",
       "shipLive": "עלה ל-main ונפרס בפרודקשן ✓",
       "shipFailed": "נדחף ל-main אך הבנייה נכשלה",
       "shipBuilding": "נדחף ל-main — הבנייה רצה",
@@ -4885,11 +4887,13 @@
       "error": "נכשל",
       "unknown": "לא ידוע"
     },
-    "group": {
-      "toggle": "קבץ לפי נושא",
-      "now": "אגד עכשיו",
-      "done": "האיגוד עודכן",
-      "none": "ללא נושא"
+    "stateGroup": {
+      "needsYou": "מחכה לך",
+      "working": "בעבודה עכשיו",
+      "problem": "בעיות",
+      "shipped": "נדחף",
+      "quiet": "שקט",
+      "handled": "טופל"
     },
     "search": {
       "open": "חיפוש בצ'אטים",
@@ -4904,7 +4908,8 @@
       "countdown": "עוד ~{mins} דק׳",
       "soon": "מיד",
       "failed": "המיזוג נכשל",
-      "conflict": "התנגשות מיזוג"
+      "conflict": "התנגשות מיזוג",
+      "conflictResolving": "התנגשות — הסשן פותר ומשלח מחדש"
     },
     "usage": {
       "tokens": "טוקנים",
