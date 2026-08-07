@@ -2080,6 +2080,34 @@ function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTran
   return <span className={cn("size-2 shrink-0 rounded-full", ind.cls)} title={title} aria-label={ind.label} />;
 }
 
+/**
+ * The glyph for a מחסן רעיונות (idea) row — a thin-stroke Lightbulb (same line family
+ * as the Hourglass), colored by the idea's only three meaningful states:
+ *   תכלת (sky)   — awaiting your answer
+ *   כתום (orange) — a turn is running now
+ *   אפור (grey)  — at rest, you've answered the questions
+ * Idea threads have no ship/merge/usage state to sort by, so they never use ThreadDot.
+ */
+function IdeaLamp({ thread, t }: { thread: Thread; t: ReturnType<typeof useTranslations> }) {
+  let cls: string;
+  let label: string;
+  if (thread.awaiting_reply) {
+    cls = "text-sky-400";
+    label = t("idea.lamp.needsAnswer");
+  } else if (thread.live) {
+    cls = "text-orange-500";
+    label = t("idea.lamp.working");
+  } else {
+    cls = "text-muted-foreground/50";
+    label = t("idea.lamp.rest");
+  }
+  return (
+    <span className="flex shrink-0" title={label} aria-label={label}>
+      <Lightbulb className={cn("size-3", cls)} />
+    </span>
+  );
+}
+
 /** The rail's per-thread code chip: shows the BARE number (e.g. "7"); a click
  *  copies the canonical "K7" to the clipboard (so it can be handed to another
  *  session) and briefly flips to a green ✓. stopPropagation so the click copies
@@ -2137,7 +2165,7 @@ function ThreadRow({
         handled && "opacity-50",
       )}
     >
-      <ThreadDot thread={thread} t={t} />
+      {thread.kind === "idea" ? <IdeaLamp thread={thread} t={t} /> : <ThreadDot thread={thread} t={t} />}
       <ThreadCodeBadge thread={thread} />
       {/* dir="rtl" (not "auto"): the title reads right-to-left even when it starts
           with a Latin serial like "T1699", because the rest is Hebrew. */}
@@ -2248,17 +2276,18 @@ function renderStateGroupedRail(
 
   const groups: ReactNode[] = [];
 
-  // The idea warehouse sits at the top of the rail — a standing place the user
-  // returns to, distinct from the state-driven buckets below it.
-  if (ideas.length > 0) {
+  for (const cat of RAIL_CATEGORY_ORDER) {
+    const rows = buckets.get(cat);
+    if (!rows || rows.length === 0) continue;
+    if (cat === "merge") {
+      // The deploy queue keeps its own heading + per-row countdown/reason.
+      groups.push(<DeployQueueGroup key="merge" threads={rows} activeId={activeId} onOpen={setActiveId} t={t} />);
+      continue;
+    }
     groups.push(
-      <div key="__ideas">
-        <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-          <Lightbulb className="size-3" />
-          <span>{t("idea.group")}</span>
-          <span className="tabular-nums opacity-60">{ideas.length}</span>
-        </p>
-        {ideas.map((r) => (
+      <div key={cat}>
+        <RailGroupHeading label={t(`stateGroup.${cat}`)} count={rows.length} />
+        {rows.map((r) => (
           <ThreadRow
             key={r.id}
             thread={r}
@@ -2272,18 +2301,20 @@ function renderStateGroupedRail(
       </div>,
     );
   }
-  for (const cat of RAIL_CATEGORY_ORDER) {
-    const rows = buckets.get(cat);
-    if (!rows || rows.length === 0) continue;
-    if (cat === "merge") {
-      // The deploy queue keeps its own heading + per-row countdown/reason.
-      groups.push(<DeployQueueGroup key="merge" threads={rows} activeId={activeId} onOpen={setActiveId} t={t} />);
-      continue;
-    }
+
+  // מחסן רעיונות sits BELOW the state buckets ("שקט" is the last of them) and just
+  // ABOVE the collapsed "handled" bucket — a standing parking place the user returns
+  // to, kept out of the state-driven flow above it. Each row carries its own lamp
+  // glyph (IdeaLamp) rather than the ship/merge dot.
+  if (ideas.length > 0) {
     groups.push(
-      <div key={cat}>
-        <RailGroupHeading label={t(`stateGroup.${cat}`)} count={rows.length} />
-        {rows.map((r) => (
+      <div key="__ideas">
+        <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          <Lightbulb className="size-3" />
+          <span>{t("idea.group")}</span>
+          <span className="tabular-nums opacity-60">{ideas.length}</span>
+        </p>
+        {ideas.map((r) => (
           <ThreadRow
             key={r.id}
             thread={r}

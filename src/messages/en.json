@@ -4773,7 +4773,12 @@
       "newChat": "New idea — idea warehouse",
       "group": "Idea warehouse",
       "sendToNormal": "Send to a full chat",
-      "seedIntro": "Here's an idea I captured in the idea warehouse and want to take forward into development:"
+      "seedIntro": "Here's an idea I captured in the idea warehouse and want to take forward into development:",
+      "lamp": {
+        "rest": "Idea — you answered the questions",
+        "needsAnswer": "Idea — waiting on your answer",
+        "working": "Idea — working now"
+      }
     },
     "rename": "Rename",
     "delete": "Delete",
