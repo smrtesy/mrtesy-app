@@ -4883,11 +4883,13 @@
       "error": "נכשל",
       "unknown": "לא ידוע"
     },
-    "group": {
-      "toggle": "קבץ לפי נושא",
-      "now": "אגד עכשיו",
-      "done": "האיגוד עודכן",
-      "none": "ללא נושא"
+    "stateGroup": {
+      "needsYou": "מחכה לך",
+      "working": "בעבודה עכשיו",
+      "problem": "בעיות",
+      "shipped": "נדחף",
+      "quiet": "שקט",
+      "handled": "טופל"
     },
     "search": {
       "open": "חיפוש בצ'אטים",
