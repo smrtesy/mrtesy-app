@@ -27,6 +27,15 @@ const PROVIDER_REFRESH_MS = 5 * 60_000; // external APIs — don't hit them ever
 const RETENTION_DAYS = 14;
 const PRUNE_EVERY = 120; // ~once an hour at 30s cadence
 
+// Choke alert: an event-loop p99 above this (ms) in a 30s window means the
+// process was blocked long enough to time requests out — i.e. a 502 window.
+// When it crosses, write ONE level='error' log_entries row (category
+// 'server_choke', user_id null — a system alert like db_health), which the
+// daily health-check report surfaces the next morning. Cooldown so a sustained
+// choke logs once, not every 30s.
+const CHOKE_LAG_MS = Number(process.env.HEALTH_CHOKE_LAG_MS) || 500;
+const ALERT_COOLDOWN_MS = Number(process.env.HEALTH_CHOKE_COOLDOWN_MS) || 15 * 60_000;
+
 let started = false;
 
 type ProviderState = string | null;
@@ -50,6 +59,7 @@ export function startHealthSampler(): void {
 
   let providers: ProviderStates = { vercel: null, railway: null, supabase: null };
   let lastProviderRefresh = 0;
+  let lastAlertAt = 0;
   let ticks = 0;
 
   const refreshProviders = async () => {
@@ -80,11 +90,13 @@ export function startHealthSampler(): void {
       }
 
       const rssMb = process.memoryUsage().rss / 1_048_576;
+      const runs = activeRunCount();
+      const lagP99 = Math.round(p99 * 100) / 100;
 
       const { error } = await db.from("server_health_samples").insert({
         loop_lag_p50_ms: Math.round(p50 * 100) / 100,
-        loop_lag_p99_ms: Math.round(p99 * 100) / 100,
-        active_runs: activeRunCount(),
+        loop_lag_p99_ms: lagP99,
+        active_runs: runs,
         rss_mb: Math.round(rssMb * 10) / 10,
         uptime_s: Math.floor(process.uptime()),
         replica_id: process.env.RAILWAY_REPLICA_ID ?? null,
@@ -93,6 +105,25 @@ export function startHealthSampler(): void {
         supabase_state: providers.supabase,
       });
       if (error) console.error("[health-sampler] insert failed:", error.message);
+
+      // Choke alert — a p99 above the threshold means requests were being timed
+      // out (a 502 window). One system error row per cooldown, surfaced by the
+      // daily health-check report. Mirrors the db_health watchdog (user_id null).
+      if (lagP99 > CHOKE_LAG_MS && now - lastAlertAt >= ALERT_COOLDOWN_MS) {
+        lastAlertAt = now;
+        const { error: alertErr } = await db.from("log_entries").insert({
+          level: "error",
+          category: "server_choke",
+          status: "failed",
+          source_type: "server",
+          error_message:
+            `שרת נחנק: השהיית event-loop p99 ${lagP99}ms (מעל ${CHOKE_LAG_MS}ms) — ` +
+            `חלון 502 סביר; ${runs} ריצות-קונסולה פעילות. RSS ${Math.round(rssMb)}MB.`,
+          details: { loop_lag_p99_ms: lagP99, active_runs: runs, rss_mb: Math.round(rssMb), threshold_ms: CHOKE_LAG_MS },
+        });
+        if (alertErr) console.error("[health-sampler] choke alert insert failed:", alertErr.message);
+        else console.warn(`[health-sampler] CHOKE p99=${lagP99}ms runs=${runs} — logged server_choke`);
+      }
 
       if (++ticks % PRUNE_EVERY === 0) {
         const cutoff = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString();
