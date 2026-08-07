@@ -2569,19 +2569,28 @@ async function findDuplicateOpenTask(
 
 // When a follow-up document is linked to an existing task, the follow-up may
 // CHANGE a material fact of the matter (a hearing that flips phone→in-person, a
-// moved date/time, a new deadline or amount). The plain cross-source link only
-// records "same matter" — it never tells the user WHAT changed, so a critical
-// change (show up in person instead of by phone) stays buried. This diffs the
-// existing task against the new document and returns the material changes plus
-// any concrete event date/place the follow-up supplies, so the caller can raise
-// a prominent alert and backfill the schedule. Best-effort: any failure → null.
-const MATERIAL_CHANGE_PROMPT = `You compare an EXISTING task against a NEW document about the SAME matter and report only MATERIAL changes.
+// moved date/time, a new deadline or amount) OR simply ANSWER something the
+// task was waiting on (a reply to a question, a confirmation/denial, a new
+// substantive fact). The plain cross-source link only records "same matter" —
+// it never tells the user WHAT the follow-up actually said, so both a critical
+// change and a plain answer stay buried in the timeline while the task's
+// description/suggestion never reflects them (this is deliberate for the
+// TITLE/summary fields — see the T1804 note on linkAndEnrichDuplicate below —
+// but there is no such identity risk in surfacing an alert line, since it only
+// ever prepends to the existing description and never replaces title/contact).
+// This diffs the existing task against the new document and returns both kinds
+// of update plus any concrete event date/place the follow-up supplies, so the
+// caller can raise a prominent alert and backfill the schedule. Best-effort:
+// any failure → null.
+const MATERIAL_CHANGE_PROMPT = `You compare an EXISTING task against a NEW document about the SAME matter and report any UPDATE the user needs to see.
 
-Return ONLY JSON: {"due_date": "YYYY-MM-DD"|null, "location": string|null, "changes": [{"he": "..."}]}.
+Return ONLY JSON: {"due_date": "YYYY-MM-DD"|null, "location": string|null, "changes": [{"he": "...", "kind": "change"|"answer"}]}.
 
-A MATERIAL change = the NEW document changes any of these versus what the existing task states: hearing/meeting MODALITY (phone / in-person / video), DATE, TIME, LOCATION or ADDRESS, DEADLINE, AMOUNT, or eligibility/aid/status.
-- Only report a change when the NEW document clearly contradicts or supersedes the existing task. If nothing material changed, return "changes": [].
-- Each "he" is a SHORT Hebrew alert in the format: "מה השתנה: היה A ← עכשיו B" (e.g. "אופן הדיון: היה טלפוני ← עכשיו פיזי ב-5 Beaver Street"). Preserve place names, addresses, amounts and any URLs VERBATIM.
+Report an update when the NEW document does either of these relative to the existing task:
+1. kind "change" — changes a concrete fact: hearing/meeting MODALITY (phone / in-person / video), DATE, TIME, LOCATION or ADDRESS, DEADLINE, AMOUNT, or eligibility/aid/status.
+2. kind "answer" — answers a question the existing task's description was waiting on, confirms/denies something it requested, or supplies a substantive new fact or decision relevant to resolving it.
+- Only report an update when the NEW document is clearly relevant to the existing task's matter — restating the same ask with nothing new is not an update. If nothing qualifies, return "changes": [].
+- Each "he" is a SHORT Hebrew line. For kind "change" use the format "מה השתנה: היה A ← עכשיו B" (e.g. "אופן הדיון: היה טלפוני ← עכשיו פיזי ב-5 Beaver Street"). For kind "answer" write a short Hebrew summary of what was said. Preserve place names, addresses, amounts and any URLs VERBATIM in both cases.
 - "due_date" = the event/deadline date stated in the NEW document as YYYY-MM-DD, else null. "location" = the place/address stated in the NEW document, else null.`;
 
 async function detectMaterialChanges(
@@ -2590,7 +2599,7 @@ async function detectMaterialChanges(
   sys: SystemParams,
   userId: string,
   refId: string,
-): Promise<{ due_date: string | null; location: string | null; changes: string[] } | null> {
+): Promise<{ due_date: string | null; location: string | null; changes: { he: string; kind: "change" | "answer" }[] } | null> {
   try {
     const userMessage =
       `EXISTING TASK:\nTitle: ${existing.title_he || "—"}\nDescription: ${String(existing.description || "—").slice(0, 1200)}\nCurrent due_date: ${existing.due_date || "—"}\n\n` +
@@ -2601,7 +2610,10 @@ async function detectMaterialChanges(
     if (!m) return null;
     const p = JSON.parse(m[0]);
     const changes = Array.isArray(p.changes)
-      ? p.changes.filter((c: any) => c && typeof c.he === "string" && c.he.trim()).map((c: any) => c.he.trim()).slice(0, 5)
+      ? p.changes
+          .filter((c: any) => c && typeof c.he === "string" && c.he.trim())
+          .map((c: any) => ({ he: c.he.trim(), kind: c.kind === "answer" ? "answer" as const : "change" as const }))
+          .slice(0, 5)
       : [];
     return {
       due_date: typeof p.due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.due_date) ? p.due_date : null,
@@ -2630,7 +2642,7 @@ async function linkAndEnrichDuplicate(
   // Was this exact message already linked here on a prior run? appendUpdateToTask
   // dedups the TIMELINE entry, but the material-change/alert block below is not
   // idempotent on its own — capture this BEFORE the append so a re-processed
-  // message can't re-prepend the ⚠️ alert to the description on every re-scan.
+  // message can't re-prepend the alert block to the description on every re-scan.
   const { data: pre } = await supabase.from("tasks").select("updates").eq("id", taskId).maybeSingle();
   const alreadyLinked = Array.isArray(pre?.updates) && (pre!.updates as any[]).some(
     (u) => u?.source_message_id === msg.id && typeof u?.source_received_at === "string" && u.source_received_at === msg.received_at,
@@ -2695,18 +2707,22 @@ async function linkAndEnrichDuplicate(
       // fill it, so "add to calendar" works and the matter stops reading
       // "waiting for a date" when the date has in fact arrived.
       if (diff.due_date && !t.due_date) patch.due_date = diff.due_date;
-      // A material change (e.g. a hearing that flipped phone→in-person) must be
-      // SEEN, not buried in the timeline: prepend a ⚠️ alert to the description
-      // (never dropping the prior content) and flag the task as unread. That's
-      // the whole surfacing mechanism — the change rides on the TASK itself.
-      // We deliberately do NOT emit a separate `notifications` warning here:
-      // an update is not a standalone alert. An OPEN task simply updates (the
-      // ⚠️ block + has_unread_update makes it read as unread); a CLOSED task is
-      // reopened by the caller (opts.reopen → appendUpdateToTask resurfaces it
-      // into the inbox). Both paths already put the change in front of the user
-      // without a redundant warning notification (user decision 2026-07-16).
+      // A material change (e.g. a hearing that flipped phone→in-person) or a
+      // plain answer to what the task was waiting on must be SEEN, not buried
+      // in the timeline: prepend an alert to the description (never dropping
+      // the prior content) and flag the task as unread. That's the whole
+      // surfacing mechanism — the update rides on the TASK itself. The emoji
+      // reflects `kind` from the prompt above: "⚠️" stays reserved for an
+      // actual factual change (urgent, must not be missed); a plain "answer"
+      // gets "🆕" since it isn't a warning. We deliberately do NOT emit a
+      // separate `notifications` warning here: an update is not a standalone
+      // alert. An OPEN task simply updates (the block + has_unread_update
+      // makes it read as unread); a CLOSED task is reopened by the caller
+      // (opts.reopen → appendUpdateToTask resurfaces it into the inbox). Both
+      // paths already put the update in front of the user without a redundant
+      // notification (user decision 2026-07-16).
       if (diff.changes.length > 0) {
-        const alertBlock = diff.changes.map((c) => `⚠️ ${c}`).join("\n");
+        const alertBlock = diff.changes.map((c) => `${c.kind === "answer" ? "🆕" : "⚠️"} ${c.he}`).join("\n");
         patch.description = `${alertBlock}\n\n${String(t.description || "").trim()}`.trim();
         patch.has_unread_update = true;
       }
