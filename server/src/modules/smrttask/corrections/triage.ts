@@ -71,6 +71,17 @@ interface TriageVerdict {
 /** How much of the source message the triage prompt gets to see. */
 const SOURCE_EXCERPT_CHARS = 1200;
 
+/** Rolling WhatsApp/SMS transcripts run oldest→newest with the decision-relevant
+ *  lines at the BOTTOM (see supabase/functions/ai-process/message-body.ts,
+ *  bodyForClassify) — a head-slice of a long transcript can cut off before the
+ *  very lines a correction is about. Keep the tail for those; head for email. */
+function excerptForTriage(sourceType: string | null | undefined, body: string): string {
+  const isConvo = sourceType === "whatsapp" || sourceType === "whatsapp_echo"
+    || sourceType === "sms" || sourceType === "sms_echo";
+  if (body.length <= SOURCE_EXCERPT_CHARS) return body;
+  return isConvo ? `…\n${body.slice(body.length - SOURCE_EXCERPT_CHARS)}` : body.slice(0, SOURCE_EXCERPT_CHARS);
+}
+
 /**
  * One triage at a time, process-wide.
  *
@@ -105,10 +116,10 @@ async function gatherEvidence(correction: Record<string, unknown>): Promise<stri
       .eq("id", sourceId)
       .maybeSingle();
     if (msg) {
-      const body = String(msg.raw_content ?? msg.body_text ?? "").slice(0, SOURCE_EXCERPT_CHARS);
+      const body = excerptForTriage(msg.source_type, String(msg.raw_content ?? msg.body_text ?? ""));
       parts.push(
         [
-          "## ההודעה האמיתית שעליה ניתן התיקון",
+          "## ההודעה שיצרה את המשימה (המקור המקורי — ייתכן שהמשימה עודכנה מאז מהודעה מאוחרת יותר, ראה למטה)",
           `ערוץ: ${msg.source_type}`,
           `שולח: ${msg.sender ?? msg.sender_email ?? "—"}`,
           `נושא: ${msg.subject ?? "—"}`,
@@ -125,7 +136,7 @@ async function gatherEvidence(correction: Record<string, unknown>): Promise<stri
   if (taskId) {
     const { data: task } = await db
       .from("tasks")
-      .select("serial_display, title_he, description, status, task_type, due_date")
+      .select("serial_display, title_he, description, status, task_type, due_date, updates")
       .eq("id", taskId)
       .maybeSingle();
     if (task) {
@@ -138,6 +149,45 @@ async function gatherEvidence(correction: Record<string, unknown>): Promise<stri
           `תיאור: ${String(task.description ?? "—").slice(0, 600)}`,
         ].join("\n"),
       );
+
+      // tasks.source_message_id is stamped once at creation and never moves —
+      // a later message on the SAME thread (WhatsApp burst, Gmail reply) can
+      // still update the task's description via appendUpdateToTask without ever
+      // repointing that column. Checking the correction against sourceId alone
+      // then shows a conversation that looks like it's missing facts the
+      // description states, which reads as a hallucinated task even when the
+      // description is fully grounded in a later, real message on the same
+      // thread (the T1997 case: a donation-link instruction the user himself
+      // sent 33 minutes after the message that created the task). tasks.updates
+      // already records the source_message_id of every message that touched the
+      // task, so the true "what was this task built from" is the LAST entry,
+      // not the column.
+      const updates = Array.isArray(task.updates) ? (task.updates as Array<Record<string, unknown>>) : [];
+      let latestUpdateSourceId: string | null = null;
+      for (let i = updates.length - 1; i >= 0; i--) {
+        const sid = updates[i]?.source_message_id;
+        if (typeof sid === "string" && sid && sid !== sourceId) { latestUpdateSourceId = sid; break; }
+      }
+      if (latestUpdateSourceId) {
+        const { data: laterMsg } = await db
+          .from("source_messages")
+          .select("source_type, sender, sender_email, subject, body_text, raw_content, ai_classification, received_at")
+          .eq("id", latestUpdateSourceId)
+          .maybeSingle();
+        if (laterMsg) {
+          const laterBody = excerptForTriage(laterMsg.source_type, String(laterMsg.raw_content ?? laterMsg.body_text ?? ""));
+          parts.push(
+            [
+              "## הודעה מאוחרת יותר באותו שרשור שעדכנה את המשימה (מקור אפשרי לתיאור הנוכחי, בנוסף/במקום ההודעה שיצרה אותה)",
+              `ערוץ: ${laterMsg.source_type}`,
+              `שולח: ${laterMsg.sender ?? laterMsg.sender_email ?? "—"}`,
+              `התקבל: ${laterMsg.received_at ?? "—"}`,
+              "תוכן:",
+              laterBody || "(ריק)",
+            ].join("\n"),
+          );
+        }
+      }
     }
   }
 
@@ -211,6 +261,9 @@ function buildPrompt(note: string, evidence: string): string {
     "3. עבור prompt בלבד: כתוב ב-suggested_rule_he כלל אחד, שורה אחת, בציווי, כללי — לא מקרה פרטי ולא שם של אדם.",
     "4. שמור על כתובות וקישורים במלואם אם הם חלק מהכלל.",
     "5. תמיד מלא את understood_he, גם כשאתה שואל שאלה.",
+    "6. לפני שאתה קובע שתיאור המשימה ממציא עובדה/שם שלא מופיע בשיחה — בדוק גם את הקטע " +
+      "'הודעה מאוחרת יותר באותו שרשור שעדכנה את המשימה' אם הוא קיים למעלה: המשימה עשויה " +
+      "להיות מבוססת עליו ולא רק על ההודעה שיצרה אותה.",
     "",
     "החזר JSON אחד בלבד, בלי טקסט לפניו ואחריו, בלי גדרות markdown:",
     '{"understood_he":"<מה ההערה מבקשת, משפט אחד>","prompt_class":"<אחת מהקטגוריות>","reason_he":"<משפט אחד למה>","question_he":null,"suggested_rule_he":null,"duplicate_of":null}',
