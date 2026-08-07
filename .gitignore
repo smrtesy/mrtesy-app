@@ -58,3 +58,9 @@ android-app/app/google-services.json
 
 # Chat attachment scratch (harness) — never track
 .claude-attachments/
+
+# Claude console browser-check scratch artifacts (never commit)
+measure.mjs
+verify-progressive.mjs
+shot.png
+top.png

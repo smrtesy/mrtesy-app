@@ -13,7 +13,7 @@
  * button and are closed until asked for. Nothing configures itself in your face.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { useScreenPathname, useScreenRouter, useScreenSearchParams, useOptionalPaneNav } from "@/lib/panes/nav";
 import {
@@ -63,7 +63,7 @@ import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { Scissors, FolderTree, ExternalLink, ListTree, Search } from "lucide-react";
+import { Scissors, ExternalLink, ListTree, Search } from "lucide-react";
 
 /**
  * Models, with the id visible — not just a friendly name.
@@ -165,6 +165,12 @@ interface Thread {
   /** The smrtTask serial (e.g. "T1699") of the task this thread was opened for,
    *  when it came from the corrections flow. Null for ordinary chats. */
   task_serial?: string | null;
+  /** Global running number of the thread (1-based). The rail shows this bare
+   *  number; clicking it copies serial_display. */
+  serial?: number | null;
+  /** Short human code, e.g. "K7" — what the user hands to another session to point
+   *  at this thread. The bare number is shown; this full form is copied on click. */
+  serial_display?: string | null;
   /** True when the thread has a run executing/queued right now — the rail's live
    *  (pulsing amber/brown) status dot. Set by GET /claude/threads. */
   live?: boolean;
@@ -198,6 +204,9 @@ interface Thread {
   /** Waiting on the usage-limit window to reset (yellow hourglass). ISO reset moment
    *  when known, "" when the window is unknown, null when not waiting. */
   usage_wait_until?: string | null;
+  /** Parked because a backend deploy is in flight — the turn holds until the server
+   *  restarts and comes back healthy, then resumes (yellow hourglass). */
+  deploy_wait?: boolean | null;
   /** A pending destructive-migration approval — the "needs you" blue hourglass. (A
    *  merge conflict, the other needs-you case, is read from `deploy.state`.) */
   needs_you?: boolean;
@@ -363,11 +372,11 @@ export function ClaudeChat() {
   const [decomposeProposal, setDecomposeProposal] = useState<DecomposeProposal | null>(null);
   const [decomposeOpen, setDecomposeOpen] = useState(false);
   const [attachBoard, setAttachBoard] = useState(false);
-  /** Topics for the grouped rail. Off by default (flat list); the folder icon
-   *  toggles it, so grouping is opt-in chrome, not permanent. */
-  const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
-  const [grouped, setGrouped] = useState(false);
-  const [regrouping, setRegrouping] = useState(false);
+  /** The rail is grouped by STATE (needs-you / merge / working / problem / shipped /
+   *  quiet) via threadCategory — the only view now. The "handled" (✓) bucket sits
+   *  collapsed at the bottom: a handled thread is done, so it stays out of the way
+   *  until the user opens it. */
+  const [showHandled, setShowHandled] = useState(false);
   /** Rail search — a collapsed magnifier by default (compact-UI convention);
    *  clicking it reveals an input row that filters the rail. Title/preview/serial
    *  match client-side over the loaded list; conversation CONTENT (what was said
@@ -626,17 +635,6 @@ export function ClaudeChat() {
     }
   }, [rememberAccount, t]);
 
-  const loadTopics = useCallback(async () => {
-    try {
-      const { topics: list } = await api<{
-        topics: { id: string; title: string; threads: { thread_id: string }[] }[];
-      }>("/api/claude/topics");
-      setTopics((list ?? []).map((tp) => ({ id: tp.id, title: tp.title, thread_ids: tp.threads.map((x) => x.thread_id) })));
-    } catch {
-      // Grouping is a convenience; its failure must not blank the rail.
-    }
-  }, []);
-
   useEffect(() => {
     void loadThreads();
   }, [loadThreads]);
@@ -670,24 +668,6 @@ export function ClaudeChat() {
       activeIdRef.current = threads[0].id;
     }
   }, [loading, threads]);
-
-  useEffect(() => {
-    if (grouped) void loadTopics();
-  }, [grouped, loadTopics]);
-
-  async function regroup() {
-    if (regrouping) return;
-    setRegrouping(true);
-    try {
-      await api("/api/claude/topics/regroup", { method: "POST" });
-      await loadTopics();
-      toast.success(t("group.done"));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRegrouping(false);
-    }
-  }
 
   useEffect(() => {
     // Clear the previous thread's split state up front, BEFORE the new thread's
@@ -1349,8 +1329,8 @@ export function ClaudeChat() {
               <MessageSquarePlus className="size-4" />
               {t("newChat")}
             </Button>
-            {/* Collapsed search — a quiet magnifier next to the group toggle; click
-                to reveal the filter input below (compact-UI convention). */}
+            {/* Collapsed search — a quiet magnifier; click to reveal the filter input
+                below (compact-UI convention). */}
             <Button
               size="sm"
               variant={searchOpen ? "secondary" : "ghost"}
@@ -1361,31 +1341,6 @@ export function ClaudeChat() {
             >
               <Search className="size-4" />
             </Button>
-            {/* Group-by-topic toggle. Off by default so the rail is a plain list;
-                the folder icon opts in, matching the compact-UI convention. */}
-            <Button
-              size="sm"
-              variant={grouped ? "secondary" : "ghost"}
-              className="h-8 w-8 p-0"
-              onClick={() => setGrouped((v) => !v)}
-              aria-label={t("group.toggle")}
-              title={t("group.toggle")}
-            >
-              <FolderTree className="size-4" />
-            </Button>
-            {grouped && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 w-8 p-0"
-                onClick={() => void regroup()}
-                disabled={regrouping}
-                aria-label={t("group.now")}
-                title={t("group.now")}
-              >
-                {regrouping ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              </Button>
-            )}
             {/* Mobile-only close: the rail covers the chat here, and the header's
                 toggle button is hidden with it, so the rail carries its own close. */}
             <Button
@@ -1424,8 +1379,8 @@ export function ClaudeChat() {
                 // Rail search: a thread is visible when it matches the query on
                 // title / fallback preview / task serial (client-side over the
                 // loaded list) OR its conversation content matched server-side
-                // (`contentMatchIds`). When a query is active the rail flattens
-                // (grouping is ignored) so matches across topics all show together.
+                // (`contentMatchIds`). The state grouping still applies to whatever
+                // matched, so results read under their state headings.
                 const q = query.trim().toLowerCase();
                 const visible = q
                   ? threads.filter(
@@ -1446,34 +1401,19 @@ export function ClaudeChat() {
                     </p>
                   );
                 }
-                // Threads with a fix waiting in the deploy queue lift out into the
-                // pinned "ממתין למיזוג" category above; the rest render as usual
-                // (flat or topic-grouped) so a queued thread never shows twice.
-                const queued = visible.filter((x) => x.deploy);
-                const rest = visible.filter((x) => !x.deploy);
-                return (
-                  <>
-                    {queued.length > 0 && (
-                      <DeployQueueGroup threads={queued} activeId={activeId} onOpen={pickThread} t={t} />
-                    )}
-                    {grouped && !q ? (
-                      renderGroupedRail(rest, topics, activeId, t, pickThread, remove, (id, h) =>
-                        void setHandled(id, h),
-                      )
-                    ) : (
-                      sortHandledLast(rest).map((x) => (
-                        <ThreadRow
-                          key={x.id}
-                          thread={x}
-                          active={activeId === x.id}
-                          onOpen={() => pickThread(x.id)}
-                          onRemove={() => void remove(x.id)}
-                          onToggleHandled={() => void setHandled(x.id, !x.handled_at)}
-                          t={t}
-                        />
-                      ))
-                    )}
-                  </>
+                // The rail is grouped by state: each non-empty bucket in priority
+                // order, then the collapsed "handled" bucket at the bottom. During a
+                // search the handled bucket auto-expands, so a handled thread that
+                // matched isn't hidden behind a collapsed header (reads as no-results).
+                return renderStateGroupedRail(
+                  visible,
+                  activeId,
+                  t,
+                  pickThread,
+                  (id) => void remove(id),
+                  (id, h) => void setHandled(id, h),
+                  showHandled || q.length > 0,
+                  () => setShowHandled((v) => !v),
                 );
               })()
             )}
@@ -1811,25 +1751,25 @@ export function ClaudeChat() {
               <p className="pt-8 text-center text-sm text-muted-foreground">{t("empty")}</p>
             )
           ) : (
-            // Keyed by the thread so switching conversations remounts cleanly,
-            // while WITHIN a thread the turns stay keyed by turn_index (below) —
-            // the optimistic bubble and its server row share that key, so send no
-            // longer remounts the whole list (the flicker, bug 7).
-            <div key={activeId ?? "new"} className="mx-auto flex max-w-3xl flex-col gap-3">
-              {renderTurns(
-                turns,
-                children,
-                t,
-                (id) => setActiveId(id),
-                (id) => void cancelWaiting(id),
-                // Returns the send promise so an interactive block can revert its
-                // "sent" latch if the turn fails to queue (send rethrows on error).
-                (message) => send(message, []),
-                // The live status line's "stop" — cancels the executing turn (and,
-                // for an orphaned row, clears it so the screen stops polling).
-                () => void stop(),
-              )}
-            </div>
+            // Keyed by the thread so switching conversations remounts cleanly (and
+            // resets the progressive-render window to the tail), while WITHIN a
+            // thread the turns stay keyed by turn_index (below) — the optimistic
+            // bubble and its server row share that key, so send no longer remounts
+            // the whole list (the flicker, bug 7).
+            <TurnList
+              key={activeId ?? "new"}
+              turns={turns}
+              childThreads={children}
+              t={t}
+              openThread={(id) => setActiveId(id)}
+              onCancelWaiting={(id) => void cancelWaiting(id)}
+              // Returns the send promise so an interactive block can revert its
+              // "sent" latch if the turn fails to queue (send rethrows on error).
+              onAction={(message) => send(message, [])}
+              // The live status line's "stop" — cancels the executing turn (and,
+              // for an orphaned row, clears it so the screen stops polling).
+              onStop={() => void stop()}
+            />
           )}
           <div ref={bottomRef} />
         </div>
@@ -1946,12 +1886,6 @@ export function ClaudeChat() {
   );
 }
 
-/** Handled threads sink to the bottom of the rail; order is otherwise preserved
- *  (Array.sort is stable), so within each group the newest-activity order stays. */
-function sortHandledLast(list: Thread[]): Thread[] {
-  return [...list].sort((a, b) => (a.handled_at ? 1 : 0) - (b.handled_at ? 1 : 0));
-}
-
 /** The rail title: lead with the task serial and never show a "תיקון אוטומטי"
  *  prefix. The server titler already enforces this; this display pass also covers
  *  titles written before that fix (and user-set titles, which it leaves alone
@@ -2009,27 +1943,34 @@ type Indicator =
  */
 function threadIndicator(thread: Thread, t: ReturnType<typeof useTranslations>): Indicator {
   const deployState = thread.deploy?.state;
-  const conflict = deployState === "conflict";
 
-  // 1. Needs YOU — you must act before anything moves; surfaced above all else.
-  //    An unanswered interactive question, a merge conflict, or a pending approval.
-  if (thread.awaiting_reply || thread.needs_you || conflict) {
-    const label = conflict
-      ? t("dot.needsConflict")
-      : thread.needs_you
-        ? t("dot.needsApproval")
-        : t("dot.needsAnswer");
+  // 1. Needs YOU — you must act before anything moves; surfaced above all else. An
+  //    unanswered question or a pending approval. A merge conflict is NOT here: the
+  //    coordinator auto-resolves it by handing it back to the session, so it shows as
+  //    running / being-resolved (steps 2–3), not as an action required from you. Only
+  //    an ESCALATED conflict — parked 'failed' after the retries are exhausted —
+  //    becomes a red settled failure below.
+  if (thread.awaiting_reply || thread.needs_you) {
+    const label = thread.needs_you ? t("dot.needsApproval") : t("dot.needsAnswer");
     return { shape: "hourglass", cls: "text-blue-600", label };
   }
-  // 2. Running now.
+  // 2. Running now — includes a conflict's live self-resolve turn.
   if (thread.live) return { shape: "pulse", cls: "bg-amber-600", label: t("dot.live") };
   // 3. Passive wait — resolves on its own.
   if (thread.usage_wait_until != null) {
     const at = thread.usage_wait_until ? ` · ${railTimeNY(thread.usage_wait_until)}` : "";
     return { shape: "hourglass", cls: "text-amber-500", label: `${t("dot.waitUsage")}${at}` };
   }
+  if (thread.deploy_wait) {
+    return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitDeploy") };
+  }
   if (deployState === "ready" || deployState === "deploying") {
     return { shape: "hourglass", cls: "text-amber-500", label: t("dot.waitMerge") };
+  }
+  // A conflict between self-resolve turns (the last one ended, the re-ship hasn't
+  // landed yet) — still being handled automatically, not an action for you.
+  if (deployState === "conflict") {
+    return { shape: "hourglass", cls: "text-amber-500", label: t("dot.conflictResolving") };
   }
   const ship = thread.ship?.state;
   if (ship === "main_building") return { shape: "hourglass", cls: "text-amber-500", label: t("dot.shipBuilding") };
@@ -2064,6 +2005,37 @@ function ThreadDot({ thread, t }: { thread: Thread; t: ReturnType<typeof useTran
   return <span className={cn("size-2 shrink-0 rounded-full", ind.cls)} title={title} aria-label={ind.label} />;
 }
 
+/** The rail's per-thread code chip: shows the BARE number (e.g. "7"); a click
+ *  copies the canonical "K7" to the clipboard (so it can be handed to another
+ *  session) and briefly flips to a green ✓. stopPropagation so the click copies
+ *  rather than opening the thread. */
+function ThreadCodeBadge({ thread }: { thread: Thread }) {
+  const [copied, setCopied] = useState(false);
+  const code = (thread.serial_display ?? "").trim();
+  const num = thread.serial;
+  if (!code || num == null) return null;
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard?.writeText(code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`העתק ${code}`}
+      aria-label={`העתק מזהה ${code}`}
+      className={cn(
+        "shrink-0 rounded px-1 font-mono text-[10px] leading-none tabular-nums transition-colors",
+        copied ? "text-status-ok" : "text-muted-foreground/50 hover:text-foreground",
+      )}
+    >
+      {copied ? "✓" : num}
+    </button>
+  );
+}
+
 /** One row in the thread rail — status dot, title (RTL, ≤2 lines), a faint "handled"
  *  check that turns green, and the hover trash. */
 function ThreadRow({
@@ -2091,6 +2063,7 @@ function ThreadRow({
       )}
     >
       <ThreadDot thread={thread} t={t} />
+      <ThreadCodeBadge thread={thread} />
       {/* dir="rtl" (not "auto"): the title reads right-to-left even when it starts
           with a Latin serial like "T1699", because the rest is Hebrew. */}
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 line-clamp-2 break-words text-start text-xs" dir="rtl">
@@ -2125,39 +2098,89 @@ function ThreadRow({
   );
 }
 
+/** The rail's state buckets. A thread lands in exactly ONE, chosen by threadCategory
+ *  (priority ladder), and the buckets render top-to-bottom in this order. "handled"
+ *  is not here — a ✓'d thread leaves every bucket and drops to its own collapsed row. */
+type RailCategory = "needsYou" | "merge" | "working" | "problem" | "shipped" | "quiet";
+const RAIL_CATEGORY_ORDER: RailCategory[] = [
+  "needsYou",
+  "merge",
+  "working",
+  "problem",
+  "shipped",
+  "quiet",
+];
+
 /**
- * The rail grouped by topic: each topic heading with its threads, then the ones no
- * topic claims under "ללא נושא". A thread in two topics appears under both — that is
- * the many-to-many by design, not a bug. Nothing is hidden: every thread that shows
- * in the flat list shows here too, somewhere.
+ * Which state bucket a (non-handled) thread belongs to. ONE category per thread,
+ * chosen by the SAME priority ladder as threadIndicator() so a row's bucket can never
+ * contradict its status glyph — keep the two in lockstep. The deploy queue (any
+ * ready/deploying/failed/conflict fix) reads together under "merge" so its
+ * countdown/reason row (DeployRow) stays intact.
  */
-function renderGroupedRail(
+function threadCategory(thread: Thread): RailCategory {
+  if (thread.deploy) return "merge";
+  if (thread.awaiting_reply || thread.needs_you) return "needsYou";
+  // live now, or waiting to run (usage window / a backend deploy the turn holds for) —
+  // all render an amber running/waiting glyph, so they group under "in progress".
+  if (thread.live || thread.usage_wait_until != null || thread.deploy_wait) return "working";
+  const ship = thread.ship?.state;
+  if (ship === "main_live" || ship === "main_building" || ship === "pushed_branch") return "shipped";
+  if (ship === "failed" || thread.last_status === "failed") return "problem";
+  return "quiet";
+}
+
+/** A small uppercase bucket heading with its count. */
+function RailGroupHeading({ label, count }: { label: string; count: number }) {
+  return (
+    <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+      <span>{label}</span>
+      <span className="tabular-nums opacity-60">{count}</span>
+    </p>
+  );
+}
+
+/**
+ * The rail grouped by state: every non-empty bucket in priority order (the merge
+ * bucket keeps its dedicated countdown rows), then a collapsed "handled" bucket at
+ * the bottom. Threads keep the server's last-message-first order inside each bucket.
+ * Nothing is hidden — every visible thread shows under exactly one heading.
+ */
+function renderStateGroupedRail(
   threads: Thread[],
-  topics: { id: string; title: string; thread_ids: string[] }[],
   activeId: string | null,
   t: ReturnType<typeof useTranslations>,
   setActiveId: (id: string) => void,
   remove: (id: string) => void,
   toggleHandled: (id: string, handled: boolean) => void,
+  showHandled: boolean,
+  toggleShowHandled: () => void,
 ): ReactNode {
-  const byId = new Map(threads.map((x) => [x.id, x]));
-  const claimed = new Set<string>();
-  const groups: ReactNode[] = [];
+  const handled = threads.filter((x) => x.handled_at);
+  const buckets = new Map<RailCategory, Thread[]>();
+  for (const th of threads) {
+    if (th.handled_at) continue; // handled leaves every state bucket
+    const cat = threadCategory(th);
+    const list = buckets.get(cat);
+    if (list) list.push(th);
+    else buckets.set(cat, [th]);
+  }
 
-  for (const topic of topics) {
-    const rows = sortHandledLast(
-      topic.thread_ids.map((id) => byId.get(id)).filter((x): x is Thread => Boolean(x)),
-    );
-    if (rows.length === 0) continue;
-    rows.forEach((r) => claimed.add(r.id));
+  const groups: ReactNode[] = [];
+  for (const cat of RAIL_CATEGORY_ORDER) {
+    const rows = buckets.get(cat);
+    if (!rows || rows.length === 0) continue;
+    if (cat === "merge") {
+      // The deploy queue keeps its own heading + per-row countdown/reason.
+      groups.push(<DeployQueueGroup key="merge" threads={rows} activeId={activeId} onOpen={setActiveId} t={t} />);
+      continue;
+    }
     groups.push(
-      <div key={topic.id}>
-        <p className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70" dir="auto">
-          {topic.title}
-        </p>
+      <div key={cat}>
+        <RailGroupHeading label={t(`stateGroup.${cat}`)} count={rows.length} />
         {rows.map((r) => (
           <ThreadRow
-            key={`${topic.id}-${r.id}`}
+            key={r.id}
             thread={r}
             active={activeId === r.id}
             onOpen={() => setActiveId(r.id)}
@@ -2170,24 +2193,30 @@ function renderGroupedRail(
     );
   }
 
-  const orphans = sortHandledLast(threads.filter((x) => !claimed.has(x.id)));
-  if (orphans.length > 0) {
+  if (handled.length > 0) {
     groups.push(
-      <div key="__none">
-        <p className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-          {t("group.none")}
-        </p>
-        {orphans.map((r) => (
-          <ThreadRow
-            key={`none-${r.id}`}
-            thread={r}
-            active={activeId === r.id}
-            onOpen={() => setActiveId(r.id)}
-            onRemove={() => remove(r.id)}
-            onToggleHandled={() => toggleHandled(r.id, !r.handled_at)}
-            t={t}
-          />
-        ))}
+      <div key="__handled">
+        <button
+          type="button"
+          onClick={toggleShowHandled}
+          className="flex w-full items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 hover:text-foreground"
+        >
+          {showHandled ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+          <span>{t("stateGroup.handled")}</span>
+          <span className="tabular-nums opacity-60">{handled.length}</span>
+        </button>
+        {showHandled &&
+          handled.map((r) => (
+            <ThreadRow
+              key={r.id}
+              thread={r}
+              active={activeId === r.id}
+              onOpen={() => setActiveId(r.id)}
+              onRemove={() => remove(r.id)}
+              onToggleHandled={() => toggleHandled(r.id, !r.handled_at)}
+              t={t}
+            />
+          ))}
       </div>,
     );
   }
@@ -2257,15 +2286,26 @@ function DeployRow({
 }) {
   const d = thread.deploy;
   if (!d) return null;
-  const stuck = d.state === "failed" || d.state === "conflict";
+  // 'conflict' is NOT stuck: the coordinator auto-resolves it (hands it back to the
+  // session), so it reads as "resolving automatically", not a red failure. Only a
+  // 'failed' row (an escalated conflict or a build failure) is the red, needs-you one.
+  const stuck = d.state === "failed";
+  const resolving = d.state === "conflict";
 
   let status: ReactNode;
   if (stuck) {
-    const label = d.state === "conflict" ? t("mergeQueue.conflict") : t("mergeQueue.failed");
     status = (
       <span className="flex items-start gap-1 text-destructive">
         <AlertTriangle className="mt-px size-3 shrink-0" />
-        <span className="line-clamp-2">{d.error ? `${label} · ${d.error}` : label}</span>
+        <span className="line-clamp-2">{d.error ? `${t("mergeQueue.failed")} · ${d.error}` : t("mergeQueue.failed")}</span>
+      </span>
+    );
+  } else if (resolving) {
+    // Auto-healing in progress — amber, no alarm; the session is rebasing + re-shipping.
+    status = (
+      <span className="flex items-start gap-1 text-amber-600">
+        <Hourglass className="mt-px size-3 shrink-0" />
+        <span className="line-clamp-2">{t("mergeQueue.conflictResolving")}</span>
       </span>
     );
   } else if (d.state === "deploying") {
@@ -2307,6 +2347,104 @@ function DeployRow({
   );
 }
 
+/** A single malformed or oversized event must not blank the whole conversation.
+ *  Each turn bubble renders inside this boundary: a render-time throw is swallowed
+ *  to a quiet one-line fallback (getDerivedStateFromError) instead of taking the
+ *  whole list down with it. A class because React error boundaries can't be hooks;
+ *  the label is passed in since a class can't call useTranslations. */
+class TurnErrorBoundary extends Component<
+  { label: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="flex justify-start">
+          <div className="rounded-2xl border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
+            {this.props.label}
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/** Progressive render, tail-first. A heavy thread's content costs seconds of CPU
+ *  to render — measured at ~6s on a 4x-throttled (phone-class) device — and React
+ *  did all of it BEFORE the first paint, so the screen sat blank for seconds and
+ *  read as broken. Fix: mount only the last few (cheap, newest) turns on first
+ *  paint — what the user sees at the bottom — then fill in the older, heavier turns
+ *  automatically after paint, a few per requestIdleCallback slice, so their render
+ *  work is spread across frames instead of blocking the first paint. No button; the
+ *  fill is automatic. Newest turns always render (the list is sliced from the end),
+ *  so a live/last turn and its interactive blocks are never hidden. Keyed by thread
+ *  in the parent, so the budget resets to the tail on every thread switch. */
+const TURN_PAINT_INITIAL = 3;
+const TURN_FILL_STEP = 4;
+
+function TurnList(props: {
+  turns: Turn[];
+  childThreads: ChildThread[];
+  t: ReturnType<typeof useTranslations>;
+  openThread: (id: string) => void;
+  onCancelWaiting: (id: string) => void;
+  onAction: (message: string) => Promise<void> | void;
+  onStop: () => void;
+}) {
+  const { turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop } = props;
+  // Build the full node list first so the moved-turn folding, lastLiveIndex and
+  // context-restored gating stay computed over the WHOLE thread; only the tail is
+  // mounted, growing to the full list after first paint.
+  const { nodes, lastLiveNodeIndex } = renderTurns(turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop);
+  // The first-paint window must always include the last live turn (its interactive
+  // blocks must stay live), even if trailing moved-turn rows push it off the last
+  // few nodes — so floor the initial budget on the tail from that turn onward.
+  const tailFloor = lastLiveNodeIndex >= 0 ? nodes.length - lastLiveNodeIndex : 0;
+  const [budget, setBudget] = useState(() => Math.max(TURN_PAINT_INITIAL, tailFloor));
+  // As a live thread grows, keep the newest turns rendered — grow the budget by
+  // however many nodes appeared so the incoming turn is always in the tail window.
+  const prevCount = useRef(nodes.length);
+  useEffect(() => {
+    const grew = nodes.length - prevCount.current;
+    prevCount.current = nodes.length;
+    if (grew > 0) setBudget((b) => b + grew);
+  }, [nodes.length]);
+  // Fill older turns in after first paint, a few per idle slice, until all mount.
+  // requestIdleCallback yields to the browser between slices; the timeout fallback
+  // covers browsers/SSR where it's absent.
+  useEffect(() => {
+    if (budget >= nodes.length) return;
+    const step = () => setBudget((b) => Math.min(nodes.length, b + TURN_FILL_STEP));
+    const ric = typeof window !== "undefined" ? window.requestIdleCallback : undefined;
+    if (ric) {
+      const id = ric(step, { timeout: 250 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = setTimeout(step, 32);
+    return () => clearTimeout(id);
+  }, [budget, nodes.length]);
+  const hidden = Math.max(0, nodes.length - budget);
+  const shown = hidden > 0 ? nodes.slice(hidden) : nodes;
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col gap-3">
+      {hidden > 0 && (
+        // Quiet placeholder while the older turns stream in — no action needed, so
+        // it's an indicator, not a button. It disappears once all turns are mounted.
+        <div className="mx-auto flex items-center gap-1.5 py-1 text-[11px] text-muted-foreground">
+          <Loader2 className="size-3 animate-spin" />
+          {t("loadingEarlier")}
+        </div>
+      )}
+      {shown}
+    </div>
+  );
+}
+
 /**
  * Render the conversation, folding any run of consecutive moved turns into a single
  * "N turns moved to <child>" row. The moved turns are still present in the data —
@@ -2320,9 +2458,13 @@ function renderTurns(
   onCancelWaiting: (id: string) => void,
   onAction: (message: string) => Promise<void> | void,
   onStop: () => void,
-): ReactNode[] {
+): { nodes: ReactNode[]; lastLiveNodeIndex: number } {
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
+  // Position in `out` of the last live turn's node (the one whose interactive
+  // blocks stay live). TurnList uses it to guarantee that turn is inside the
+  // first-paint window even when trailing moved-turn rows follow it.
+  let lastLiveNodeIndex = -1;
   // The last turn that actually renders (moved turns collapse into a link row,
   // not a TurnView) — the only turn whose interactive blocks stay live. Using
   // turns.length-1 would strand a live block behind trailing moved turns.
@@ -2344,16 +2486,21 @@ function renderTurns(
   while (i < turns.length) {
     const turn = turns[i];
     if (!turn.moved_to_thread_id) {
+      if (i === lastLiveIndex) lastLiveNodeIndex = out.length;
       out.push(
-        <TurnView
-          key={turn.turn_index}
-          turn={turn}
-          hadPriorDoneTurn={seenPriorDone}
-          onCancelWaiting={onCancelWaiting}
-          isLast={i === lastLiveIndex}
-          onAction={onAction}
-          onStop={onStop}
-        />,
+        // Each bubble is isolated: one malformed/oversized event that throws
+        // during render collapses to a quiet one-line fallback instead of
+        // blanking the whole conversation (the white-screen failure mode).
+        <TurnErrorBoundary key={turn.turn_index} label={t("turnRenderError")}>
+          <TurnView
+            turn={turn}
+            hadPriorDoneTurn={seenPriorDone}
+            onCancelWaiting={onCancelWaiting}
+            isLast={i === lastLiveIndex}
+            onAction={onAction}
+            onStop={onStop}
+          />
+        </TurnErrorBoundary>,
       );
       if (turn.status === "done") seenPriorDone = true;
       i += 1;
@@ -2379,7 +2526,7 @@ function renderTurns(
     );
     i = j;
   }
-  return out;
+  return { nodes: out, lastLiveNodeIndex };
 }
 
 /**

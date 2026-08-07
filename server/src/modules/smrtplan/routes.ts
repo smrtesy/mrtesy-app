@@ -35,6 +35,9 @@ import { experimentsAuthedRouter } from "./experiments";
 
 const DONE_STATUSES = new Set(["completed", "archived", "dismissed"]);
 
+// Validates a client-generated idempotency key for POST /plans (see the handler).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Per-plan health, duration-weighted (fix #1). A subtask's weight is its
  * duration; "expected" progress accrues that weight once the day it is supposed
@@ -526,6 +529,27 @@ router.post("/plans", requireFull, async (req: Request, res: Response) => {
   if (!body.kind || !["effort", "stream", "roster"].includes(body.kind as string)) {
     return res.status(400).json({ error: "kind must be 'effort', 'stream' or 'roster'" });
   }
+  // Client-generated idempotency key (a UUID). A retried create — the client
+  // rides out a transient Railway blip that dropped the RESPONSE of a POST the
+  // server already processed — carries the SAME token, so we return the existing
+  // plan instead of inserting a duplicate. Null for any legacy/other caller; the
+  // partial unique index ignores nulls. (migration 20260806210000)
+  const clientToken =
+    typeof req.body?.client_token === "string" && UUID_RE.test(req.body.client_token)
+      ? req.body.client_token
+      : null;
+  // Idempotent retry: a create the server already processed, whose response was
+  // lost to a transient blip, comes back with the SAME client_token. Return that
+  // existing plan so the retry succeeds instead of creating a second one.
+  if (clientToken) {
+    const { data: existing } = await db
+      .from("smrtplan_plans")
+      .select(PLAN_FIELDS)
+      .eq("org_id", req.org!.id)
+      .eq("client_token", clientToken)
+      .maybeSingle();
+    if (existing) return res.status(201).json({ plan: existing });
+  }
   const { data, error } = await db
     .from("smrtplan_plans")
     .insert({
@@ -533,10 +557,25 @@ router.post("/plans", requireFull, async (req: Request, res: Response) => {
       org_id: req.org!.id,
       created_by: req.user!.id,
       owner_user_id: body.is_private ? req.user!.id : (body.owner_user_id ?? null),
+      client_token: clientToken,
     })
     .select(PLAN_FIELDS)
     .single();
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    // The retry raced the original insert (both passed the pre-check, the unique
+    // index caught the second). Return the row the winner created — the retry's
+    // whole point — instead of surfacing a duplicate-key 500.
+    if (clientToken && (error as { code?: string }).code === "23505") {
+      const { data: winner } = await db
+        .from("smrtplan_plans")
+        .select(PLAN_FIELDS)
+        .eq("org_id", req.org!.id)
+        .eq("client_token", clientToken)
+        .maybeSingle();
+      if (winner) return res.status(201).json({ plan: winner });
+    }
+    return res.status(500).json({ error: error.message });
+  }
   res.status(201).json({ plan: data });
 });
 

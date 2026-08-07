@@ -29,6 +29,7 @@ import path from "node:path";
 import { db, getAppSecret } from "../../db";
 import { notify } from "../../lib/platform/notify";
 import { ensureClone, getGitHubToken, gitEnvForRun, redact } from "./github";
+import { deployInFlight } from "./deploy-coordinator";
 import { materializeAttachments } from "./attachments";
 import { threadWorkspace } from "./workspace";
 import { buildThreadTranscript } from "./transcript";
@@ -583,6 +584,13 @@ const FLUSH_INTERVAL_MS = 500;
 /** Text is cheap but not free: keep rows bounded, keep media as URLs elsewhere. */
 const MAX_TEXT = 20_000;
 const MAX_PAYLOAD_CHARS = 100_000;
+// A single stdout line longer than this is a giant tool_result (a big file
+// printed, a long build log). Past this we stop accumulating the line: keep a
+// truncated head as a system event, drop the rest to its newline. Prevents both
+// the O(n^2) line-split re-scan and the multi-second JSON.parse + redact on one
+// huge line — the exact synchronous work that blocked the shared event loop and
+// 502'd every concurrent chat load (a 40MB line stalled it ~21s; audit 2026-08-06).
+const MAX_LINE_CHARS = 1_000_000;
 
 type EventKind =
   | "user"
@@ -640,6 +648,14 @@ export const USAGE_LIMIT_SENTINEL = "usage-limit-wait:";
  *  the user when work will resume. Absent (unparseable message) → the recoverer
  *  falls back to the 15-minute cadence. */
 export const USAGE_UNTIL_RE = /^usage-limit-wait:until=([0-9TZ:.+-]+);/;
+
+/** Same trick for a run that ARRIVES while a batch deploy is in flight: the Railway
+ *  backend is about to restart, so spawning a child now just gets it SIGTERM-killed
+ *  mid-turn (a run that "fell" because it started in the deploy window). Instead the
+ *  run is parked 'queued' with this exact sentinel on `error`, and recover.ts's
+ *  deploy-wait branch resumes it once the deploy has landed and the server is healthy
+ *  — it never consumes resume_attempts, exactly like the usage-limit park. */
+export const DEPLOY_WAIT_SENTINEL = "deploy-wait";
 
 /** Opening fence of an interactive block (smrt-ask / smrt-plan) — the server twin of
  *  the client's BLOCK_RE (`src/components/claude/interactive/blocks.ts`), OPENING only
@@ -1067,6 +1083,24 @@ async function executeRunBody(runId: string): Promise<void> {
     return;
   }
 
+  // Deploy-in-flight hold: if the coordinator is mid-batch (a fresh 'deploying' row),
+  // the Railway backend is about to restart — spawning the child now would just get it
+  // SIGTERM-killed mid-turn (the run that "falls" because it started in the deploy
+  // window). Park it 'queued' with the sentinel; recover.ts's deploy-wait branch
+  // resumes it once the deploy has landed and the server is healthy again. Left as
+  // 'queued' (not a new status) so every existing state machine keeps working, exactly
+  // like the usage-limit park.
+  if (await deployInFlight()) {
+    const { error: pErr } = await db
+      .from("claude_runs")
+      .update({ error: DEPLOY_WAIT_SENTINEL, updated_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("status", "queued");
+    if (pErr) console.error("[claude/runner] deploy-wait park failed:", pErr.message);
+    else console.log(`[claude/runner] run ${runId} parked — deploy in flight, will resume after restart`);
+    return;
+  }
+
   const finish = async (fields: Record<string, unknown>) => {
     const { error } = await db
       .from("claude_runs")
@@ -1075,10 +1109,23 @@ async function executeRunBody(runId: string): Promise<void> {
     if (error) console.error("[claude/runner] finish update failed:", error.message);
   };
 
+  // The account whose TOKEN and usage this run actually consumes. Normally the run's
+  // own account — but the shared background `automation` account is allowed to BORROW
+  // a different configured account that still has quota when it is over its weekly
+  // limit, so a single account's multi-day outage doesn't fail every automated
+  // correction (triage-classified diagnosis / autofix / discuss). Every OTHER account
+  // (the user's interactive threads) keeps its own token and its park-and-wait
+  // behavior untouched. The run row stays tagged `run.claude_account` ("automation"),
+  // which is what the completion-push skip below keys on — so borrowing never turns a
+  // silent background run into a phone ping.
+  const effectiveAccount =
+    (run.claude_account ?? "").trim().toLowerCase() === AUTOMATION_ACCOUNT
+      ? (await pickAnalysisAccounts(run.claude_account))[0] ?? run.claude_account
+      : run.claude_account;
   // Trimmed because this value is pasted by a human through an admin form, where a
   // stray newline or space rides along easily and would be sent verbatim. The key
   // depends on the run's account: automated runs route to the second subscription.
-  const { token, key: tokenKey } = await loadAccountToken(run.claude_account);
+  const { token, key: tokenKey } = await loadAccountToken(effectiveAccount);
   if (!token) {
     // Fail loudly rather than let Claude Code fall through to a billed credential.
     await finish({
@@ -1112,14 +1159,18 @@ async function executeRunBody(runId: string): Promise<void> {
   // workspace_thread_id carries that directory key durably (it survives the parent's
   // deletion — see the migration), so it is the authority on where turns run.
   let workspaceThreadId: string | null = run.thread_id;
+  // The thread's short human code ("K7") — injected as CLAUDE_THREAD_CODE below so a
+  // session can state its own id when the user asks ("what's your id?").
+  let threadCode: string | null = null;
   if (run.thread_id) {
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
-      .select("session_id, fork_from_session, seed_context, workspace_thread_id")
+      .select("session_id, fork_from_session, seed_context, workspace_thread_id, serial_display")
       .eq("id", run.thread_id)
       .maybeSingle();
     if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
     resumeSession = thread?.session_id ?? null;
+    threadCode = thread?.serial_display ?? null;
     if (thread?.workspace_thread_id) workspaceThreadId = thread.workspace_thread_id;
     // Only when the thread has no session of its own yet — a split child's first
     // turn. Once it has resumed once, it owns a session and these are irrelevant.
@@ -1237,6 +1288,9 @@ async function executeRunBody(runId: string): Promise<void> {
     env.CLAUDE_RUN_ID = run.id;
     env.CLAUDE_ORG_ID = run.org_id;
     if (run.thread_id) env.CLAUDE_THREAD_ID = run.thread_id;
+    // The short human code (e.g. "K7") the user hands between sessions to point at
+    // this thread — so the session can answer "what's your id?" without a lookup.
+    if (threadCode) env.CLAUDE_THREAD_CODE = threadCode;
   }
 
   // Supabase migration credentials. Without the access token a run can WRITE a
@@ -1578,11 +1632,34 @@ async function executeRunBody(runId: string): Promise<void> {
     }, timeoutMs);
 
     let stdoutRest = "";
+    // We are inside a single line that blew past MAX_LINE_CHARS and are skipping
+    // the rest of it up to its newline (see the size guard below).
+    let dropLine = false;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
+      // Split incrementally: scan only the freshly-arrived chunk for newlines (a
+      // newline in the old remainder would already have been consumed). The old
+      // `stdoutRest.split("\n")` over the WHOLE buffer every chunk was O(n^2) for
+      // a single huge no-newline line — a 40MB tool_result blocked the shared
+      // event loop ~21s, stalling every concurrent chat load to a 502.
+      const lines: string[] = [];
+      let searchFrom = stdoutRest.length;
       stdoutRest += chunk;
-      const lines = stdoutRest.split("\n");
-      stdoutRest = lines.pop() ?? "";
+      let lineStart = 0;
+      for (;;) {
+        const nl = stdoutRest.indexOf("\n", searchFrom);
+        if (nl === -1) break;
+        const line = stdoutRest.slice(lineStart, nl);
+        lineStart = nl + 1;
+        searchFrom = nl + 1;
+        // The newline that closes the giant line we started dropping — resume normally.
+        if (dropLine) {
+          dropLine = false;
+          continue;
+        }
+        lines.push(line);
+      }
+      if (lineStart > 0) stdoutRest = stdoutRest.slice(lineStart);
       for (const raw of lines) {
         const trimmed = raw.trim();
         if (!trimmed) continue;
@@ -1641,7 +1718,7 @@ async function executeRunBody(runId: string): Promise<void> {
           const info = obj.rate_limit_info as Record<string, unknown> | undefined;
           const kind = info?.rateLimitType;
           if (info && (kind === "five_hour" || kind === "seven_day")) {
-            void recordUsageWindow(run.claude_account ?? PRIMARY_ACCOUNT, kind, info);
+            void recordUsageWindow(effectiveAccount ?? PRIMARY_ACCOUNT, kind, info);
           }
         }
         const mapped = mapLine(parsed, nextSeq);
@@ -1660,6 +1737,24 @@ async function executeRunBody(runId: string): Promise<void> {
         }
         buffer.push(...mapped);
         if (buffer.length >= FLUSH_EVERY) void flush();
+      }
+      // Size guard — runs AFTER the line loop so its truncated-head event gets a
+      // seq that follows any complete lines in the same chunk. A remaining line
+      // with no newline that grew past the cap is a giant tool_result: keep a
+      // truncated head as a system event so the transcript isn't silent, then
+      // drop the rest of that line until its newline (dropLine).
+      if (stdoutRest.length > MAX_LINE_CHARS) {
+        if (!dropLine) {
+          buffer.push({
+            seq: nextSeq(),
+            kind: "system",
+            text: `${truncate(stdoutRest) ?? ""} …[פלט חתוך: שורת פלט חורגת מ-${MAX_LINE_CHARS} תווים]`,
+            tool_name: null,
+            payload: null,
+          });
+        }
+        stdoutRest = "";
+        dropLine = true;
       }
     });
 
@@ -1693,7 +1788,9 @@ async function executeRunBody(runId: string): Promise<void> {
     running.delete(runId);
     // Whatever tail the holdback still held — the process is done, flush it.
     flushDeltas(true);
-    if (stdoutRest.trim()) {
+    // Skip a tail we were mid-drop on (an oversized final line already recorded
+    // its truncated head via the size guard) — don't re-emit its partial remainder.
+    if (!dropLine && stdoutRest.trim()) {
       buffer.push({
         seq: nextSeq(),
         kind: "system",
@@ -1823,10 +1920,10 @@ async function executeRunBody(runId: string): Promise<void> {
       // record_claude_usage_hit reconstructs the account's window and snapshots its
       // consumption from claude_runs; idempotent per (account, kind, window). The
       // CLI names which limit was hit ("weekly limit" vs "session limit").
-      if (run.claude_account) {
+      if (effectiveAccount) {
         const usageKind = /weekly\s+limit/i.test(failureText) ? "weekly" : "session";
         const { error: hitErr } = await db.rpc("record_claude_usage_hit", {
-          p_account: run.claude_account,
+          p_account: effectiveAccount,
           p_kind: usageKind,
           p_reset_at: resetAt ? resetAt.toISOString() : null,
         });

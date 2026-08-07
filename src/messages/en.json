@@ -4778,10 +4778,12 @@
       "failed": "Last turn failed",
       "idle": "Hasn't run yet",
       "waitUsage": "Waiting for the usage window",
+      "waitDeploy": "Server updating — the message will start when it's back",
       "waitMerge": "Waiting to merge into main",
       "needsApproval": "Needs you: migration approval",
       "needsConflict": "Needs you: resolve a merge conflict",
       "needsAnswer": "Needs you: an unanswered question",
+      "conflictResolving": "Merge conflict — resolving automatically",
       "shipLive": "Merged to main and live in production ✓",
       "shipFailed": "Pushed to main but the build failed",
       "shipBuilding": "Pushed to main — build running",
@@ -4803,6 +4805,8 @@
     "loadingThread": "Loading conversation…",
     "loadError": "Couldn't load the conversation",
     "retry": "Try again",
+    "loadingEarlier": "Loading earlier messages…",
+    "turnRenderError": "This message could not be displayed",
     "threadGone": "This conversation no longer exists",
     "thinking": "Thinking…",
     "live": {
@@ -4896,11 +4900,13 @@
       "openDashboard": "Open dashboard",
       "statusPage": "Status page"
     },
-    "group": {
-      "toggle": "Group by topic",
-      "now": "Group now",
-      "done": "Grouping updated",
-      "none": "No topic"
+    "stateGroup": {
+      "needsYou": "Waiting on you",
+      "working": "In progress",
+      "problem": "Problems",
+      "shipped": "Shipped",
+      "quiet": "Quiet",
+      "handled": "Handled"
     },
     "search": {
       "open": "Search chats",
@@ -4915,7 +4921,8 @@
       "countdown": "~{mins} min left",
       "soon": "any moment",
       "failed": "Merge failed",
-      "conflict": "Merge conflict"
+      "conflict": "Merge conflict",
+      "conflictResolving": "Conflict — the session is resolving and re-shipping"
     },
     "usage": {
       "tokens": "tokens",
