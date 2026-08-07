@@ -63,7 +63,7 @@ import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { Scissors, ExternalLink, ListTree, Search } from "lucide-react";
+import { Scissors, ExternalLink, ListTree, Search, Lightbulb, Send, Plus } from "lucide-react";
 
 /**
  * Models, with the id visible — not just a friendly name.
@@ -158,6 +158,10 @@ interface Thread {
    *  account (the default); any other id (e.g. "automation") is one of the extra
    *  accounts the server's registry exposes. */
   claude_account: string | null;
+  /** 'normal' (default) or 'idea' — an idea-warehouse (מחסן רעיונות) capture chat:
+   *  no repo, a lightweight idea preamble instead of the heavy standing instructions,
+   *  and its own rail group. Set at create time; see migration 20260807165353. */
+  kind?: "normal" | "idea";
   last_message_at: string;
   /** When the user marked this thread handled from the rail (green check). Null =
    *  not handled. A handled thread dims and sorts to the bottom of the rail. */
@@ -359,6 +363,11 @@ export function ClaudeChat() {
    *  and without holding them the thread was created on the default model — so
    *  picking Sonnet and sending ran Opus with no error shown. */
   const [pending, setPending] = useState<Record<string, unknown>>({});
+  /** True while composing a NEW idea-warehouse (מחסן רעיונות) chat — set by the 💡
+   *  button, read once by ensureThread to create the thread with kind:"idea", then
+   *  reset. Any other entry to a chat (a normal new-chat button, opening an existing
+   *  thread) clears it, so it can never leak onto a normal chat. */
+  const [newChatIdea, setNewChatIdea] = useState(false);
   /** The open split proposal for the current thread, its children, and whether the
    *  review dialog / a manual analysis is in flight. */
   const [splitProposal, setSplitProposal] = useState<SplitProposal | null>(null);
@@ -469,6 +478,9 @@ export function ClaudeChat() {
     setActiveId(null);
     activeIdRef.current = null;
     setTurns([]);
+    // Default a fresh composer to a NORMAL chat; the 💡 button re-arms idea mode
+    // AFTER calling this, so its setNewChatIdea(true) wins the batched update.
+    setNewChatIdea(false);
   }, []);
 
   // The Claude button opens a NEW chat: it navigates to /claude?new=<timestamp>,
@@ -526,6 +538,10 @@ export function ClaudeChat() {
     autoOpenedRef.current = true;
     setActiveId(null);
     activeIdRef.current = null;
+    // A seeded chat is always a normal chat — clear any armed idea mode so a seed
+    // (inspect-mark, or "send idea to a normal chat") can never create a kind:"idea"
+    // thread. Matches the newChatIdea contract: any other entry to a chat clears it.
+    setNewChatIdea(false);
     if (seed.repo) {
       setPending((prev) => ({ ...prev, repo: seed.repo, git_branch: seed.branch ?? null }));
     }
@@ -1058,10 +1074,14 @@ export function ClaudeChat() {
           // The last-picked account is the new-chat default (bug 10); an explicit
           // per-session pick in `pending` still wins over it.
           ...(lastAccount ? { claude_account: lastAccount } : {}),
+          // Idea-warehouse chat: the backend drops the repo and swaps in the idea
+          // preamble. Only sent when the 💡 button armed it.
+          ...(newChatIdea ? { kind: "idea" } : {}),
           ...pending,
         },
       });
       setPending({});
+      setNewChatIdea(false);
       setThreads((prev) => [created, ...prev]);
       setThread(created);
       // Carry the "new chat" draft onto the real id, synchronously and BEFORE
@@ -1085,7 +1105,7 @@ export function ClaudeChat() {
       toast.error(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [activeId, pending, defaultModel, defaultEffort, lastAccount]);
+  }, [activeId, pending, defaultModel, defaultEffort, lastAccount, newChatIdea]);
 
   const send = useCallback(
     async (message: string, attachmentIds: string[]) => {
@@ -1293,6 +1313,8 @@ export function ClaudeChat() {
   const pickThread = useCallback((id: string | null) => {
     setActiveId(id);
     if (id === null) setTurns([]);
+    // Opening any thread — or the plain new-chat button — is never idea mode.
+    setNewChatIdea(false);
     try {
       if (window.matchMedia("(max-width: 767.98px)").matches) setListOpen(false);
     } catch {
@@ -1328,6 +1350,29 @@ export function ClaudeChat() {
             >
               <MessageSquarePlus className="size-4" />
               {t("newChat")}
+            </Button>
+            {/* מחסן רעיונות — a lightbulb+ that opens a lightweight idea-capture chat
+                (no repo, idea preamble). Quiet icon button, compact-UI convention. */}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0"
+              onClick={() => {
+                resetToNewChat();
+                setNewChatIdea(true);
+                try {
+                  if (window.matchMedia("(max-width: 767.98px)").matches) setListOpen(false);
+                } catch {
+                  /* no matchMedia (SSR) */
+                }
+              }}
+              aria-label={t("idea.newChat")}
+              title={t("idea.newChat")}
+            >
+              <span className="relative inline-flex">
+                <Lightbulb className="size-4" />
+                <Plus className="absolute -end-1 -top-1 size-2.5" strokeWidth={3} />
+              </span>
             </Button>
             {/* Collapsed search — a quiet magnifier; click to reveal the filter input
                 below (compact-UI convention). */}
@@ -1552,12 +1597,36 @@ export function ClaudeChat() {
             onClick={() => {
               setActiveId(null);
               setTurns([]);
+              setNewChatIdea(false);
             }}
             aria-label={t("newChat")}
             title={t("newChat")}
           >
             <MessageSquarePlus className="size-4" />
           </Button>
+          {/* מחסן רעיונות → צ'אט רגיל: once Claude has documented the idea, carry that
+              write-up into a fresh NORMAL chat (with the primary repo, applied by the
+              backend) as its opening draft. The idea thread stays as the archive. */}
+          {thread?.kind === "idea" && turns.some((x) => x.result_summary?.trim()) && (
+            <Button
+              size="sm"
+              variant="default"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => {
+                const lastDoc = [...turns]
+                  .reverse()
+                  .find((x) => x.result_summary?.trim())
+                  ?.result_summary?.trim();
+                const seedBody = lastDoc || thread?.title || "";
+                const heading = thread?.title?.trim() ? `## ${thread.title.trim()}\n\n` : "";
+                applySeed({ text: `${t("idea.seedIntro")}\n\n${heading}${seedBody}` });
+              }}
+              title={t("idea.sendToNormal")}
+            >
+              <Send className="size-4" />
+              {t("idea.sendToNormal")}
+            </Button>
+          )}
           {/* Split — only meaningful once there's a conversation to split. Quiet
               icon; a spinner while the analysis run is in flight. */}
           {activeId && turns.length >= 4 && (
@@ -2157,9 +2226,14 @@ function renderStateGroupedRail(
   toggleShowHandled: () => void,
 ): ReactNode {
   const handled = threads.filter((x) => x.handled_at);
+  // מחסן רעיונות (idea threads) form their own group and leave the state buckets —
+  // an idea chat has no meaningful ship/merge/needs-you state to sort by. Handled
+  // still wins (a ✓'d idea drops to the handled bucket like any other thread).
+  const ideas = threads.filter((x) => x.kind === "idea" && !x.handled_at);
   const buckets = new Map<RailCategory, Thread[]>();
   for (const th of threads) {
     if (th.handled_at) continue; // handled leaves every state bucket
+    if (th.kind === "idea") continue; // idea threads have their own group
     const cat = threadCategory(th);
     const list = buckets.get(cat);
     if (list) list.push(th);
@@ -2167,6 +2241,31 @@ function renderStateGroupedRail(
   }
 
   const groups: ReactNode[] = [];
+
+  // The idea warehouse sits at the top of the rail — a standing place the user
+  // returns to, distinct from the state-driven buckets below it.
+  if (ideas.length > 0) {
+    groups.push(
+      <div key="__ideas">
+        <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          <Lightbulb className="size-3" />
+          <span>{t("idea.group")}</span>
+          <span className="tabular-nums opacity-60">{ideas.length}</span>
+        </p>
+        {ideas.map((r) => (
+          <ThreadRow
+            key={r.id}
+            thread={r}
+            active={activeId === r.id}
+            onOpen={() => setActiveId(r.id)}
+            onRemove={() => remove(r.id)}
+            onToggleHandled={() => toggleHandled(r.id, !r.handled_at)}
+            t={t}
+          />
+        ))}
+      </div>,
+    );
+  }
   for (const cat of RAIL_CATEGORY_ORDER) {
     const rows = buckets.get(cat);
     if (!rows || rows.length === 0) continue;

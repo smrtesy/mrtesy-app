@@ -64,7 +64,7 @@ const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const THREAD_COLS =
-  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, archived_at, last_message_at, created_at, handled_at, task_serial, serial, serial_display, ship_state, ship_detail, ship_branch";
+  "id, title, title_source, session_id, model, effort, repo, git_branch, playbook_id, claude_account, kind, archived_at, last_message_at, created_at, handled_at, task_serial, serial, serial_display, ship_state, ship_detail, ship_branch";
 
 /** Is `account` one the runner can route to right now? The valid ids are the
  *  runner's registry (listAccountIds — primary + the configured extras), so this
@@ -479,12 +479,21 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
   const account = str(body.claude_account, 32);
   if (account && !(await isKnownAccount(account)))
     return res.status(400).json({ error: "invalid claude_account" });
+  // Thread kind: 'normal' (the default) or 'idea' (מחסן רעיונות — a lightweight
+  // capture chat with NO repo and a dedicated idea preamble instead of the heavy
+  // standing instructions; see composePrompt's idea branch and migration
+  // 20260807165353). Any other value is rejected rather than silently coerced.
+  const kind = str(body.kind, 16) || "normal";
+  if (kind !== "normal" && kind !== "idea")
+    return res.status(400).json({ error: "kind must be normal or idea" });
 
   // Auto-connect the repo: when the caller didn't pick one, default to the org's
   // primary repo so the workspace has real code from turn one — the backend clones
   // it (ensureClone), NOT Claude via a shell command that a headless run can't
   // approve. `null` when the org has no repos, which just leaves the workspace bare.
-  const finalRepo = repo || (await primaryRepoForOrg(req.org!.id));
+  // An idea thread deliberately gets NO repo: it is a text-only capture chat, so we
+  // skip the primary-repo default entirely (an explicit repo is ignored too).
+  const finalRepo = kind === "idea" ? null : repo || (await primaryRepoForOrg(req.org!.id));
 
   // Fall back to the org's chosen defaults (claude_instructions.default_model /
   // default_effort) when this create didn't specify one, so "every new chat opens
@@ -523,6 +532,7 @@ router.post("/claude/threads", async (req: Request, res: Response) => {
       git_branch: gitBranch || null,
       playbook_id: playbookId,
       claude_account: account || null,
+      kind,
     })
     .select(THREAD_COLS)
     .single();
@@ -1029,7 +1039,7 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
 
   const { data: thread, error: tErr } = await db
     .from("claude_threads")
-    .select("id, session_id, model, effort, repo, git_branch, playbook_id, claude_account, title, title_source, workspace_thread_id")
+    .select("id, session_id, model, effort, repo, git_branch, playbook_id, claude_account, kind, title, title_source, workspace_thread_id")
     .eq("id", req.params.id)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -1098,7 +1108,9 @@ router.post("/claude/threads/:id/messages", async (req: Request, res: Response) 
   // have created the session it resumes into.
   const isFirst = !thread.session_id && !hasLive;
   const composed = isFirst
-    ? await composePrompt(orgId, message || "(ראה את הקבצים המצורפים)", thread.playbook_id)
+    ? await composePrompt(orgId, message || "(ראה את הקבצים המצורפים)", thread.playbook_id, {
+        idea: thread.kind === "idea",
+      })
     : { prompt: message || "(ראה את הקבצים המצורפים)", playbook: null };
 
   // No engine session to resume, yet the thread already has turns — the first turn
@@ -1341,12 +1353,16 @@ export async function dispatchNextWaiting(threadId: string, orgId: string): Prom
     // dead turn(s) said.
     const { data: tRow } = await db
       .from("claude_threads")
-      .select("session_id, playbook_id")
+      .select("session_id, playbook_id, kind")
       .eq("id", next.thread_id)
       .maybeSingle();
     if (tRow && !tRow.session_id) {
       const base = next.prompt?.trim() || next.user_prompt?.trim() || "(ראה את הקבצים המצורפים)";
-      const composed = await composePrompt(orgId, base, tRow.playbook_id);
+      // Keep idea mode on this recompose too: an idea thread whose first turn died
+      // sessionless must still get the lightweight idea preamble, not the heavy one.
+      const composed = await composePrompt(orgId, base, tRow.playbook_id, {
+        idea: tRow.kind === "idea",
+      });
       let promptText = composed.prompt;
       if (next.turn_index > 1) {
         const history = await buildHistoryPreamble(next.thread_id, next.turn_index);
