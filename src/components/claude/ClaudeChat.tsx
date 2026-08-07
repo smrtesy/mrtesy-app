@@ -2310,7 +2310,6 @@ function renderStateGroupedRail(
     groups.push(
       <div key="__ideas">
         <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-          <Lightbulb className="size-3" />
           <span>{t("idea.group")}</span>
           <span className="tabular-nums opacity-60">{ideas.length}</span>
         </p>
