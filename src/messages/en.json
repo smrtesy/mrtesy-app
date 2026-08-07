@@ -4888,11 +4888,13 @@
       "error": "failed",
       "unknown": "unknown"
     },
-    "group": {
-      "toggle": "Group by topic",
-      "now": "Group now",
-      "done": "Grouping updated",
-      "none": "No topic"
+    "stateGroup": {
+      "needsYou": "Waiting on you",
+      "working": "In progress",
+      "problem": "Problems",
+      "shipped": "Shipped",
+      "quiet": "Quiet",
+      "handled": "Handled"
     },
     "search": {
       "open": "Search chats",

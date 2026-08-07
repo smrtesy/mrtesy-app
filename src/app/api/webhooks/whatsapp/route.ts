@@ -1012,6 +1012,51 @@ async function existingOcr(
   return null;
 }
 
+// Pull a short slice of the chat's recent messages to give the audio
+// transcriber acoustic context. Blind transcription mis-heard a real voice
+// note ("share"→"show" flipped the meaning; a surname split one caller into
+// "Simon" and "Chaim" — T1997); the recent thread text lets Gemini resolve an
+// ambiguous word/name by what the conversation is about. Best-effort by
+// design: any failure (or an empty/media-only thread) returns "" and the
+// transcription runs context-free exactly as before. The current message is
+// not stored yet, so it can't leak into its own context.
+async function fetchTranscriptionContext(
+  db: SupabaseAdmin,
+  userId: string,
+  chatId: string,
+): Promise<string> {
+  try {
+    const { data: msgs, error } = await db
+      .from("whatsapp_messages")
+      .select("direction, body_text")
+      .eq("user_id", userId)
+      .eq("chat_id", chatId)
+      .order("received_at", { ascending: false })
+      .limit(10);
+    if (error || !msgs || msgs.length === 0) return "";
+    // Placeholders ("[אודיו …]", "[הקלטה ארוכה …]", OCR failures) are noise —
+    // they carry no words to disambiguate against, so skip them.
+    const PLACEHOLDER_RE = /^\[(אודיו|הקלטה|תמונה|קובץ|מסמך|וידאו|סטיקר)/u;
+    const lines: string[] = [];
+    let used = 0;
+    for (const m of msgs) {
+      let text = String(m.body_text ?? "").replace(/\s+/g, " ").trim();
+      if (!text || PLACEHOLDER_RE.test(text)) continue;
+      if (text.length > 300) text = text.slice(0, 300) + " …";
+      const dir = String(m.direction ?? "incoming").toUpperCase() === "OUTGOING" ? "אני" : "הצד השני";
+      const line = `${dir}: ${text}`;
+      used += line.length + 1;
+      if (used > 1500 && lines.length > 0) break;
+      lines.push(line);
+    }
+    if (lines.length === 0) return "";
+    // msgs came newest-first; present the context chronologically.
+    return lines.reverse().join("\n");
+  } catch {
+    return "";
+  }
+}
+
 async function buildMessageRow(
   db: SupabaseAdmin,
   userId: string,
@@ -1106,6 +1151,12 @@ async function buildMessageRow(
             break;
           }
 
+          // Recent chat text as acoustic context for the transcriber
+          // (best-effort — "" on any failure). Fetched BEFORE budgetMs so the
+          // lookup's own time is subtracted from the transcription budget, not
+          // hidden from it.
+          const chatContext = await fetchTranscriptionContext(db, userId, nm.chatId);
+
           // Delivery budget: the audio is already stored above, so running out
           // of time costs the transcript, never the recording.
           const budgetMs = mediaDeadline - Date.now();
@@ -1119,6 +1170,7 @@ async function buildMessageRow(
             blob.mimeType,
             "gemini.whatsapp",
             budgetMs,
+            chatContext,
           );
           body = transcript;
         } catch (e) {
