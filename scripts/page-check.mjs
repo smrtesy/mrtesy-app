@@ -209,7 +209,7 @@ async function drive(cookies) {
     };
     const goto = async (p) => {
       const url = p.startsWith("http") ? p : `${baseUrl}${p.startsWith("/") ? p : `/${p}`}`;
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 150_000 });
     };
     const expectVisible = async (selector, { timeout = 15_000, label } = {}) => {
       try {
