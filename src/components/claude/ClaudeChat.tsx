@@ -2372,14 +2372,18 @@ class TurnErrorBoundary extends Component<
   }
 }
 
-/** Progressive render: a heavy thread (hundreds of bubbles, each a full Markdown
- *  parse) blocked the UI for seconds on open — reading as a blank screen. Only the
- *  newest TURN_WINDOW turns mount by default; a "show earlier" row reveals older
- *  ones in steps. Newest turns always render (the list is sliced from the end), so
- *  a live/last turn and its interactive blocks are never hidden. Keyed by thread in
- *  the parent, so the window resets to the tail on every thread switch. */
-const TURN_WINDOW = 15;
-const TURN_WINDOW_STEP = 25;
+/** Progressive render, tail-first. A heavy thread's content costs seconds of CPU
+ *  to render — measured at ~6s on a 4x-throttled (phone-class) device — and React
+ *  did all of it BEFORE the first paint, so the screen sat blank for seconds and
+ *  read as broken. Fix: mount only the last few (cheap, newest) turns on first
+ *  paint — what the user sees at the bottom — then fill in the older, heavier turns
+ *  automatically after paint, a few per requestIdleCallback slice, so their render
+ *  work is spread across frames instead of blocking the first paint. No button; the
+ *  fill is automatic. Newest turns always render (the list is sliced from the end),
+ *  so a live/last turn and its interactive blocks are never hidden. Keyed by thread
+ *  in the parent, so the budget resets to the tail on every thread switch. */
+const TURN_PAINT_INITIAL = 3;
+const TURN_FILL_STEP = 4;
 
 function TurnList(props: {
   turns: Turn[];
@@ -2391,32 +2395,48 @@ function TurnList(props: {
   onStop: () => void;
 }) {
   const { turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop } = props;
-  const [visible, setVisible] = useState(TURN_WINDOW);
   // Build the full node list first so the moved-turn folding, lastLiveIndex and
   // context-restored gating stay computed over the WHOLE thread; only the tail is
-  // mounted.
-  const nodes = renderTurns(turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop);
-  // Grow the window by however many nodes appeared, so a new turn arriving on a
-  // live thread never folds an older turn the user already revealed back behind
-  // "show earlier" — the hidden count stays put while the newest turn shows.
+  // mounted, growing to the full list after first paint.
+  const { nodes, lastLiveNodeIndex } = renderTurns(turns, childThreads, t, openThread, onCancelWaiting, onAction, onStop);
+  // The first-paint window must always include the last live turn (its interactive
+  // blocks must stay live), even if trailing moved-turn rows push it off the last
+  // few nodes — so floor the initial budget on the tail from that turn onward.
+  const tailFloor = lastLiveNodeIndex >= 0 ? nodes.length - lastLiveNodeIndex : 0;
+  const [budget, setBudget] = useState(() => Math.max(TURN_PAINT_INITIAL, tailFloor));
+  // As a live thread grows, keep the newest turns rendered — grow the budget by
+  // however many nodes appeared so the incoming turn is always in the tail window.
   const prevCount = useRef(nodes.length);
   useEffect(() => {
     const grew = nodes.length - prevCount.current;
     prevCount.current = nodes.length;
-    if (grew > 0) setVisible((v) => v + grew);
+    if (grew > 0) setBudget((b) => b + grew);
   }, [nodes.length]);
-  const hidden = Math.max(0, nodes.length - visible);
+  // Fill older turns in after first paint, a few per idle slice, until all mount.
+  // requestIdleCallback yields to the browser between slices; the timeout fallback
+  // covers browsers/SSR where it's absent.
+  useEffect(() => {
+    if (budget >= nodes.length) return;
+    const step = () => setBudget((b) => Math.min(nodes.length, b + TURN_FILL_STEP));
+    const ric = typeof window !== "undefined" ? window.requestIdleCallback : undefined;
+    if (ric) {
+      const id = ric(step, { timeout: 250 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = setTimeout(step, 32);
+    return () => clearTimeout(id);
+  }, [budget, nodes.length]);
+  const hidden = Math.max(0, nodes.length - budget);
   const shown = hidden > 0 ? nodes.slice(hidden) : nodes;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-3">
       {hidden > 0 && (
-        <button
-          type="button"
-          onClick={() => setVisible((v) => v + TURN_WINDOW_STEP)}
-          className="mx-auto rounded-full border border-dashed px-3 py-1 text-[11px] text-muted-foreground transition hover:bg-muted"
-        >
-          {t("showEarlier", { count: hidden })}
-        </button>
+        // Quiet placeholder while the older turns stream in — no action needed, so
+        // it's an indicator, not a button. It disappears once all turns are mounted.
+        <div className="mx-auto flex items-center gap-1.5 py-1 text-[11px] text-muted-foreground">
+          <Loader2 className="size-3 animate-spin" />
+          {t("loadingEarlier")}
+        </div>
       )}
       {shown}
     </div>
@@ -2436,9 +2456,13 @@ function renderTurns(
   onCancelWaiting: (id: string) => void,
   onAction: (message: string) => Promise<void> | void,
   onStop: () => void,
-): ReactNode[] {
+): { nodes: ReactNode[]; lastLiveNodeIndex: number } {
   const childName = new Map(children.map((c) => [c.id, c.title]));
   const out: ReactNode[] = [];
+  // Position in `out` of the last live turn's node (the one whose interactive
+  // blocks stay live). TurnList uses it to guarantee that turn is inside the
+  // first-paint window even when trailing moved-turn rows follow it.
+  let lastLiveNodeIndex = -1;
   // The last turn that actually renders (moved turns collapse into a link row,
   // not a TurnView) — the only turn whose interactive blocks stay live. Using
   // turns.length-1 would strand a live block behind trailing moved turns.
@@ -2460,6 +2484,7 @@ function renderTurns(
   while (i < turns.length) {
     const turn = turns[i];
     if (!turn.moved_to_thread_id) {
+      if (i === lastLiveIndex) lastLiveNodeIndex = out.length;
       out.push(
         // Each bubble is isolated: one malformed/oversized event that throws
         // during render collapses to a quiet one-line fallback instead of
@@ -2499,7 +2524,7 @@ function renderTurns(
     );
     i = j;
   }
-  return out;
+  return { nodes: out, lastLiveNodeIndex };
 }
 
 /**
