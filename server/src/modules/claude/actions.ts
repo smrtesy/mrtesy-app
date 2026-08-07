@@ -97,6 +97,27 @@ export async function requestMigrationApproval(
 
   const sample = Array.isArray(input.sampleRows) ? input.sampleRows.slice(0, MAX_SAMPLE_ROWS) : [];
 
+  // A card MUST carry its thread_id: it is what links the card back to the
+  // conversation that raised it (the in-thread card + the panel pointer), and —
+  // crucially — what lets the approved apply run inherit a stable working
+  // directory (a repo run with no thread fails "must belong to a thread",
+  // runner.ts). A run that forgot to pass thread_id but did pass run_id is not
+  // lost: the run itself knows its thread, so derive it from claude_runs rather
+  // than recording a null and breaking both.
+  let threadId = input.threadId ?? null;
+  if (!threadId && input.runId) {
+    const { data: runRow, error: runErr } = await db
+      .from("claude_runs")
+      .select("thread_id")
+      .eq("id", input.runId)
+      .maybeSingle();
+    if (runErr) {
+      console.error("[claude/actions] thread_id derive from run failed:", runErr.message);
+    } else if (runRow?.thread_id) {
+      threadId = runRow.thread_id;
+    }
+  }
+
   const { data, error } = await db
     .from("claude_action_approvals")
     .insert({
@@ -113,7 +134,7 @@ export async function requestMigrationApproval(
         affected_count: input.affectedCount ?? null,
         sample_rows: sample,
       },
-      thread_id: input.threadId ?? null,
+      thread_id: threadId,
       run_id: input.runId ?? null,
     })
     .select("id")
@@ -169,7 +190,7 @@ export async function decideApproval(
 ): Promise<DecideResult> {
   const { data: row, error: loadErr } = await db
     .from("claude_action_approvals")
-    .select("id, status, payload")
+    .select("id, status, payload, thread_id")
     .eq("id", approvalId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -251,6 +272,10 @@ export async function decideApproval(
       user_prompt: applyPrompt,
       repo,
       git_branch: gitBranch,
+      // A repo run needs a thread for its stable working directory (runner.ts:
+      // "must belong to a thread"). Inherit the approval's thread so the apply
+      // runs in the same checkout that wrote the migration file.
+      thread_id: row.thread_id ?? null,
       status: "queued",
     })
     .select("id")

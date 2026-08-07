@@ -4876,7 +4876,9 @@
       "reject": "Reject",
       "approved": "Approved — applying now",
       "rejected": "Rejected — nothing ran",
-      "decideFailed": "Action failed"
+      "decideFailed": "Action failed",
+      "openInThread": "Open in chat",
+      "inThreadIntro": "Claude is requesting approval for a destructive migration in this chat"
     },
     "deploy": {
       "label": "System status",

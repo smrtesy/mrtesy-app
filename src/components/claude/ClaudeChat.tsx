@@ -62,6 +62,7 @@ import { SplitReview, type ProposedTopic } from "./SplitReview";
 import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
+import { ThreadApprovals } from "./ThreadApprovals";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
 import { Scissors, ExternalLink, ListTree, Search } from "lucide-react";
 
@@ -1620,11 +1621,12 @@ export function ClaudeChat() {
           </div>
         )}
 
-        {/* Pending destructive-migration approvals — the human side of the autonomy
-            gate. Renders nothing when the queue is empty, so it adds no permanent
-            chrome; it is org-wide (not per-thread), which is why it sits here rather
-            than inside a thread's conversation. */}
-        <ApprovalsPanel />
+        {/* Pending destructive-migration approvals — the org-wide side of the
+            hybrid gate. Renders nothing when the queue is empty (no permanent
+            chrome); each pending migration is a quiet POINTER to the thread that
+            raised it. The full decision card lives in-thread (ThreadApprovals,
+            below), so the human decides with context. */}
+        <ApprovalsPanel locale={locale} />
 
         {/* The one collapsed panel that holds everything else. Model and effort used
             to live here; they moved down to the composer toolbar (like Claude Code),
@@ -1725,6 +1727,10 @@ export function ClaudeChat() {
 
         {/* Conversation */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          {/* In-thread destructive-migration approval(s): the full decision card,
+              shown in the conversation that raised it so the human decides with
+              full context. The org-wide panel above only points here. */}
+          <ThreadApprovals threadId={activeId} />
           {turns.length === 0 ? (
             activeId && threadLoad === "loading" ? (
               <div className="flex items-center justify-center gap-2 pt-8 text-sm text-muted-foreground">
