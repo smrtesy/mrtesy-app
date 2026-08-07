@@ -267,6 +267,31 @@ const TRANSCRIPTION_PROMPT =
   "\n" +
   "הפלט שלך נכנס ישירות לצ'אט של המשתמש כאילו הוא הקליד אותו בעצמו.";
 
+// Blind transcription mis-hears words the conversation would have disambiguated
+// — "share"→"show" flipped the meaning of a real voice note (T1997), and a
+// surname heard once as "Simon" once as "Chaim" split one caller into two.
+// Feeding the recent chat text as ACOUSTIC context lets Gemini resolve an
+// ambiguous word/name by what the thread is actually about. Guardrails are
+// explicit so context helps decoding without letting the model rewrite clear
+// speech or bleed context text into the transcript. Empty context → the plain
+// prompt, unchanged (SMS path and any caller that passes none).
+function buildTranscriptionPrompt(context?: string): string {
+  const ctx = (context ?? "").trim();
+  if (!ctx) return TRANSCRIPTION_PROMPT;
+  return (
+    TRANSCRIPTION_PROMPT +
+    "\n\n--- הקשר השיחה (עזר-פענוח בלבד, לא חלק מהאודיו) ---\n" +
+    "להלן ההודעות האחרונות בשיחה שבתוכה נאמרה ההקלטה. השתמש בהן אך ורק כדי " +
+    "לפענח נכון מילים, שמות ומונחים שנשמעים מעורפלים באודיו (שם פרטי, שם ארגון, " +
+    "מונח מקצועי, מילה שיכולה להישמע בשתי צורות).\n" +
+    "אזהרות מחייבות:\n" +
+    "• אל תשנה מילה שנאמרה ברור באודיו רק מפני שהיא לא מתאימה להקשר.\n" +
+    "• אל תעתיק, תוסיף או תשלב טקסט מההקשר לתוך התמלול — התמלול הוא של האודיו בלבד.\n" +
+    "• אם קטע לא ברור וההקשר לא עוזר — כתוב [לא ברור]. אל תמציא.\n" +
+    ctx
+  );
+}
+
 export function sanitizeTranscript(text: string): string {
   let out = text.trim();
 
@@ -308,10 +333,11 @@ export async function transcribeAudio(
   mimeType: string,
   component: string,
   budgetMs?: number,
+  context?: string,
 ): Promise<string> {
   const raw = await callGemini(
     db,
-    TRANSCRIPTION_PROMPT,
+    buildTranscriptionPrompt(context),
     base64Data,
     mimeType || "audio/ogg",
     component,
