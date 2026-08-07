@@ -2121,7 +2121,9 @@ const RAIL_CATEGORY_ORDER: RailCategory[] = [
 function threadCategory(thread: Thread): RailCategory {
   if (thread.deploy) return "merge";
   if (thread.awaiting_reply || thread.needs_you) return "needsYou";
-  if (thread.live || thread.usage_wait_until != null) return "working";
+  // live now, or waiting to run (usage window / a backend deploy the turn holds for) —
+  // all render an amber running/waiting glyph, so they group under "in progress".
+  if (thread.live || thread.usage_wait_until != null || thread.deploy_wait) return "working";
   const ship = thread.ship?.state;
   if (ship === "main_live" || ship === "main_building" || ship === "pushed_branch") return "shipped";
   if (ship === "failed" || thread.last_status === "failed") return "problem";
