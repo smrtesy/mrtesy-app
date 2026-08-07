@@ -743,6 +743,95 @@ router.get("/claude/deploy-status", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /api/claude/health-history?hours=<1..336> — passive backend-health history
+ * from `server_health_samples` (sampled every ~30s by health-sampler.ts). Feeds the
+ * SystemStatusStrip history popover. Downsampled server-side to ≤~300 buckets using
+ * MAX aggregation so a spike survives the downsample (an averaged spike vanishes).
+ * Per bucket: worst-case event-loop lag / run count / rss, and the WORST provider
+ * state in the window (so a red blip on any surface shows). Retained 14 days.
+ */
+router.get("/claude/health-history", async (req: Request, res: Response) => {
+  try {
+    const hours = Math.min(24 * 14, Math.max(1, Math.floor(Number(req.query.hours) || 24)));
+    const sinceIso = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const { data, error } = await db
+      .from("server_health_samples")
+      .select(
+        "captured_at, loop_lag_p50_ms, loop_lag_p99_ms, active_runs, rss_mb, vercel_state, railway_state, supabase_state",
+      )
+      .gte("captured_at", sinceIso)
+      .order("captured_at", { ascending: true })
+      .limit(50_000);
+    if (error) throw new Error(error.message);
+
+    const rows = data ?? [];
+    const targetPoints = 300;
+    const bucketSec = Math.max(30, Math.ceil((hours * 3600) / targetPoints));
+
+    // Most-alarming-wins ordering for a bucket's provider state.
+    const SEVERITY: Record<string, number> = { error: 4, warn: 3, building: 2, ready: 1, unknown: 0 };
+    const worseState = (a: string | null, b: string | null): string | null => {
+      if (a == null) return b;
+      if (b == null) return a;
+      return (SEVERITY[a] ?? 0) >= (SEVERITY[b] ?? 0) ? a : b;
+    };
+    const maxN = (a: number | null, b: number | null): number | null => {
+      const av = a == null ? null : Number(a);
+      const bv = b == null ? null : Number(b);
+      if (av == null) return bv;
+      if (bv == null) return av;
+      return Math.max(av, bv);
+    };
+
+    interface Bucket {
+      t: string;
+      lagP50: number | null;
+      lagP99: number | null;
+      runs: number | null;
+      rssMb: number | null;
+      vercel: string | null;
+      railway: string | null;
+      supabase: string | null;
+    }
+    const buckets = new Map<number, Bucket>();
+    for (const r of rows) {
+      const epoch = Math.floor(new Date(r.captured_at as string).getTime() / 1000);
+      const key = Math.floor(epoch / bucketSec);
+      const existing = buckets.get(key);
+      if (!existing) {
+        buckets.set(key, {
+          t: new Date(key * bucketSec * 1000).toISOString(),
+          lagP50: r.loop_lag_p50_ms == null ? null : Number(r.loop_lag_p50_ms),
+          lagP99: r.loop_lag_p99_ms == null ? null : Number(r.loop_lag_p99_ms),
+          runs: r.active_runs == null ? null : Number(r.active_runs),
+          rssMb: r.rss_mb == null ? null : Number(r.rss_mb),
+          vercel: (r.vercel_state as string | null) ?? null,
+          railway: (r.railway_state as string | null) ?? null,
+          supabase: (r.supabase_state as string | null) ?? null,
+        });
+      } else {
+        existing.lagP50 = maxN(existing.lagP50, r.loop_lag_p50_ms as number | null);
+        existing.lagP99 = maxN(existing.lagP99, r.loop_lag_p99_ms as number | null);
+        existing.runs = maxN(existing.runs, r.active_runs as number | null);
+        existing.rssMb = maxN(existing.rssMb, r.rss_mb as number | null);
+        existing.vercel = worseState(existing.vercel, (r.vercel_state as string | null) ?? null);
+        existing.railway = worseState(existing.railway, (r.railway_state as string | null) ?? null);
+        existing.supabase = worseState(existing.supabase, (r.supabase_state as string | null) ?? null);
+      }
+    }
+
+    return res.json({
+      rangeHours: hours,
+      bucketSec,
+      buckets: Array.from(buckets.values()),
+    });
+  } catch (e) {
+    console.error("[claude/health-history] failed:", e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: "could not fetch health history" });
+  }
+});
+
 // ── Dictation ─────────────────────────────────────────────────────────────────
 
 /**

@@ -4882,7 +4882,19 @@
       "building": "building",
       "ready": "ready",
       "error": "failed",
-      "unknown": "unknown"
+      "unknown": "unknown",
+      "history": "History",
+      "stateOverTime": "State over time",
+      "lagP99": "Server lag (p99, ms)",
+      "activeRuns": "Active runs",
+      "max": "max",
+      "range24h": "24h",
+      "range7d": "7d",
+      "range14d": "14d",
+      "loadingHistory": "Loading history…",
+      "noHistory": "No history yet",
+      "openDashboard": "Open dashboard",
+      "statusPage": "Status page"
     },
     "group": {
       "toggle": "Group by topic",

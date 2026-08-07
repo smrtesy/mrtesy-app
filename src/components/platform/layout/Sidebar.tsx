@@ -724,7 +724,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 dots on the end/left of the same row — tap them for details. */}
             <div className="flex items-center justify-between gap-2">
               <SheetTitle className="text-start">{t("more")}</SheetTitle>
-              {isAdmin && <SystemStatusStrip interactive />}
+              {isAdmin && <SystemStatusStrip />}
             </div>
           </SheetHeader>
           <div className="mt-4 min-h-0 flex-1 space-y-1 overflow-y-auto pb-2">

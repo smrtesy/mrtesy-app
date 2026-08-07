@@ -529,6 +529,18 @@ export function isRunLive(runId: string): boolean {
 }
 
 /**
+ * How many console runs this process is executing right now (from the first line
+ * of executeRun through completion — the same `inFlight` set isRunLive reads).
+ * Read by the health sampler (server/src/lib/health-sampler.ts) so event-loop lag
+ * and run load land in the SAME telemetry row: these spawned children are the main
+ * thing that starves the shared HTTP process. Single-instance, like everything else
+ * keyed on this set.
+ */
+export function activeRunCount(): number {
+  return inFlight.size;
+}
+
+/**
  * Stop a turn the user asked to stop. Returns false when this process has no live
  * child for that id — the caller answers honestly instead of claiming success.
  */

@@ -4881,7 +4881,19 @@
       "building": "בונה",
       "ready": "פעיל",
       "error": "נכשל",
-      "unknown": "לא ידוע"
+      "unknown": "לא ידוע",
+      "history": "היסטוריה",
+      "stateOverTime": "מצב לאורך זמן",
+      "lagP99": "השהיית שרת (p99, ms)",
+      "activeRuns": "ריצות פעילות",
+      "max": "שיא",
+      "range24h": "24ש'",
+      "range7d": "7 ימים",
+      "range14d": "14 יום",
+      "loadingHistory": "טוען היסטוריה…",
+      "noHistory": "אין עדיין היסטוריה",
+      "openDashboard": "פתח לוח בקרה",
+      "statusPage": "דף סטטוס"
     },
     "group": {
       "toggle": "קבץ לפי נושא",
