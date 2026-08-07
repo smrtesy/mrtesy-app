@@ -9,7 +9,7 @@
 > added, moved, or renamed — updates this file **in the same commit**; (2) keep it
 > an index, under ~200 lines — area detail belongs in `.claude/rules/<area>.md`
 > (path-scoped, loads only when touching that area) and in `docs/*.md`;
-> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-06.
+> (3) `PROJECT_GUIDE.md` is superseded by this file. Verified: 2026-08-07.
 
 ## The three engines
 
@@ -181,8 +181,10 @@ subtree — resumable via the `folder_expanded` flag) + `drive_catalog_scans`
 (per-root scan state). Populated server-side by the `drive-catalog` machine
 route (`server/src/modules/smrttask/routes/drive-catalog.ts`) walking a shared
 Drive tree via the user's `google_drive` OAuth. Design: `docs/drive-catalog-plan.md`.
-Claude console: 13 `claude_*` tables (threads/runs/events/instructions/
-playbooks/… — listed in `.claude/rules/claude-console.md`). For any table's
+Claude console: the `claude_*` table family (threads/runs/events/instructions/
+playbooks/usage-windows/deploy-queue/… — the authoritative list, kept current,
+is in `.claude/rules/claude-console.md`; grep `claude_` in `supabase/migrations/`
+for the live set rather than trusting a hardcoded count here). For any table's
 authoritative shape, read its migration: `grep -rn "<table>" supabase/migrations/`
 (the oldest tables predate the migrations dir — e.g. `task_activities`,
 `user_credentials` have no CREATE there; check the live schema for those).
