@@ -56,6 +56,11 @@ export interface DeployStatus {
   hint?: string;
   /** A provider/network error, surfaced rather than swallowed. */
   error?: string;
+  /** Deep link to this surface's own dashboard for THIS project (so a status dot
+   *  is one click from the place you'd act). Null when it can't be built. */
+  dashboardUrl?: string | null;
+  /** The provider's public status page. A constant per provider. */
+  statusUrl?: string | null;
 }
 
 async function secret(key: string): Promise<string | null> {
@@ -609,15 +614,55 @@ export async function supabaseStatus(): Promise<DeployStatus> {
   return base;
 }
 
+/** Each provider's public status page — constants. */
+const STATUS_PAGES = {
+  vercel: "https://www.vercel-status.com",
+  railway: "https://status.railway.com",
+  supabase: "https://status.supabase.com",
+} as const;
+
+/** Deep link to the Railway service dashboard for THIS project, from the ids we
+ *  already hold (app_secrets first, then the process's own RAILWAY_* env — this
+ *  process IS the backend service, so its env is the most accurate source). Falls
+ *  back to the project page if service/env aren't known. */
+async function railwayDashboardUrl(): Promise<string | null> {
+  const projectId = (await secret("RAILWAY_PROJECT_ID")) || process.env.RAILWAY_PROJECT_ID || null;
+  if (!projectId) return null;
+  const serviceId = (await secret("RAILWAY_SERVICE_ID")) || process.env.RAILWAY_SERVICE_ID || null;
+  const envId = (await secret("RAILWAY_ENVIRONMENT_ID")) || process.env.RAILWAY_ENVIRONMENT_ID || null;
+  let url = `https://railway.com/project/${projectId}`;
+  if (serviceId) url += `/service/${serviceId}`;
+  if (envId) url += `?environmentId=${envId}`;
+  return url;
+}
+
+/** Deep link to the Supabase project dashboard, from the ref in SUPABASE_URL. */
+function supabaseDashboardUrl(): string | null {
+  const ref = supabaseRef();
+  return ref ? `https://supabase.com/dashboard/project/${ref}` : null;
+}
+
 /** All three surfaces at once — frontend (Vercel), backend (Railway), database
- *  (Supabase). What the sidebar's system-status strip and the run's verify step read. */
+ *  (Supabase). What the sidebar's system-status strip and the run's verify step read.
+ *  Each surface is decorated with a `dashboardUrl` (its own dashboard for this
+ *  project) + `statusUrl` (its public status page) so a status dot is clickable. */
 export async function deployStatus(
   sha?: string,
 ): Promise<{ vercel: DeployStatus; railway: DeployStatus; supabase: DeployStatus }> {
-  const [vercel, railway, supabase] = await Promise.all([
+  const [vercel, railway, supabase, railwayDash] = await Promise.all([
     vercelProductionStatus(sha),
     railwayLatestStatus(),
     supabaseStatus(),
+    railwayDashboardUrl(),
   ]);
+  // Vercel's own inspector URL for the latest deployment is the exact dashboard
+  // deep link; when absent (unconfigured / no deploy) the strip just shows the
+  // status page instead.
+  vercel.dashboardUrl = vercel.inspectorUrl ?? null;
+  vercel.statusUrl = STATUS_PAGES.vercel;
+  railway.dashboardUrl = railwayDash;
+  railway.statusUrl = STATUS_PAGES.railway;
+  supabase.dashboardUrl = supabaseDashboardUrl();
+  supabase.statusUrl = STATUS_PAGES.supabase;
   return { vercel, railway, supabase };
 }

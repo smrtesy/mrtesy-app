@@ -27,6 +27,7 @@ import platformRouter, { searchCronRouter } from "./modules/platform";
 import { ensureDestinationsIndexed } from "./modules/platform/search/indexer";
 import adminRouter from "./modules/admin";
 import { webActionRouter, startIdleSweeper as startWebActionSweeper } from "./modules/web-action";
+import { startHealthSampler } from "./lib/health-sampler";
 import smrttaskRouter, { claudeSessionRouter, dailyReportJobsRouter, driveCatalogRouter } from "./modules/smrttask";
 import smrtvoiceRouter, { webhookRouter as smrtvoiceWebhookRouter } from "./modules/smrtvoice";
 import smrtcrmRouter, { ingestRouter as smrtcrmIngestRouter } from "./modules/smrtcrm";
@@ -344,6 +345,12 @@ app.listen(PORT, HOST, () => {
   // ALWAYS (not queue-flag gated): a frontend push straight to main is exactly the
   // deploy that used to end with an unfulfilled "אעדכן כשזה יעלה". Zero paid tokens.
   startShipWatcher();
+
+  // Passive backend health sampler — records event-loop lag + in-flight console
+  // run count + provider states into server_health_samples every ~30s, so the
+  // sidebar status strip can show real history and "did a fix help?" is a query,
+  // not a synthetic load test. Zero paid tokens; single replica like the above.
+  startHealthSampler();
 });
 
 // Surface unhandled errors so Railway logs show them instead of a silent crash
