@@ -24,7 +24,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { db } from "../../../db";
 import { requireAuth, requireSuperAdmin } from "../../../middleware";
-import { FEATURE_REGISTRY, FEATURE_BY_ID } from "../../../lib/feature-registry";
+import { FEATURE_BY_ID } from "../../../lib/feature-registry";
 
 const router = Router();
 // Path-scoped to "/admin" ON PURPOSE — this router is mounted with
@@ -49,42 +49,19 @@ interface FeatureChannelRow {
   created_at: string | null;
 }
 
-/** GET /admin/features */
+/** GET /admin/features
+ *  Returns the raw feature_channels STATE rows. The STRUCTURE (which screens
+ *  exist — from SITE_MAP — and which sub-features they carry — from the code
+ *  registry, with version lists) is assembled CLIENT-SIDE in FeaturesClient,
+ *  which is where both SITE_MAP and the registry are importable. That's what
+ *  lets the screen list every screen (not just registered ones) with zero
+ *  server-side twin of SITE_MAP. */
 router.get("/admin/features", async (_req: Request, res: Response) => {
   const { data: rows, error } = await db
     .from("feature_channels")
     .select("*");
   if (error) return res.status(500).json({ error: error.message });
-
-  const byId = new Map<string, FeatureChannelRow>();
-  for (const r of (rows ?? []) as FeatureChannelRow[]) byId.set(r.feature_id, r);
-
-  // Walk the REGISTRY (structure is the spine): every registered feature shows,
-  // with its DB state row merged in, or the schema defaults when there is none.
-  const features = FEATURE_REGISTRY.map((f) => {
-    const row = byId.get(f.featureId);
-    const versions = f.versions ?? [];
-    return {
-      feature_id: f.featureId,
-      screen_key: f.screenKey,
-      title: f.title,
-      title_he: f.titleHe ?? null,
-      code_ref: f.codeRef,
-      // STRUCTURE — version list (picker options + history drawer).
-      versions,
-      // STATE — the row if present, else the feature_channels column defaults.
-      stable_enabled: row?.stable_enabled ?? false,
-      beta_enabled:   row?.beta_enabled   ?? true,
-      stable_version: row?.stable_version ?? (versions[0]?.version ?? "v1"),
-      beta_version:   row?.beta_version   ?? (versions[versions.length - 1]?.version ?? "v1"),
-      note:           row?.note           ?? null,
-      last_changed_at: row?.last_changed_at ?? null,
-      created_at:      row?.created_at      ?? null,
-      has_row: Boolean(row),
-    };
-  });
-
-  res.json({ features });
+  res.json({ rows: (rows ?? []) as FeatureChannelRow[] });
 });
 
 /** PATCH /admin/features/:featureId
