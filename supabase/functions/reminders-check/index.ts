@@ -192,9 +192,11 @@ Deno.serve(async (req) => {
           // AND got a model summary — fail closed: a failed read / empty summary
           // leaves title+description untouched (never overwrite with nothing). The
           // prefix strip keeps re-runs from stacking ("נראה סגור: נראה סגור: …").
+          // Keep this list in sync with the union in ai-process/index.ts's
+          // confirmOnly title refresh ("עדכון בשיחה:") — same class of prefix.
           if (reply?.body && outcome.summary) {
             const base = String(task.title_he || task.title || "")
-              .replace(/^\s*(מעקב|נראה סגור|התקבלה תגובה)\s*:\s*/u, "")
+              .replace(/^\s*(מעקב|נראה סגור|התקבלה תגובה|עדכון בשיחה)\s*:\s*/u, "")
               .trim();
             const titlePrefix = outcome.resolved ? "נראה סגור: " : "התקבלה תגובה: ";
             wakePayload.title = titlePrefix + base;

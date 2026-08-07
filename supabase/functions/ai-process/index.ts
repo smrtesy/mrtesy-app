@@ -1290,6 +1290,28 @@ async function appendUpdateToTask(
     // task). Informational follow-ups ("תודה") deliberately do NOT resurface.
     updateFields.status = resurfaceStatus;
     updateFields.snoozed_until = null;
+    // A cross-matter LINK resurfacing this tracker (T1824): analysis.reason
+    // describes an UNRELATED matter on the same thread/contact, same reason
+    // newTitle is blanked for a link (line ~2650) — so it must not drive the
+    // title. But leaving the frozen "ממתין ל..." title next to a description
+    // that DID get enriched is exactly the contradiction the user reported.
+    // A content-free prefix breaks the contradiction without asserting
+    // anything unverified about the tracked matter itself.
+    if (opts?.confirmOnly) {
+      // Strip ANY known title prefix, not just our own — a task_type="followup"
+      // tracker is titled "מעקב: X" at creation (line ~2890), and reminders-check's
+      // wake path (index.ts:196-197) can also stamp "נראה סגור:"/"התקבלה תגובה:".
+      // Matching only our own prefix would nest on top of one of those instead of
+      // replacing it ("עדכון בשיחה: מעקב: X"). Keep this list in sync with the
+      // union in supabase/functions/reminders-check/index.ts.
+      const base = String(existing?.title_he || "")
+        .replace(/^\s*(מעקב|נראה סגור|התקבלה תגובה|עדכון בשיחה)\s*:\s*/u, "")
+        .trim();
+      if (base) {
+        updateFields.title_he = `עדכון בשיחה: ${base}`;
+        updateFields.title = `עדכון בשיחה: ${base}`;
+      }
+    }
   }
 
   const { error: taskUpdateError } = await supabase.from("tasks").update(updateFields).eq("id", taskId);
