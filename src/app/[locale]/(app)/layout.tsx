@@ -287,10 +287,13 @@ export default async function AppLayout({
               "debug in Claude" action on an uncaught-error toast — logging is for
               everyone. Renders nothing. */}
           <ClientErrorCatcher isAdmin={!!isAdmin} />
-          {/* Proactive "report a problem" — a discreet floating button visible to
-              EVERY user (beta and stable). Opens a preview-before-send dialog and
+          {/* Proactive "report a problem" — opens a preview-before-send dialog and
               writes a category='feature_report' row to the same log sink. Source 2
-              of the feature log (docs/feature-channels-plan.md §8). */}
+              of the feature log (docs/feature-channels-plan.md §8). This floating
+              variant is the entry point on MOBILE (no sidebar) and the FALLBACK on
+              desktop when the sidebar is COLLAPSED (globals.css hides it otherwise
+              via the data-feature-report-floating rule). When the sidebar is open,
+              the inline variant in its Claude row (Sidebar.tsx) is the entry point. */}
           <FeatureReportButton />
         </WhatsAppPanelProvider>
       </ClaudeDrawerProvider>

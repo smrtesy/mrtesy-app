@@ -53,7 +53,14 @@ function stripLocaleFromPath(pathname: string): string {
   return pathname.replace(/^\/(he|en)(?=\/|$)/, "") || "/";
 }
 
-export function FeatureReportButton() {
+export function FeatureReportButton({
+  variant = "floating",
+}: {
+  /** "floating" = the discreet fixed corner flag (now mobile-only — the desktop
+   *  entry point moved into the sidebar Claude row). "inline" = an icon button
+   *  matching the sidebar search split. */
+  variant?: "floating" | "inline";
+} = {}) {
   const t = useTranslations("featureReport");
   const { channel } = useAppAccess();
   const featureId = useCurrentFeatureId();
@@ -121,17 +128,37 @@ export function FeatureReportButton() {
 
   return (
     <>
-      {/* Discreet floating trigger — low opacity until hover, raised above the
-          mobile bottom nav (pb-20 on the main content). */}
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title={t("open")}
-        aria-label={t("open")}
-        className="fixed bottom-24 end-3 z-30 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground opacity-50 shadow-sm backdrop-blur transition-opacity hover:opacity-100 md:bottom-4"
-      >
-        <Flag className="h-4 w-4" />
-      </button>
+      {variant === "inline" ? (
+        // Sidebar Claude-row entry point — mirrors the search split beside it.
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          onClick={() => setOpen(true)}
+          title={t("open")}
+          aria-label={t("open")}
+          className="shrink-0"
+        >
+          <Flag className="h-4 w-4" />
+        </Button>
+      ) : (
+        // Discreet floating trigger. On mobile it is the entry point (no
+        // sidebar there). On desktop it is a FALLBACK: globals.css hides it
+        // unless the sidebar is collapsed (data-feature-report-floating rule) —
+        // because when the sidebar is open, its inline variant in the Claude row
+        // is the entry point, and when collapsed the inline one hides with the
+        // aside. Raised above the mobile bottom nav (pb-20 on the main content).
+        <button
+          type="button"
+          data-feature-report-floating
+          onClick={() => setOpen(true)}
+          title={t("open")}
+          aria-label={t("open")}
+          className="fixed bottom-24 end-3 z-30 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground opacity-50 shadow-sm backdrop-blur transition-opacity hover:opacity-100 md:bottom-4"
+        >
+          <Flag className="h-4 w-4" />
+        </button>
+      )}
 
       <Dialog open={open} onOpenChange={(o) => { if (!submitting) setOpen(o); }}>
         <DialogContent className="max-w-md">

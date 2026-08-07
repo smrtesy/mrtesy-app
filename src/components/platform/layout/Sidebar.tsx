@@ -44,6 +44,7 @@ import { BrandWordmark } from "@/components/platform/branding/BrandWordmark";
 import { SystemStatusStrip } from "@/components/platform/layout/SystemStatusStrip";
 import { SystemMessagesBell } from "@/components/platform/layout/SystemMessagesBell";
 import { AppSectionHeader } from "@/components/platform/sidebar/AppSectionHeader";
+import { FeatureReportButton } from "@/components/platform/features/FeatureReportButton";
 import { APPS, type AppDef } from "@/lib/apps/registry";
 import { createClient } from "@/lib/supabase/client";
 import { api, ApiError } from "@/lib/api/client";
@@ -563,7 +564,14 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
             {/* Primary action (Claude / update) + the compact search split: the
                 big button keeps its role; the small magnifying glass beside it
                 opens a one-line global search whose results open as a tab. */}
-            <div className="flex gap-2">
+            {/* Three-button row (RTL, right→left): report-a-problem · Claude ·
+                search. The report flag used to float in the screen corner over
+                content; it now sits inline here on desktop, flanking the primary
+                button opposite the search split (it stays floating on mobile,
+                where there is no sidebar). gap-1.5 + flex-1 Claude keeps all three
+                fitting in the 13rem sidebar. */}
+            <div className="flex gap-1.5">
+              <FeatureReportButton variant="inline" />
               {isAdmin ? (
                 // Opens the floating Claude side-drawer (ClaudeDrawerContext) —
                 // the compact console over the current screen. Full screen is one
@@ -572,13 +580,13 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 <Button
                   type="button"
                   onClick={() => toggleDrawer()}
-                  className="flex-1 gap-2"
+                  className="min-w-0 flex-1 gap-2 px-2"
                 >
                   <Bot className="h-4 w-4" />
                   {t("claude")}
                 </Button>
               ) : (
-                <Button onClick={() => setTaskInputOpen(true)} className="flex-1 gap-2">
+                <Button onClick={() => setTaskInputOpen(true)} className="min-w-0 flex-1 gap-2 px-2">
                   <Sparkles className="h-4 w-4" />
                   {t("update")}
                 </Button>
@@ -590,6 +598,7 @@ export function Sidebar({ locale, isAdmin, enabledApps = [], taskAccess = "full"
                 aria-label={t("search")}
                 title={t("search")}
                 onClick={() => setSearchOpen((v) => !v)}
+                className="shrink-0"
               >
                 <Search className="h-4 w-4" />
               </Button>

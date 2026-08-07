@@ -165,6 +165,14 @@ html[data-embed="1"] main[data-sidebar-main] > div {
   body:not([data-sidebar-collapsed="true"]) [data-sidebar-open-handle] {
     display: none;
   }
+  /* Feature-report floating flag: on desktop it appears ONLY when the sidebar
+     is collapsed — its inline twin in the sidebar's Claude row hides with the
+     aside, so the floating flag becomes the fallback entry point. When the
+     sidebar is open, the inline twin is the entry point and the flag hides.
+     Mobile (<md) is unaffected: the flag is always shown there (no sidebar). */
+  body:not([data-sidebar-collapsed="true"]) [data-feature-report-floating] {
+    display: none;
+  }
 }
 
 /* Chat-fullscreen mode — set by WhatsAppPageClient via
