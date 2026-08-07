@@ -4881,7 +4881,9 @@
       "reject": "דחה",
       "approved": "אושר — ההחלה מתחילה",
       "rejected": "נדחה — כלום לא רץ",
-      "decideFailed": "הפעולה נכשלה"
+      "decideFailed": "הפעולה נכשלה",
+      "openInThread": "פתח בשיחה",
+      "inThreadIntro": "קלוד מבקש אישור למיגרציה הרסנית בשיחה הזו"
     },
     "deploy": {
       "label": "סטטוס מערכת",
