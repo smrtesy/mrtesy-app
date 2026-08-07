@@ -167,14 +167,17 @@ ClaudeRunsClient, ApprovalsPanel) + `src/components/claude/interactive/`
   signed URLs. Session revoked (`scope:'local'`) when the run ends. Requires
   `INSTALL_CHROMIUM=1` on Railway (same binary as the admin domain-tracker).
 
-## Tables (14, all org-scoped)
+## Tables (18, all org-scoped)
 
 `claude_threads`, `claude_runs`, `claude_run_events`, `claude_instructions`,
 `claude_playbooks`, `claude_attachments`, `claude_actions`, `claude_topics`,
 `claude_thread_topics`, `claude_thread_analyses`, `claude_daily_identity`,
 `claude_known_workers`, `claude_manager_proposals`, `claude_action_approvals`
-(the autonomy gate's destructive-migration approval queue). Authoritative shapes:
-`grep -rn "<table>" supabase/migrations/`.
+(the autonomy gate's destructive-migration approval queue), `claude_deploy_queue`
+(the `server/**` deploy batch — see the deploy-queue section of CLAUDE.md), and
+the usage-limit trio `claude_usage_hits` / `claude_usage_limits` /
+`claude_usage_windows` (subscription-limit tracking + autocalibration).
+Authoritative shapes: `grep -rn "<table>" supabase/migrations/`.
 
 ## Docs
 
