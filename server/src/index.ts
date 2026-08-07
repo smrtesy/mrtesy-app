@@ -37,6 +37,7 @@ import smrtbotRouter, { internalRouter as smrtbotInternalRouter, webRouter as sm
 import smrtplanRouter, { jobsRouter as smrtplanJobsRouter, sessionReportRouter as smrtplanSessionReportRouter, experimentsMachineRouter as smrtplanExperimentsMachineRouter } from "./modules/smrtplan";
 import smrtstudioRouter, { jobsRouter as smrtstudioJobsRouter } from "./modules/smrtstudio";
 import correctionsJobsRouter from "./modules/smrttask/corrections/jobs";
+import developerMonitorJobsRouter from "./modules/admin/developer-monitor/jobs";
 import smrtvaultRouter from "./modules/smrtvault";
 import smrtinfoRouter, { cronRouter as smrtinfoCronRouter } from "./modules/smrtinfo";
 import claudeRouter, {
@@ -219,6 +220,10 @@ app.use(dailyReportJobsRouter);
 // calls it), so it comes BEFORE the auth-guarded routers too.
 app.use("/api", smrtinfoCronRouter);
 app.use("/api", searchCronRouter);
+
+// Developer-access monitor sweep — x-cron-secret guarded (pg_cron calls it every
+// 5 min), so it comes BEFORE the auth-guarded routers (route path includes /api).
+app.use(developerMonitorJobsRouter);
 
 app.use("/api", platformRouter);
 app.use("/api", adminRouter);
