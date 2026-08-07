@@ -4769,6 +4769,12 @@
     "untitled": "Untitled",
     "showList": "Show chat list",
     "hideList": "Hide chat list",
+    "idea": {
+      "newChat": "New idea — idea warehouse",
+      "group": "Idea warehouse",
+      "sendToNormal": "Send to a full chat",
+      "seedIntro": "Here's an idea I captured in the idea warehouse and want to take forward into development:"
+    },
     "rename": "Rename",
     "delete": "Delete",
     "confirmDelete": "Delete this chat and all of its turns?",

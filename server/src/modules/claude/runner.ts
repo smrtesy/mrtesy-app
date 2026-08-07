@@ -1150,15 +1150,20 @@ async function executeRunBody(runId: string): Promise<void> {
   // The thread's short human code ("K7") — injected as CLAUDE_THREAD_CODE below so a
   // session can state its own id when the user asks ("what's your id?").
   let threadCode: string | null = null;
+  // Whether this thread is a מחסן רעיונות (idea) chat — used far below in the
+  // resume-fallback recompose so a recovered idea session keeps the lightweight
+  // idea preamble instead of the heavy standing instructions.
+  let threadKind: string | null = null;
   if (run.thread_id) {
     const { data: thread, error: tErr } = await db
       .from("claude_threads")
-      .select("session_id, fork_from_session, seed_context, workspace_thread_id, serial_display")
+      .select("session_id, fork_from_session, seed_context, workspace_thread_id, serial_display, kind")
       .eq("id", run.thread_id)
       .maybeSingle();
     if (tErr) console.error("[claude/runner] thread fetch failed:", tErr.message);
     resumeSession = thread?.session_id ?? null;
     threadCode = thread?.serial_display ?? null;
+    threadKind = thread?.kind ?? null;
     if (thread?.workspace_thread_id) workspaceThreadId = thread.workspace_thread_id;
     // Only when the thread has no session of its own yet — a split child's first
     // turn. Once it has resumed once, it owns a session and these are irrelevant.
@@ -1851,7 +1856,9 @@ async function executeRunBody(runId: string): Promise<void> {
       if (history) {
         const seeded =
           `# רקע מהשיחה הקודמת (שוחזר מההיסטוריה)\n\n${history}\n\n---\n\n${promptText}`;
-        const recomposed = await composePrompt(run.org_id, seeded, null);
+        const recomposed = await composePrompt(run.org_id, seeded, null, {
+          idea: threadKind === "idea",
+        });
         promptText = recomposed.prompt;
       }
     }

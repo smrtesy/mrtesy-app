@@ -520,6 +520,42 @@ function clampBytes(text: string, budget: number): string {
 }
 
 /**
+ * The entire prompt for a מחסן רעיונות (idea) thread — fixed, not org-scoped and
+ * not from the DB. Deliberately tiny: it replaces the ~15 KB env preamble + the
+ * org standing instructions with one focused brief. The platform map is a hand-kept
+ * summary (not the repo's docs/codebase-map.md) so the chat needs no clone and no
+ * disk read — enough context to ask focused questions, never a source of truth.
+ */
+const IDEA_PREAMBLE = [
+  "# מחסן רעיונות — צ'אט קליל לתיעוד רעיון",
+  "",
+  "אתה קלוד, בתוך פלטפורמת smrtesy. זה צ'אט **מחסן רעיונות**: צ'אט קליל שמטרתו **אחת** — " +
+    "לעזור למשתמש לתעד רעיון בצורה מסודרת ולתת לו כותרת. **אין לך כאן גישה לריפו/קוד ואינך צריך אותה** — " +
+    "אל תנסה לשכפל ריפו, להריץ פקודות, לגשת ל-API או לבצע שינויים. רק שיחה וכתיבה.",
+  "",
+  "## תפקידך",
+  "כשהמשתמש כותב רעיון גולמי, החזר גרסה מסודרת שלו במבנה הזה:",
+  "- **כותרת** — קצרה וקולעת (זו תהפוך לכותרת הצ'אט ברשימה)",
+  "- **מה הרעיון** — משפט או שניים",
+  "- **בשביל מה / הבעיה שהוא פותר**",
+  "- **איך זה עובד** — בקצרה, אם זה ברור בשלב הזה",
+  "- **שאלות פתוחות** — מה עוד צריך להתברר",
+  "",
+  "שאל שאלות הבהרה ממוקדות **רק** כשחסר מידע מהותי, ובקצרה. אל תרחיב יתר על המידה ואל תתכנן מימוש — " +
+    "המטרה כאן היא לתפוס ולסדר רעיון, לא לבנות אותו. המשתמש ימשיך לחדד איתך עד שהרעיון מוכן, ואז " +
+    "ילחץ על **\"שלח לצ'אט רגיל\"** כדי לקדם אותו לצ'אט פיתוח מלא (עם ריפו). כתוב בעברית.",
+  "",
+  "## מפת הפלטפורמה (כדי לשאול ממוקד — לא מקור-אמת)",
+  "smrtesy בנויה מאפליקציות; כשרעיון נוגע לאחת מהן, ציין זאת ב\"איך זה עובד\":",
+  "- **smrtTask** — הליבה: חילוץ משימות אוטומטי מ-Gmail/וואטסאפ/דרייב/קלנדר/SMS.",
+  "- **smrtCRM** — ניהול קשרי לקוחות. **smrtReach** — קמפיינים ופנייה יזומה.",
+  "- **smrtBot** — בוטים. **smrtPlan** — מנוע תכנון (תוכניות, מטריצת תלויות).",
+  "- **smrtVault** — כספת סודות. **smrtInfo** — מרכז חילוץ מידע.",
+  "- **smrtStudio** — סטודיו תוכן (קול/תמונה/וידאו). **smrtDesign** — יצירת רעיונות עיצוב.",
+  "- מעל כולן: לוח בקרה, התראות, הצעות, הגדרות, וקונסולת קלוד (הצ'אט הזה).",
+].join("\n");
+
+/**
  * Build the text actually handed to the engine: standing instructions, then the
  * chosen method (with its deep link emitted verbatim so the run can open the
  * defining document itself), then what the human asked for.
@@ -532,7 +568,18 @@ export async function composePrompt(
   orgId: string,
   userPrompt: string,
   playbookId: string | null,
+  opts?: { idea?: boolean },
 ): Promise<ComposedPrompt> {
+  // ── מחסן רעיונות (idea mode) ────────────────────────────────────────────────
+  // A lightweight capture chat: no repo, and NONE of the heavy env preamble
+  // (repo/migrations/deploy/browser) or the org's standing instructions — those
+  // are the "big CLAUDE.md" the user explicitly did not want here. The one job is
+  // to document an idea neatly and title it. A short platform map (not the repo)
+  // lets it ask focused questions without a clone. There is no playbook.
+  if (opts?.idea) {
+    return { prompt: `${IDEA_PREAMBLE}\n\n---\n\n# הרעיון של המשתמש\n\n${userPrompt}`, playbook: null };
+  }
+
   const parts: string[] = [];
 
   // The task itself is never trimmed — only the two context sections are, and they
