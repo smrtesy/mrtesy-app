@@ -3,15 +3,21 @@
  * All gated by requireAuth + requireSuperAdmin.
  *
  *   GET   /admin/features              list every registered feature (STRUCTURE
- *                                      from the registry) crossed with its
- *                                      feature_channels STATE row — schema
- *                                      defaults where no row exists yet.
+ *                                      from the registry — incl. its version
+ *                                      list) crossed with its feature_channels
+ *                                      STATE row — schema defaults where no row
+ *                                      exists yet.
  *   PATCH /admin/features/:featureId   upsert-by-feature_id on feature_channels;
  *                                      per-field validation; last_changed_at=now().
  *
  * STRUCTURE lives in code (server/src/lib/feature-registry.ts, a twin of the
- * frontend src/lib/feature-registry.ts); STATE lives in the feature_channels
- * table. The GET is the join. Zero AI at read time.
+ * frontend src/lib/feature-registry.ts) — including the VERSION list that feeds
+ * the picker and the history drawer. STATE lives in the feature_channels table:
+ * per-channel enabled + which version + the human note. The GET is the join.
+ * Zero AI at read time.
+ *
+ * Managed entirely by version (Chanoch, 2026-08-07): no intent/promote_by/
+ * notes_url — those columns still exist in the table but are unused here.
  */
 
 import { Router } from "express";
@@ -26,8 +32,9 @@ const router = Router();
 // /api request that falls through (see .claude/rules/server-routing.md).
 router.use("/admin", requireAuth, requireSuperAdmin);
 
-/** The columns the feature_channels table carries, mirrored so the merge below
- *  can fall back to the schema defaults for a feature that has no row yet. */
+/** The feature_channels columns this endpoint reads/writes. The legacy
+ *  intent/promote_by/notes_url columns still exist in the table but are no
+ *  longer surfaced — the card is managed by version alone. */
 interface FeatureChannelRow {
   feature_id: string;
   screen_key: string;
@@ -37,9 +44,7 @@ interface FeatureChannelRow {
   beta_enabled: boolean;
   stable_version: string;
   beta_version: string;
-  intent: "fork" | "migrate";
-  promote_by: string | null;
-  notes_url: string | null;
+  note: string | null;
   last_changed_at: string | null;
   created_at: string | null;
 }
@@ -58,21 +63,21 @@ router.get("/admin/features", async (_req: Request, res: Response) => {
   // with its DB state row merged in, or the schema defaults when there is none.
   const features = FEATURE_REGISTRY.map((f) => {
     const row = byId.get(f.featureId);
+    const versions = f.versions ?? [];
     return {
       feature_id: f.featureId,
       screen_key: f.screenKey,
       title: f.title,
       title_he: f.titleHe ?? null,
       code_ref: f.codeRef,
-      has_versions: Boolean(f.hasVersions),
+      // STRUCTURE — version list (picker options + history drawer).
+      versions,
       // STATE — the row if present, else the feature_channels column defaults.
       stable_enabled: row?.stable_enabled ?? false,
       beta_enabled:   row?.beta_enabled   ?? true,
-      stable_version: row?.stable_version ?? "v1",
-      beta_version:   row?.beta_version   ?? "v1",
-      intent:         row?.intent         ?? f.intent,
-      promote_by:     row?.promote_by     ?? null,
-      notes_url:      row?.notes_url       ?? null,
+      stable_version: row?.stable_version ?? (versions[0]?.version ?? "v1"),
+      beta_version:   row?.beta_version   ?? (versions[versions.length - 1]?.version ?? "v1"),
+      note:           row?.note           ?? null,
       last_changed_at: row?.last_changed_at ?? null,
       created_at:      row?.created_at      ?? null,
       has_row: Boolean(row),
@@ -82,16 +87,18 @@ router.get("/admin/features", async (_req: Request, res: Response) => {
   res.json({ features });
 });
 
-/** YYYY-MM-DD, the shape the `date` column round-trips. */
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
 /** PATCH /admin/features/:featureId
  *  body: any subset of { stable_enabled, beta_enabled, stable_version,
- *  beta_version, intent, promote_by, notes_url }. Upsert on feature_id. */
+ *  beta_version, note }. Upsert on feature_id. */
 router.patch("/admin/features/:featureId", async (req: Request, res: Response) => {
   const { featureId } = req.params;
   const body = (req.body ?? {}) as Record<string, unknown>;
   const updates: Record<string, unknown> = {};
+
+  // A version write must name a version the feature actually offers — guard
+  // against a stale client sending a version the registry no longer lists.
+  const reg = FEATURE_BY_ID[featureId];
+  const allowedVersions = (reg?.versions ?? []).map((v) => v.version);
 
   if ("stable_enabled" in body) {
     if (typeof body.stable_enabled !== "boolean") {
@@ -109,36 +116,29 @@ router.patch("/admin/features/:featureId", async (req: Request, res: Response) =
     if (typeof body.stable_version !== "string" || !body.stable_version.trim()) {
       return res.status(400).json({ error: "stable_version must be a non-empty string" });
     }
-    updates.stable_version = body.stable_version.trim();
+    const v = body.stable_version.trim();
+    if (allowedVersions.length && !allowedVersions.includes(v)) {
+      return res.status(400).json({ error: `stable_version '${v}' is not a registered version of '${featureId}'` });
+    }
+    updates.stable_version = v;
   }
   if ("beta_version" in body) {
     if (typeof body.beta_version !== "string" || !body.beta_version.trim()) {
       return res.status(400).json({ error: "beta_version must be a non-empty string" });
     }
-    updates.beta_version = body.beta_version.trim();
-  }
-  if ("intent" in body) {
-    if (body.intent !== "fork" && body.intent !== "migrate") {
-      return res.status(400).json({ error: "intent must be 'fork' or 'migrate'" });
+    const v = body.beta_version.trim();
+    if (allowedVersions.length && !allowedVersions.includes(v)) {
+      return res.status(400).json({ error: `beta_version '${v}' is not a registered version of '${featureId}'` });
     }
-    updates.intent = body.intent;
+    updates.beta_version = v;
   }
-  if ("promote_by" in body) {
-    if (body.promote_by === null || body.promote_by === "") {
-      updates.promote_by = null;
-    } else if (typeof body.promote_by === "string" && DATE_RE.test(body.promote_by)) {
-      updates.promote_by = body.promote_by;
+  if ("note" in body) {
+    if (body.note === null || body.note === "") {
+      updates.note = null;
+    } else if (typeof body.note === "string") {
+      updates.note = body.note.trim() || null;
     } else {
-      return res.status(400).json({ error: "promote_by must be a YYYY-MM-DD date or null" });
-    }
-  }
-  if ("notes_url" in body) {
-    if (body.notes_url === null || body.notes_url === "") {
-      updates.notes_url = null;
-    } else if (typeof body.notes_url === "string") {
-      updates.notes_url = body.notes_url.trim() || null;
-    } else {
-      return res.status(400).json({ error: "notes_url must be a string or null" });
+      return res.status(400).json({ error: "note must be a string or null" });
     }
   }
 
@@ -149,8 +149,8 @@ router.patch("/admin/features/:featureId", async (req: Request, res: Response) =
   updates.last_changed_at = new Date().toISOString();
 
   // Does the row already exist? FAIL CLOSED — a failed read must not be treated
-  // as "no row" and send us down the insert branch (which would reset intent to
-  // the schema default and stomp the user's STATE with registry values).
+  // as "no row" and send us down the insert branch (which would stomp the
+  // user's STATE with registry defaults).
   const { data: existing, error: readErr } = await db
     .from("feature_channels")
     .select("feature_id")
@@ -159,8 +159,8 @@ router.patch("/admin/features/:featureId", async (req: Request, res: Response) =
   if (readErr) return res.status(500).json({ error: readErr.message });
 
   if (existing) {
-    // Update ONLY the validated fields — never re-send identity/intent, so an
-    // unrelated toggle can't clobber a user-set version/intent.
+    // Update ONLY the validated fields — never re-send identity, so an
+    // unrelated toggle can't clobber a user-set version.
     const { data, error } = await db
       .from("feature_channels")
       .update(updates)
@@ -171,9 +171,8 @@ router.patch("/admin/features/:featureId", async (req: Request, res: Response) =
     return res.json({ feature: data });
   }
 
-  // First write: fill the NOT NULL identity columns + intent from an explicit
-  // body override, else the code-owned registry (structure lives in code).
-  const reg = FEATURE_BY_ID[featureId];
+  // First write: fill the NOT NULL identity columns from an explicit body
+  // override, else the code-owned registry (structure lives in code).
   const screenKey =
     typeof body.screen_key === "string" && body.screen_key.trim()
       ? body.screen_key.trim()
@@ -193,8 +192,15 @@ router.patch("/admin/features/:featureId", async (req: Request, res: Response) =
     });
   }
 
-  // Seed intent from the registry on insert unless the caller set it explicitly.
-  if (!("intent" in updates) && reg) updates.intent = reg.intent;
+  // Seed the versions from the registry the SAME WAY the GET defaults them
+  // (stable=oldest, beta=newest) when this first write doesn't set them — else
+  // a plain enable-toggle insert would fall back to the schema default 'v1' for
+  // BOTH channels, silently dropping the newest version the screen just showed
+  // for a multi-version feature.
+  if (allowedVersions.length) {
+    if (!("stable_version" in updates)) updates.stable_version = allowedVersions[0];
+    if (!("beta_version" in updates)) updates.beta_version = allowedVersions[allowedVersions.length - 1];
+  }
 
   const { data, error } = await db
     .from("feature_channels")
