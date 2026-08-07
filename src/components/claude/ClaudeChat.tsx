@@ -63,7 +63,7 @@ import { DecomposeReview, type ProposedPart } from "./DecomposeReview";
 import { ProjectPanel } from "./ProjectPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { UpdateInput } from "@/components/smrttask/tasks/UpdateInput";
-import { Scissors, FolderTree, ExternalLink, ListTree, Search } from "lucide-react";
+import { Scissors, ExternalLink, ListTree, Search } from "lucide-react";
 
 /**
  * Models, with the id visible — not just a friendly name.
@@ -372,11 +372,11 @@ export function ClaudeChat() {
   const [decomposeProposal, setDecomposeProposal] = useState<DecomposeProposal | null>(null);
   const [decomposeOpen, setDecomposeOpen] = useState(false);
   const [attachBoard, setAttachBoard] = useState(false);
-  /** Topics for the grouped rail. Off by default (flat list); the folder icon
-   *  toggles it, so grouping is opt-in chrome, not permanent. */
-  const [topics, setTopics] = useState<{ id: string; title: string; thread_ids: string[] }[]>([]);
-  const [grouped, setGrouped] = useState(false);
-  const [regrouping, setRegrouping] = useState(false);
+  /** The rail is grouped by STATE (needs-you / merge / working / problem / shipped /
+   *  quiet) via threadCategory — the only view now. The "handled" (✓) bucket sits
+   *  collapsed at the bottom: a handled thread is done, so it stays out of the way
+   *  until the user opens it. */
+  const [showHandled, setShowHandled] = useState(false);
   /** Rail search — a collapsed magnifier by default (compact-UI convention);
    *  clicking it reveals an input row that filters the rail. Title/preview/serial
    *  match client-side over the loaded list; conversation CONTENT (what was said
@@ -635,17 +635,6 @@ export function ClaudeChat() {
     }
   }, [rememberAccount, t]);
 
-  const loadTopics = useCallback(async () => {
-    try {
-      const { topics: list } = await api<{
-        topics: { id: string; title: string; threads: { thread_id: string }[] }[];
-      }>("/api/claude/topics");
-      setTopics((list ?? []).map((tp) => ({ id: tp.id, title: tp.title, thread_ids: tp.threads.map((x) => x.thread_id) })));
-    } catch {
-      // Grouping is a convenience; its failure must not blank the rail.
-    }
-  }, []);
-
   useEffect(() => {
     void loadThreads();
   }, [loadThreads]);
@@ -679,24 +668,6 @@ export function ClaudeChat() {
       activeIdRef.current = threads[0].id;
     }
   }, [loading, threads]);
-
-  useEffect(() => {
-    if (grouped) void loadTopics();
-  }, [grouped, loadTopics]);
-
-  async function regroup() {
-    if (regrouping) return;
-    setRegrouping(true);
-    try {
-      await api("/api/claude/topics/regroup", { method: "POST" });
-      await loadTopics();
-      toast.success(t("group.done"));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRegrouping(false);
-    }
-  }
 
   useEffect(() => {
     // Clear the previous thread's split state up front, BEFORE the new thread's
@@ -1358,8 +1329,8 @@ export function ClaudeChat() {
               <MessageSquarePlus className="size-4" />
               {t("newChat")}
             </Button>
-            {/* Collapsed search — a quiet magnifier next to the group toggle; click
-                to reveal the filter input below (compact-UI convention). */}
+            {/* Collapsed search — a quiet magnifier; click to reveal the filter input
+                below (compact-UI convention). */}
             <Button
               size="sm"
               variant={searchOpen ? "secondary" : "ghost"}
@@ -1370,31 +1341,6 @@ export function ClaudeChat() {
             >
               <Search className="size-4" />
             </Button>
-            {/* Group-by-topic toggle. Off by default so the rail is a plain list;
-                the folder icon opts in, matching the compact-UI convention. */}
-            <Button
-              size="sm"
-              variant={grouped ? "secondary" : "ghost"}
-              className="h-8 w-8 p-0"
-              onClick={() => setGrouped((v) => !v)}
-              aria-label={t("group.toggle")}
-              title={t("group.toggle")}
-            >
-              <FolderTree className="size-4" />
-            </Button>
-            {grouped && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 w-8 p-0"
-                onClick={() => void regroup()}
-                disabled={regrouping}
-                aria-label={t("group.now")}
-                title={t("group.now")}
-              >
-                {regrouping ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              </Button>
-            )}
             {/* Mobile-only close: the rail covers the chat here, and the header's
                 toggle button is hidden with it, so the rail carries its own close. */}
             <Button
@@ -1433,8 +1379,8 @@ export function ClaudeChat() {
                 // Rail search: a thread is visible when it matches the query on
                 // title / fallback preview / task serial (client-side over the
                 // loaded list) OR its conversation content matched server-side
-                // (`contentMatchIds`). When a query is active the rail flattens
-                // (grouping is ignored) so matches across topics all show together.
+                // (`contentMatchIds`). The state grouping still applies to whatever
+                // matched, so results read under their state headings.
                 const q = query.trim().toLowerCase();
                 const visible = q
                   ? threads.filter(
@@ -1455,34 +1401,19 @@ export function ClaudeChat() {
                     </p>
                   );
                 }
-                // Threads with a fix waiting in the deploy queue lift out into the
-                // pinned "ממתין למיזוג" category above; the rest render as usual
-                // (flat or topic-grouped) so a queued thread never shows twice.
-                const queued = visible.filter((x) => x.deploy);
-                const rest = visible.filter((x) => !x.deploy);
-                return (
-                  <>
-                    {queued.length > 0 && (
-                      <DeployQueueGroup threads={queued} activeId={activeId} onOpen={pickThread} t={t} />
-                    )}
-                    {grouped && !q ? (
-                      renderGroupedRail(rest, topics, activeId, t, pickThread, remove, (id, h) =>
-                        void setHandled(id, h),
-                      )
-                    ) : (
-                      sortHandledLast(rest).map((x) => (
-                        <ThreadRow
-                          key={x.id}
-                          thread={x}
-                          active={activeId === x.id}
-                          onOpen={() => pickThread(x.id)}
-                          onRemove={() => void remove(x.id)}
-                          onToggleHandled={() => void setHandled(x.id, !x.handled_at)}
-                          t={t}
-                        />
-                      ))
-                    )}
-                  </>
+                // The rail is grouped by state: each non-empty bucket in priority
+                // order, then the collapsed "handled" bucket at the bottom. During a
+                // search the handled bucket auto-expands, so a handled thread that
+                // matched isn't hidden behind a collapsed header (reads as no-results).
+                return renderStateGroupedRail(
+                  visible,
+                  activeId,
+                  t,
+                  pickThread,
+                  (id) => void remove(id),
+                  (id, h) => void setHandled(id, h),
+                  showHandled || q.length > 0,
+                  () => setShowHandled((v) => !v),
                 );
               })()
             )}
@@ -1955,12 +1886,6 @@ export function ClaudeChat() {
   );
 }
 
-/** Handled threads sink to the bottom of the rail; order is otherwise preserved
- *  (Array.sort is stable), so within each group the newest-activity order stays. */
-function sortHandledLast(list: Thread[]): Thread[] {
-  return [...list].sort((a, b) => (a.handled_at ? 1 : 0) - (b.handled_at ? 1 : 0));
-}
-
 /** The rail title: lead with the task serial and never show a "תיקון אוטומטי"
  *  prefix. The server titler already enforces this; this display pass also covers
  *  titles written before that fix (and user-set titles, which it leaves alone
@@ -2173,39 +2098,87 @@ function ThreadRow({
   );
 }
 
+/** The rail's state buckets. A thread lands in exactly ONE, chosen by threadCategory
+ *  (priority ladder), and the buckets render top-to-bottom in this order. "handled"
+ *  is not here — a ✓'d thread leaves every bucket and drops to its own collapsed row. */
+type RailCategory = "needsYou" | "merge" | "working" | "problem" | "shipped" | "quiet";
+const RAIL_CATEGORY_ORDER: RailCategory[] = [
+  "needsYou",
+  "merge",
+  "working",
+  "problem",
+  "shipped",
+  "quiet",
+];
+
 /**
- * The rail grouped by topic: each topic heading with its threads, then the ones no
- * topic claims under "ללא נושא". A thread in two topics appears under both — that is
- * the many-to-many by design, not a bug. Nothing is hidden: every thread that shows
- * in the flat list shows here too, somewhere.
+ * Which state bucket a (non-handled) thread belongs to. ONE category per thread,
+ * chosen by the SAME priority ladder as threadIndicator() so a row's bucket can never
+ * contradict its status glyph — keep the two in lockstep. The deploy queue (any
+ * ready/deploying/failed/conflict fix) reads together under "merge" so its
+ * countdown/reason row (DeployRow) stays intact.
  */
-function renderGroupedRail(
+function threadCategory(thread: Thread): RailCategory {
+  if (thread.deploy) return "merge";
+  if (thread.awaiting_reply || thread.needs_you) return "needsYou";
+  if (thread.live || thread.usage_wait_until != null) return "working";
+  const ship = thread.ship?.state;
+  if (ship === "main_live" || ship === "main_building" || ship === "pushed_branch") return "shipped";
+  if (ship === "failed" || thread.last_status === "failed") return "problem";
+  return "quiet";
+}
+
+/** A small uppercase bucket heading with its count. */
+function RailGroupHeading({ label, count }: { label: string; count: number }) {
+  return (
+    <p className="flex items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+      <span>{label}</span>
+      <span className="tabular-nums opacity-60">{count}</span>
+    </p>
+  );
+}
+
+/**
+ * The rail grouped by state: every non-empty bucket in priority order (the merge
+ * bucket keeps its dedicated countdown rows), then a collapsed "handled" bucket at
+ * the bottom. Threads keep the server's last-message-first order inside each bucket.
+ * Nothing is hidden — every visible thread shows under exactly one heading.
+ */
+function renderStateGroupedRail(
   threads: Thread[],
-  topics: { id: string; title: string; thread_ids: string[] }[],
   activeId: string | null,
   t: ReturnType<typeof useTranslations>,
   setActiveId: (id: string) => void,
   remove: (id: string) => void,
   toggleHandled: (id: string, handled: boolean) => void,
+  showHandled: boolean,
+  toggleShowHandled: () => void,
 ): ReactNode {
-  const byId = new Map(threads.map((x) => [x.id, x]));
-  const claimed = new Set<string>();
-  const groups: ReactNode[] = [];
+  const handled = threads.filter((x) => x.handled_at);
+  const buckets = new Map<RailCategory, Thread[]>();
+  for (const th of threads) {
+    if (th.handled_at) continue; // handled leaves every state bucket
+    const cat = threadCategory(th);
+    const list = buckets.get(cat);
+    if (list) list.push(th);
+    else buckets.set(cat, [th]);
+  }
 
-  for (const topic of topics) {
-    const rows = sortHandledLast(
-      topic.thread_ids.map((id) => byId.get(id)).filter((x): x is Thread => Boolean(x)),
-    );
-    if (rows.length === 0) continue;
-    rows.forEach((r) => claimed.add(r.id));
+  const groups: ReactNode[] = [];
+  for (const cat of RAIL_CATEGORY_ORDER) {
+    const rows = buckets.get(cat);
+    if (!rows || rows.length === 0) continue;
+    if (cat === "merge") {
+      // The deploy queue keeps its own heading + per-row countdown/reason.
+      groups.push(<DeployQueueGroup key="merge" threads={rows} activeId={activeId} onOpen={setActiveId} t={t} />);
+      continue;
+    }
     groups.push(
-      <div key={topic.id}>
-        <p className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70" dir="auto">
-          {topic.title}
-        </p>
+      <div key={cat}>
+        <RailGroupHeading label={t(`stateGroup.${cat}`)} count={rows.length} />
         {rows.map((r) => (
           <ThreadRow
-            key={`${topic.id}-${r.id}`}
+            key={r.id}
             thread={r}
             active={activeId === r.id}
             onOpen={() => setActiveId(r.id)}
@@ -2218,24 +2191,30 @@ function renderGroupedRail(
     );
   }
 
-  const orphans = sortHandledLast(threads.filter((x) => !claimed.has(x.id)));
-  if (orphans.length > 0) {
+  if (handled.length > 0) {
     groups.push(
-      <div key="__none">
-        <p className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-          {t("group.none")}
-        </p>
-        {orphans.map((r) => (
-          <ThreadRow
-            key={`none-${r.id}`}
-            thread={r}
-            active={activeId === r.id}
-            onOpen={() => setActiveId(r.id)}
-            onRemove={() => remove(r.id)}
-            onToggleHandled={() => toggleHandled(r.id, !r.handled_at)}
-            t={t}
-          />
-        ))}
+      <div key="__handled">
+        <button
+          type="button"
+          onClick={toggleShowHandled}
+          className="flex w-full items-center gap-1 px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 hover:text-foreground"
+        >
+          {showHandled ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+          <span>{t("stateGroup.handled")}</span>
+          <span className="tabular-nums opacity-60">{handled.length}</span>
+        </button>
+        {showHandled &&
+          handled.map((r) => (
+            <ThreadRow
+              key={r.id}
+              thread={r}
+              active={activeId === r.id}
+              onOpen={() => setActiveId(r.id)}
+              onRemove={() => remove(r.id)}
+              onToggleHandled={() => toggleHandled(r.id, !r.handled_at)}
+              t={t}
+            />
+          ))}
       </div>,
     );
   }
